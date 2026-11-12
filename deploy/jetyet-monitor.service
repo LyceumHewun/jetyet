@@ -1,0 +1,25 @@
+[Unit]
+Description=Jetyet Monitoring Worker
+After=network-online.target jetyet-web.service
+Wants=network-online.target jetyet-web.service
+
+[Service]
+Type=simple
+User=jetyet
+Group=jetyet
+WorkingDirectory=/opt/jetyet
+Environment=NODE_ENV=production
+Environment=JETYET_CONFIG=/etc/jetyet/jetyet.config.json
+ExecStart=/usr/local/bin/bun src/workers/monitor.ts
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=90
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/jetyet /etc/jetyet
+
+[Install]
+WantedBy=multi-user.target

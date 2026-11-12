@@ -1,0 +1,25 @@
+[Unit]
+Description=Jetyet Web
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jetyet
+Group=jetyet
+WorkingDirectory=/opt/jetyet
+Environment=NODE_ENV=production
+Environment=JETYET_CONFIG=/etc/jetyet/jetyet.config.json
+ExecStart=/usr/local/bin/bun src/server/index.ts
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/jetyet /var/lib/jetyet
+
+[Install]
+WantedBy=multi-user.target

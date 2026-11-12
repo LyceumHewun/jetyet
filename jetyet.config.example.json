@@ -1,0 +1,14 @@
+{
+  "origin": "https://network.example.com",
+  "listen": "127.0.0.1",
+  "port": 3000,
+  "database": "/var/lib/jetyet/jetyet.sqlite",
+  "masterKey": "REPLACE_WITH_64_HEXADECIMAL_CHARACTERS",
+  "admin": {
+    "username": "admin",
+    "password": "REPLACE_WITH_A_STRONG_PASSWORD"
+  },
+  "probeUrl": "https://www.gstatic.com/generate_204",
+  "hysteriaBinary": "/usr/local/bin/hysteria",
+  "mihomoBinary": "/usr/local/bin/mihomo"
+}

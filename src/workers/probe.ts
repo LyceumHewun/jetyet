@@ -1,0 +1,71 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import YAML from "yaml";
+import type { Entity, Store } from "../server/db";
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((res, rej) => {
+    server.once("error", rej);
+    server.listen(0, "127.0.0.1", res);
+  });
+  const port = (server.address() as { port: number }).port;
+  await new Promise<void>((res) => server.close(() => res()));
+  return port;
+}
+export async function probeNode(s: Store, n: Entity) {
+  const dir = await mkdtemp(join(tmpdir(), "jetyet-probe-")),
+    port = await freePort();
+  let child: ReturnType<typeof Bun.spawn> | undefined;
+  try {
+    const path = join(dir, "config.yaml"),
+      address = n.address.includes(":") ? `[${n.address}]` : n.address;
+    await writeFile(
+      path,
+      YAML.stringify({
+        server: `${address}:${n.port}`,
+        auth: s.secrets(n.id).probeToken,
+        tls: { insecure: true },
+        socks5: { listen: `127.0.0.1:${port}` },
+      }),
+      { mode: 0o600 },
+    );
+    child = Bun.spawn([s.config.hysteriaBinary, "client", "-c", path], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    let ok = false;
+    for (let i = 0; i < 5; i++) {
+      await Bun.sleep(700);
+      if (child.exitCode !== null) throw Error("Probe client exited");
+      const req = Bun.spawn(
+        [
+          "curl",
+          "--fail",
+          "--silent",
+          "--show-error",
+          "--max-time",
+          "8",
+          "--socks5-hostname",
+          "127.0.0.1:" + port,
+          "--noproxy",
+          "",
+          s.config.probeUrl,
+        ],
+        { stdout: "ignore", stderr: "ignore" },
+      );
+      if ((await req.exited) === 0) {
+        ok = true;
+        break;
+      }
+    }
+    if (!ok) throw Error("Proxy HTTPS probe failed");
+  } finally {
+    if (child) {
+      child.kill();
+      await child.exited;
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+}

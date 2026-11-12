@@ -1,0 +1,9 @@
+node_modules/
+dist/
+data/
+jetyet.config.json
+*.tmp
+*.log
+.env
+coverage/
+.local/

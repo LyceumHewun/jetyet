@@ -1,0 +1,97 @@
+# Deployment Requirements
+
+## Management Platform
+
+- Run the management platform directly on a single cloud server, without Docker or Docker Compose.
+- Use English for the management interface and project documentation.
+- Size and validate the system for 50 VPS hosts, 100 subscription users, and 200 simultaneously online client instances; these are capacity targets, not hard product limits.
+- Use Bun for the application runtime, React for the management interface, and SQLite for persistent storage.
+- Run three Bun processes: Web, monitoring worker, and operations worker.
+- Web serves the API, management interface, subscriptions, and HTTP authentication endpoint.
+- The monitoring worker performs VPS liveness checks, node connection probes, and traffic collection.
+- The operations worker performs deployment, upgrades, and remote changes; long-running deployments must not block monitoring.
+- All three processes share SQLite, including persisted pending operations, execution progress, and results; do not introduce Redis.
+- Claim tasks atomically and recover unfinished work after process exit by checking actual remote state before continuing.
+- Serialize configuration-changing operations per VPS to prevent deployment, upgrade, and deletion from overwriting each other.
+- The monitoring worker handles urgent quota disconnections independently of the ordinary operations queue: persist exhaustion first so HTTP authentication rejects new connections, then invoke the node's `/kick` API through SSH.
+- Quota disconnection does not modify node configuration and must not wait for long-running deployments on other VPS hosts.
+- VPS quota exhaustion leaves Hysteria 2 running, rejects all new authentication for that VPS, and kicks existing sessions. Administrator maintenance suspension still stops the VPN process.
+- Administrator user suspension, node-entitlement revocation, and VPN token rotation use the same high-priority disconnection path: Web commits the authorization change and pending disconnection together, then the monitoring worker promptly processes it without waiting for the next traffic collection or ordinary deployment work.
+- Manage Web, monitoring worker, and operations worker using separate systemd services with boot-time startup and automatic restart after unexpected exits.
+- Show both workers' heartbeats in the management interface and record an in-platform alert when a worker becomes unavailable.
+- Long-running operations support cancellation at safe step boundaries; retain and display remote changes already completed rather than promising automatic rollback.
+- Retrying or cleaning up a partially completed operation requires a subsequent explicit management action.
+- Serve the management interface and subscription download endpoints under one domain over HTTPS, terminated by a reverse proxy.
+- Management and subscription HTTPS use a normally validated certificate; the self-signed, verification-skipping policy applies only to VPN node connections.
+- Administrator credentials are configured in a local configuration file.
+- An administrator can supply a new password as plaintext in that file; after a successful application startup processes it, the application replaces the plaintext with a protected representation.
+- Store passwords as irreversible password hashes, not reversible ciphertext.
+- Configuration uses `password` for a newly supplied plaintext password and `passwordHash` for the stored hash. Supplying `password` requests initial setup or a password change and replaces any previous hash.
+- At startup, hash the supplied plaintext, atomically write the updated configuration with `passwordHash`, and remove `password` before accepting requests.
+- If the updated configuration cannot be persisted, stop startup rather than continue with plaintext remaining in the configuration.
+- Administrator password changes invalidate all existing login sessions.
+- Login sessions expire after 7 days and support explicit logout.
+- Encrypt SSH passwords, SSH private keys, and VPN credentials before storing them in SQLite.
+- Supply the encryption master key through the configuration file; do not store it in the database. Startup requires the key.
+- Keep database backups and the encryption master key separately; administrator passwords remain irreversible hashes rather than encrypted credentials.
+- Redact sensitive values from logs, including passwords, SSH private keys, VPN credentials, and subscription tokens.
+- The platform does not implement automated database backups.
+- Store traffic counters and allowances as integer bytes. Convert explicitly labeled binary GiB/TiB or decimal GB inputs without conflating their units.
+- Use stable IDs for relationships and remote service identification rather than editable names or notes.
+
+## Managed VPN Hosts
+
+- Run VPN services natively under systemd; container-based VPN deployment is prohibited to avoid the performance overhead the administrator wants to exclude.
+- Install at most one managed VPN service per protocol on each VPS. Different ports or versions do not permit duplicate services for the same protocol.
+- With Hysteria 2 as the only supported protocol, each VPS has at most one managed Hysteria 2 node and one installed version; upgrades target that service.
+- Use Hysteria 2 HTTP authentication against the platform: the platform decides whether each new connection is authorized and returns a stable user ID for traffic attribution.
+- User authorization, credential rotation, and quota decisions do not require restarting the VPN service or updating a local userpass map.
+- To revoke existing connections, deny subsequent authentication and invoke the Traffic Stats API `POST /kick` for the affected user IDs; denying new authentication alone does not terminate existing connections.
+- When the HTTP authentication backend is unavailable, new connections fail authentication while existing connections continue operating; do not implement a local authentication fallback.
+- Authentication reference: [Hysteria 2 server configuration](https://v2.hysteria.network/docs/advanced/Full-Server-Config/).
+- Connection revocation reference: [Hysteria 2 Traffic Stats API](https://v2.hysteria.network/docs/advanced/Traffic-Stats-API/).
+- Bind the Hysteria 2 Traffic Stats API to the VPS loopback interface and require an API secret; access it from the platform through SSH rather than exposing a public management port.
+- Read cumulative traffic counters without requesting remote clearing; compute increments against the last persisted observation.
+- Treat counter rollback or service restart as a counter-epoch change, establish a new baseline, and flag any unrecoverable interval as an accounting gap.
+- During SSH outages, traffic collection and kicking existing connections await recovery; the reachable HTTP authentication endpoint can still deny new connections.
+- Node connection probes must complete Hysteria 2 authentication and reach an external HTTPS target through the proxy; configure the target globally.
+- Probes use dedicated internal credentials, not a friend's credentials. Their public-network traffic counts toward VPS usage but not subscription-user allowances.
+- Allocate a separate authentication-endpoint secret to each node so the platform authenticates the calling node rather than trusting a self-reported node ID.
+- Authentication checks the calling node's identity, user credentials, node entitlement, user and VPS allowances, expiration, and applicable administrator suspensions.
+- Node authentication secrets are sensitive credentials: encrypt them in SQLite and redact them from logs.
+- Generate one random VPN authentication token per subscription user, reused across that user's authorized nodes; do not maintain per-node userpass credential maps.
+- Token rotation takes effect for subsequent authentication requests on all nodes without remote credential deployment; kick existing user sessions separately.
+
+- Support Hysteria 2 nodes and mihomo subscription output.
+- Connect clients directly to the VPS IP address; a domain is not required.
+- Support IPv4, IPv6, and IPv6-only VPS hosts. Configure the SSH address separately from the node's advertised IP address.
+- Verify actual reachability during onboarding; the management host must have connectivity to the chosen address family.
+- A dual-stack VPS produces one node subscription entry with one administrator-selected advertised IPv4 or IPv6 address; SSH may use a different address.
+- The advertised ingress address does not constrain egress: a dual-stack VPS may reach both IPv4 and IPv6 destinations, subject to its actual network connectivity.
+- Let normal node resolution and routing choose the egress address family; do not implement per-user or per-site forced IPv4/IPv6 egress policy management.
+- Generate a self-signed TLS certificate during deployment.
+- Generated mihomo node configurations must set `skip-cert-verify: true`, as explicitly requested by the administrator.
+- Skipping certificate verification leaves clients unable to authenticate the server certificate and permits server impersonation by an active intermediary.
+- Do not require domain provisioning, ACME issuance, or automated public certificate renewal.
+- Port hopping is optional per node and disabled by default.
+- Administrators can configure a node's hopping port range; the platform manages corresponding server forwarding rules and subscription parameters together.
+- Managed VPS hosts must run Debian or Ubuntu with systemd.
+- Before deployment, detect the host operating system and required capabilities; stop with an actionable reason when requirements are not met.
+- Other operating systems and service managers are outside the supported deployment scope.
+- SSH authentication supports private keys and passwords, with private keys preferred.
+- Managed hosts require root access or passwordless sudo for deployment and ongoing privileged management.
+- Preflight checks verify required privileges before making deployment changes; insufficient privileges block execution with an explanatory error.
+- For administrator-executed deployment, first create the VPS record and confirm SSH access, then generate commands specific to that VPS.
+- After executing those commands, the administrator selects detect-and-connect in the platform; SSH inspection verifies the deployed configuration before creating the node record.
+- Do not introduce a separate deployment registration callback service.
+- Failed deployments retain execution progress and errors and support retry after inspecting the host's actual state.
+- Retries skip completed steps only when their results match the desired configuration.
+- Stop on conflicting port usage or services not owned by the platform; do not overwrite unknown configuration.
+- Detect drift between managed remote Hysteria 2 configuration and the platform's desired configuration and record an alert.
+- Do not automatically overwrite or silently import manual remote edits. Offer an explicit reapply-platform-configuration operation that shows the difference and restart impact before execution.
+- Initial SSH connection requires administrator confirmation of the host key fingerprint before credentials are sent or management commands are executed.
+- Pin the confirmed host key. A changed fingerprint suspends SSH connections until the administrator explicitly verifies and accepts the replacement, including after host reinstallation.
+- Hysteria 2 upgrades are administrator-triggered and selectable per node; do not automatically upgrade all nodes.
+- Show the target version and execution result, preserve the current configuration before upgrading, and record an in-platform alert on failure.
+
+Reference: [Hysteria2 deployment notes](https://qlan.cc/post/hysteria2/). The reference generates a self-signed certificate but shows `skip-cert-verify: false` in its client example; this project explicitly uses `true` instead. Other settings in that article are not automatically adopted.
