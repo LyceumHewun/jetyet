@@ -11,6 +11,15 @@ import {
 import { api, when } from "./client";
 import { Dialog, Empty, Field } from "./components";
 import type { Row } from "./types";
+type HistorySnapshot = {
+  entityId: string;
+  start: number;
+  end: number;
+  resolution?: string;
+  samples: Row[];
+  events: Row[];
+};
+
 export function History({
   entity,
   onClose,
@@ -20,14 +29,13 @@ export function History({
 }) {
   const [range, setRange] = useState("24"),
     [custom, setCustom] = useState({ start: "", end: "" }),
-    [data, setData] = useState<Row>({ samples: [], events: [] }),
-    [windowBounds, setWindowBounds] = useState<{
-      start: number;
-      end: number;
-    } | null>(null),
+    [snapshot, setSnapshot] = useState<HistorySnapshot | null>(null),
+    [loading, setLoading] = useState(false),
     [error, setError] = useState("");
   useEffect(() => {
+    setSnapshot(null);
     if (range === "custom" && (!custom.start || !custom.end)) {
+      setLoading(false);
       setError("");
       return;
     }
@@ -37,36 +45,59 @@ export function History({
           ? Date.parse(custom.start + "Z")
           : end - Number(range) * 3600000;
     if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      setLoading(false);
       if (range === "custom") setError("Enter valid start and end timestamps.");
       return;
     }
     if (end <= start) {
+      setLoading(false);
       setError("End time must be after start time.");
       return;
     }
+    const controller = new AbortController();
     let cancelled = false;
+    setLoading(true);
     setError("");
-    setWindowBounds({ start, end });
-    api(`history/${entity.id}?start=${start}&end=${end}`)
+    api(
+      `history/${entity.id}?start=${start}&end=${end}`,
+      "GET",
+      undefined,
+      controller.signal,
+    )
       .then((res) => {
         if (!cancelled) {
-          setData(res);
+          setSnapshot({
+            entityId: entity.id,
+            start,
+            end,
+            resolution: res.resolution,
+            samples: res.samples || [],
+            events: res.events || [],
+          });
           setError("");
+          setLoading(false);
         }
       })
       .catch((e) => {
-        if (!cancelled) setError(e.message);
+        if (!cancelled && e?.name !== "AbortError") {
+          setSnapshot(null);
+          setError(e instanceof Error ? e.message : "Failed to load history.");
+          setLoading(false);
+        }
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [entity.id, range, custom.start, custom.end]);
-  const samples = data.samples as Row[],
+  const current = snapshot?.entityId === entity.id ? snapshot : null,
+    samples = current?.samples ?? [],
+    events = current?.events ?? [],
     observations = samples.filter((p) => p.reachable !== null),
     unitSuffix =
-      data.resolution === "day"
+      current?.resolution === "day"
         ? "/day"
-        : data.resolution === "hour"
+        : current?.resolution === "hour"
           ? "/hr"
           : "/min",
     createdAt =
@@ -75,13 +106,13 @@ export function History({
         : entity.created
           ? Date.parse(entity.created)
           : NaN,
-    effectiveStart = windowBounds
+    effectiveStart = current
       ? Number.isFinite(createdAt)
-        ? Math.max(windowBounds.start, createdAt)
-        : windowBounds.start
+        ? Math.max(current.start, createdAt)
+        : current.start
       : 0,
-    expected = windowBounds
-      ? Math.max(0, (windowBounds.end - effectiveStart) / 60000)
+    expected = current
+      ? Math.max(0, (current.end - effectiveStart) / 60000)
       : 0,
     coverage = expected
       ? Math.min(
@@ -95,10 +126,11 @@ export function History({
       ? (observations.reduce((sum, p) => sum + p.successes, 0) /
           observations.reduce((sum, p) => sum + p.observations, 0)) *
         100
-      : null;
+      : null,
+    incompleteCustom = range === "custom" && (!custom.start || !custom.end);
   return (
     <Dialog title={`${entity.name} · history`} onClose={onClose} wide>
-      <div className="dialog-body">
+      <div className="dialog-body" aria-busy={loading}>
         <div className="range-tabs">
           {[
             ["24", "24 hours"],
@@ -122,7 +154,7 @@ export function History({
                 type="datetime-local"
                 value={custom.start}
                 onChange={(e) =>
-                  setCustom({ ...custom, start: e.target.value })
+                  setCustom((prev) => ({ ...prev, start: e.target.value }))
                 }
               />
             </Field>
@@ -130,12 +162,18 @@ export function History({
               <input
                 type="datetime-local"
                 value={custom.end}
-                onChange={(e) => setCustom({ ...custom, end: e.target.value })}
+                onChange={(e) =>
+                  setCustom((prev) => ({ ...prev, end: e.target.value }))
+                }
               />
             </Field>
           </div>
         )}
-        {error && <p className="form-error">{error}</p>}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
         {entity.kind === "host" && (
           <div className="history-stats">
             <span>
@@ -145,7 +183,8 @@ export function History({
               </strong>
             </span>
             <span>
-              Monitoring coverage <strong>{coverage.toFixed(1)}%</strong>
+              Monitoring coverage{" "}
+              <strong>{current ? coverage.toFixed(1) + "%" : "—"}</strong>
             </span>
             <span>
               Host uptime{" "}
@@ -160,97 +199,114 @@ export function History({
             </span>
           </div>
         )}
-        <h3>Traffic (MiB{unitSuffix})</h3>
-        {!samples.length ? (
-          <Empty title="No observations in this range">
-            Unknown periods are not recorded as host downtime.
-          </Empty>
+        {loading ? (
+          <p className="muted">Loading history…</p>
+        ) : !current ? (
+          !error &&
+          incompleteCustom && (
+            <p className="muted">
+              Enter start and end timestamps to load history.
+            </p>
+          )
         ) : (
-          <div className="chart">
-            <ResponsiveContainer width="100%" height={230}>
-              <AreaChart
-                data={samples.map((p) => ({
-                  ...p,
-                  time: when(p.at),
-                  inMiB: p.inbound / 1024 ** 2,
-                  outMiB: p.outbound / 1024 ** 2,
-                }))}
-              >
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="time" tick={{ fontSize: 10 }} minTickGap={60} />
-                <YAxis tick={{ fontSize: 10 }} width={45} />
-                <Tooltip />
-                <Area
-                  dataKey="outMiB"
-                  name={`Outbound MiB${unitSuffix}`}
-                  stroke="var(--accent)"
-                  fill="var(--accent-soft)"
-                />
-                <Area
-                  dataKey="inMiB"
-                  name={`Inbound MiB${unitSuffix}`}
-                  stroke="var(--good)"
-                  fill="var(--good-soft)"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-        {entity.kind === "host" && samples.some((p) => p.cpu !== null) && (
           <>
-            <h3>Resource utilization (%)</h3>
-            <div className="chart">
-              <ResponsiveContainer width="100%" height={200}>
-                <AreaChart
-                  data={samples.map((p) => ({ ...p, time: when(p.at) }))}
-                >
-                  <XAxis
-                    dataKey="time"
-                    tick={{ fontSize: 10 }}
-                    minTickGap={60}
-                  />
-                  <YAxis domain={[0, 100]} width={35} />
-                  <Tooltip />
-                  <Area
-                    dataKey="cpu"
-                    name="CPU mean"
-                    stroke="var(--accent)"
-                    fill="var(--accent-soft)"
-                  />
-                  <Area
-                    dataKey="cpu_max"
-                    name="CPU max"
-                    stroke="var(--warning)"
-                    fill="none"
-                  />
-                  <Area
-                    dataKey="memory"
-                    name="Memory mean"
-                    stroke="var(--good)"
-                    fill="none"
-                  />
-                  <Area
-                    dataKey="disk"
-                    name="Disk mean"
-                    stroke="var(--muted)"
-                    fill="none"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+            <h3>Traffic (MiB{unitSuffix})</h3>
+            {!samples.length ? (
+              <Empty title="No observations in this range">
+                Unknown periods are not recorded as host downtime.
+              </Empty>
+            ) : (
+              <div className="chart">
+                <ResponsiveContainer width="100%" height={230}>
+                  <AreaChart
+                    data={samples.map((p) => ({
+                      ...p,
+                      time: when(p.at),
+                      inMiB: p.inbound / 1024 ** 2,
+                      outMiB: p.outbound / 1024 ** 2,
+                    }))}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis
+                      dataKey="time"
+                      tick={{ fontSize: 10 }}
+                      minTickGap={60}
+                    />
+                    <YAxis tick={{ fontSize: 10 }} width={45} />
+                    <Tooltip />
+                    <Area
+                      dataKey="outMiB"
+                      name={`Outbound MiB${unitSuffix}`}
+                      stroke="var(--accent)"
+                      fill="var(--accent-soft)"
+                    />
+                    <Area
+                      dataKey="inMiB"
+                      name={`Inbound MiB${unitSuffix}`}
+                      stroke="var(--good)"
+                      fill="var(--good-soft)"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+            {entity.kind === "host" && samples.some((p) => p.cpu !== null) && (
+              <>
+                <h3>Resource utilization (%)</h3>
+                <div className="chart">
+                  <ResponsiveContainer width="100%" height={200}>
+                    <AreaChart
+                      data={samples.map((p) => ({ ...p, time: when(p.at) }))}
+                    >
+                      <XAxis
+                        dataKey="time"
+                        tick={{ fontSize: 10 }}
+                        minTickGap={60}
+                      />
+                      <YAxis domain={[0, 100]} width={35} />
+                      <Tooltip />
+                      <Area
+                        dataKey="cpu"
+                        name="CPU mean"
+                        stroke="var(--accent)"
+                        fill="var(--accent-soft)"
+                      />
+                      <Area
+                        dataKey="cpu_max"
+                        name="CPU max"
+                        stroke="var(--warning)"
+                        fill="none"
+                      />
+                      <Area
+                        dataKey="memory"
+                        name="Memory mean"
+                        stroke="var(--good)"
+                        fill="none"
+                      />
+                      <Area
+                        dataKey="disk"
+                        name="Disk mean"
+                        stroke="var(--muted)"
+                        fill="none"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </>
+            )}
+            <h3>Accounting & operation events</h3>
+            {events.length ? (
+              events.map((e: Row) => (
+                <div className="event-line" key={e.id}>
+                  <strong>{e.type}</strong>
+                  <small>{when(e.at)}</small>
+                  <pre>{e.data}</pre>
+                </div>
+              ))
+            ) : (
+              <p className="muted">No events in this range.</p>
+            )}
           </>
-        )}
-        <h3>Accounting & operation events</h3>
-        {data.events.length ? (
-          data.events.map((e: Row) => (
-            <div className="event-line" key={e.id}>
-              <strong>{e.type}</strong>
-              <small>{when(e.at)}</small>
-              <pre>{e.data}</pre>
-            </div>
-          ))
-        ) : (
-          <p className="muted">No events in this range.</p>
         )}
       </div>
     </Dialog>

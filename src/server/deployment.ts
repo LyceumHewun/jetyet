@@ -130,13 +130,13 @@ function hopScript(n: Entity) {
 }
 export const detectionScript = `set -euo pipefail
 python3 - <<'PY'
-import json,hashlib,os,subprocess
+import json,hashlib,os,shutil,subprocess
 m=json.load(open('/etc/jetyet/manifest.json'))
 p='/etc/jetyet/config.yaml'
 m['actualHash']=hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.exists(p) else None
 m['active']=subprocess.run(['systemctl','is-active','--quiet','jetyet-hysteria.service']).returncode==0
 m['actualVersion']=subprocess.run(['/usr/local/bin/hysteria','version'],capture_output=True,text=True).stdout.strip()
-if m.get('hopping'):
+if m['active'] and m.get('hopping'):
  dport=m['hopping'].replace('-',':')
  comment='jetyet-'+m['nodeId']
  port=str(m['port'])
@@ -149,7 +149,7 @@ if m.get('hopping'):
  else:
   ok=False
   for cmd in ['iptables','ip6tables']:
-   if subprocess.run([cmd,'-t','nat','-C','PREROUTING','-p','udp','--dport',dport,'-m','comment','--comment',comment,'-j','REDIRECT','--to-ports',port],capture_output=True).returncode==0:
+   if shutil.which(cmd) and subprocess.run([cmd,'-t','nat','-C','PREROUTING','-p','udp','--dport',dport,'-m','comment','--comment',comment,'-j','REDIRECT','--to-ports',port],capture_output=True).returncode==0:
     ok=True
   if not ok:
    raise Exception('Port hopping rule missing')

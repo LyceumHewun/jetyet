@@ -78,16 +78,6 @@ export function resetUsage(s: Store, e: Entity, manual: boolean) {
   s.db
     .query("UPDATE usage SET inbound=0,outbound=0,start=?,next=? WHERE id=?")
     .run(start, manual ? u.next : nextReset(e.quota.reset, now), e.id);
-  if (manual) {
-    if (e.kind === "host")
-      s.db
-        .query("UPDATE counters SET at=? WHERE source=?")
-        .run(start, `host:${e.id}`);
-    else if (e.kind === "user")
-      s.db
-        .query("UPDATE counters SET at=? WHERE source LIKE ?")
-        .run(start, `node:%:user:${e.id}`);
-  }
 }
 function previousBoundary(p: Reset, now: number, first: number) {
   if (p.kind === "interval")
@@ -149,6 +139,7 @@ export function addObservation(
       [string]
     >("SELECT * FROM counters WHERE source=?")
     .get(source);
+  if (prev && at < prev.at) return { inbound: 0, outbound: 0 };
   let din = 0,
     dout = 0;
   const u = usage(s, e);
@@ -158,27 +149,8 @@ export function addObservation(
     inbound >= prev.inbound &&
     outbound >= prev.outbound
   ) {
-    if (at < u.start) {
-      s.event(e.id, "traffic.gap", {
-        from: prev.at,
-        to: at,
-        reason: "Unsplit counters across accounting boundary",
-        measuredInbound: inbound - prev.inbound,
-        measuredOutbound: outbound - prev.outbound,
-      });
-      s.alert(
-        e.id,
-        "accounting-gap",
-        "Traffic crossed a reset boundary without sufficient observations.",
-      );
-    } else if (prev.at < u.start) {
-      if (inbound === prev.inbound && outbound === prev.outbound) {
-        din = 0;
-        dout = 0;
-      } else if (at - prev.at <= 120000) {
-        din = inbound - prev.inbound;
-        dout = outbound - prev.outbound;
-      } else {
+    if (at < u.start || prev.at < u.start) {
+      if (inbound !== prev.inbound || outbound !== prev.outbound) {
         s.event(e.id, "traffic.gap", {
           from: prev.at,
           to: at,
@@ -221,7 +193,10 @@ export function addObservation(
           )
           .get(match[1], e.id)
       : null;
-    if (!reset || (first && first.at >= u.start)) {
+    if (inbound === 0 && outbound === 0) {
+      din = 0;
+      dout = 0;
+    } else if (!reset || (first && first.at >= u.start && at >= u.start)) {
       din = inbound;
       dout = outbound;
     } else {

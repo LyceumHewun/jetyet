@@ -1,9 +1,15 @@
 import type { Row } from "./types";
-export async function api(path: string, method = "GET", body?: unknown) {
+export async function api(
+  path: string,
+  method = "GET",
+  body?: unknown,
+  signal?: AbortSignal,
+) {
   const r = await fetch("/api/" + path, {
     method,
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   });
   const text = await r.text();
   let data: any = null;

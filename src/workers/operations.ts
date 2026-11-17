@@ -11,7 +11,11 @@ import { safeError } from "../server/errors";
 import { execute, withHost } from "../server/ssh";
 import { beat, claim, finish, type Task } from "../server/tasks";
 
-export async function runOperation(s: Store, t: Task) {
+export async function runOperation(
+  s: Store,
+  t: Task,
+  runner?: (script: string) => Promise<string>,
+) {
   const p = JSON.parse(t.payload),
     h = s.get(t.host);
   if (!h || h.deleted) throw Error("VPS removed");
@@ -34,9 +38,7 @@ export async function runOperation(s: Store, t: Task) {
       .run(t.id, message, Date.now());
   }
   checkpoint(0, "Inspecting remote host");
-  await withHost(s, h, async (c) => {
-    const run = (script: string) =>
-      execute(c, script, h.username !== "root", 300000);
+  const execRemote = async (run: (script: string) => Promise<string>) => {
     if (["deploy", "upgrade", "reapply"].includes(t.kind)) {
       if (!n || n.deleted || n.deleting) throw Error("Node removed");
       checkpoint(
@@ -80,7 +82,7 @@ export async function runOperation(s: Store, t: Task) {
       if (!n || n.deleted || n.deleting)
         throw Error("Plan a node before detection");
       checkpoint(1, "Detecting platform-owned deployment");
-      const actual = JSON.parse(await run(detectionScript));
+      let actual = JSON.parse(await run(detectionScript));
       const curHost = s.get(h.id);
       const curNode = s.get(n.id);
       if (
@@ -89,16 +91,21 @@ export async function runOperation(s: Store, t: Task) {
         curHost.deleting ||
         !curNode ||
         curNode.deleted ||
-        curNode.deleting
+        curNode.deleting ||
+        curNode.hostId !== curHost.id
       )
         throw Error("Entity removed during detection");
+      const expectedHash = digest(serverConfig(s, curNode));
       if (
         actual.owner !== "jetyet" ||
         actual.phase !== "ready" ||
+        typeof actual.version !== "string" ||
+        !actual.version ||
+        typeof actual.actualVersion !== "string" ||
         !actual.actualVersion.includes(actual.version) ||
         actual.nodeId !== curNode.id ||
         actual.hostId !== curHost.id ||
-        actual.actualHash !== digest(serverConfig(s, curNode))
+        actual.actualHash !== expectedHash
       )
         throw Error("Remote deployment does not match the planned node");
       const wantActive = !!(curHost.enabled && curNode.enabled);
@@ -106,21 +113,71 @@ export async function runOperation(s: Store, t: Task) {
         await run(
           `set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl ${wantActive ? "start" : "stop"} jetyet-hysteria.service\n`,
         );
+        actual = JSON.parse(await run(detectionScript));
+        if (
+          actual.owner !== "jetyet" ||
+          actual.phase !== "ready" ||
+          typeof actual.version !== "string" ||
+          !actual.version ||
+          typeof actual.actualVersion !== "string" ||
+          !actual.actualVersion.includes(actual.version) ||
+          actual.nodeId !== curNode.id ||
+          actual.hostId !== curHost.id ||
+          actual.actualHash !== expectedHash ||
+          actual.active !== wantActive
+        )
+          throw Error(
+            wantActive
+              ? "Remote deployment failed to start with verified rules"
+              : "Remote deployment failed to stop",
+          );
       }
-      s.put(
-        "node",
-        {
-          ...strip(curNode),
-          status: "ready",
-          version: actual.version,
-          configHash: actual.configHash,
-        },
-        undefined,
-        curNode.id,
-      );
+      const shouldStop = s.db
+        .transaction(() => {
+          const latestHost = s.get(h.id);
+          const latestNode = s.get(n.id);
+          if (
+            !latestHost ||
+            latestHost.deleted ||
+            latestHost.deleting ||
+            !latestNode ||
+            latestNode.deleted ||
+            latestNode.deleting ||
+            latestNode.hostId !== latestHost.id
+          )
+            throw Error("Entity removed during detection");
+          if (
+            actual.nodeId !== latestNode.id ||
+            actual.hostId !== latestHost.id ||
+            actual.actualHash !== digest(serverConfig(s, latestNode)) ||
+            (latestNode.hopping ?? "") !== (curNode.hopping ?? "") ||
+            latestNode.address !== curNode.address
+          )
+            throw Error("Planned node configuration changed during detection");
+          s.put(
+            "node",
+            {
+              ...strip(latestNode),
+              status: "ready",
+              version: actual.version,
+              configHash: actual.configHash,
+            },
+            undefined,
+            latestNode.id,
+          );
+          return !(latestHost.enabled && latestNode.enabled);
+        })
+        .immediate();
+      if (shouldStop && actual.active) {
+        await run(
+          "set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl stop jetyet-hysteria.service\n",
+        );
+      }
     } else if (t.kind === "host-state" || t.kind === "node-state") {
       const curHost = s.get(h.id);
-      const curNode = n ? s.get(n.id) : null;
+      const curNode = p.nodeId
+        ? s.get(p.nodeId)
+        : s.list("node").find((node) => node.hostId === h.id) || null;
       if (
         curHost &&
         !curHost.deleted &&
@@ -153,7 +210,12 @@ export async function runOperation(s: Store, t: Task) {
         .immediate();
     } else throw Error("Unknown remote operation");
     checkpoint(3, "Completed");
-  });
+  };
+  if (runner) await execRemote(runner);
+  else
+    await withHost(s, h, (c) =>
+      execRemote((script) => execute(c, script, h.username !== "root", 300000)),
+    );
 }
 if (import.meta.main) {
   const s = storage(await loadWorkerConfig()),

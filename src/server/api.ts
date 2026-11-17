@@ -155,10 +155,8 @@ export function createApp(s: Store) {
         : undefined;
     if (u && u.nodeIds.includes(n.id) && userAllowed(s, u)) {
       s.db
-        .query(
-          "INSERT INTO first_auth VALUES(?,?,?) ON CONFLICT(node,user) DO UPDATE SET at=CASE WHEN EXISTS(SELECT 1 FROM counters WHERE source=?) THEN first_auth.at ELSE excluded.at END",
-        )
-        .run(n.id, u.id, Date.now(), `node:${n.id}:user:${u.id}`);
+        .query("INSERT OR IGNORE INTO first_auth VALUES(?,?,?)")
+        .run(n.id, u.id, Date.now());
       return c.json({ ok: true, id: u.id });
     }
     return c.json({ ok: false });
