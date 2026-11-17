@@ -43,11 +43,13 @@ export function deploymentScript(
   if (!/^v2\.\d+\.\d+$/.test(version))
     throw Error("Specify an explicit Hysteria version, such as v2.6.5");
   const config = serverConfig(s, n),
+    desiredHash = digest(config),
     manifest = JSON.stringify({
       owner: "jetyet",
       nodeId: n.id,
       hostId: n.hostId,
-      configHash: digest(config),
+      address: n.address,
+      configHash: desiredHash,
       version,
       hopping: n.hopping,
       port: n.port,
@@ -56,7 +58,8 @@ export function deploymentScript(
   // Literal base64 payloads avoid interpolating user-controlled values as shell syntax.
   const encoded = Buffer.from(config).toString("base64");
   const unit = `[Unit]\nDescription=Jetyet Hysteria 2\nAfter=network-online.target\nWants=network-online.target\n[Service]\n${n.hopping ? "ExecStartPre=/bin/bash /etc/jetyet/hopping-add.sh\nExecStopPost=/bin/bash /etc/jetyet/hopping-remove.sh\n" : ""}ExecStart=/usr/local/bin/hysteria server -c /etc/jetyet/config.yaml\nRestart=on-failure\nRestartSec=3\nLimitNOFILE=1048576\n[Install]\nWantedBy=multi-user.target\n`;
-  return `set -euo pipefail
+  return `set -Eeuo pipefail
+trap 'status=$?; printf "Deployment failed at script line %s (exit %s)\\n" "$LINENO" "$status" >&2; exit "$status"' ERR
 umask 077
 test "$(id -u)" = 0 || { echo 'Root privileges required' >&2; exit 1; }
 exec 9>/run/jetyet-operation.lock
@@ -65,16 +68,24 @@ flock -w 15 9 || { echo 'Another remote operation is still running' >&2; exit 1;
 case "$ID" in debian|ubuntu) ;; *) echo 'Debian or Ubuntu required' >&2; exit 1;; esac
 test -d /run/systemd/system
 for cmd in curl openssl python3 ss ip sha256sum cmp flock; do command -v "$cmd" >/dev/null || { echo "Missing dependency: $cmd" >&2; exit 1; }; done
+${n.hopping ? `if ! command -v iptables >/dev/null || ! command -v ip6tables >/dev/null; then
+  echo 'Installing iptables for port hopping'
+  command -v apt-get >/dev/null || { echo 'Missing apt-get; cannot install port hopping dependencies' >&2; exit 1; }
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y iptables
+fi
+for cmd in iptables ip6tables; do command -v "$cmd" >/dev/null || { echo "Missing port hopping dependency after installation: $cmd" >&2; exit 1; }; done
+` : ""}
 if test -e /etc/jetyet/manifest.json; then
   python3 -c ${quote(`import json; m=json.load(open('/etc/jetyet/manifest.json')); assert m['owner']=='jetyet' and m['nodeId']=='${n.id}' and m['hostId']=='${n.hostId}', 'Foreign deployment'`)}
-  ${reapply ? "true" : `python3 -c ${quote("import json,hashlib,os; m=json.load(open('/etc/jetyet/manifest.json')); p='/etc/jetyet/config.yaml'; assert (hashlib.sha256(open(p,'rb').read()).hexdigest() in [m['configHash'],m.get('previousConfigHash')] if os.path.exists(p) else m.get('phase')=='installing'), 'Configuration drift: explicitly reapply platform configuration'")}`}
+  ${reapply ? "true" : `python3 -c ${quote(`import json,hashlib,os; m=json.load(open('/etc/jetyet/manifest.json')); p='/etc/jetyet/config.yaml'; assert (hashlib.sha256(open(p,'rb').read()).hexdigest() in [m['configHash'],m.get('previousConfigHash')] and m['configHash']=='${desiredHash}' if os.path.exists(p) else m.get('phase')=='installing'), 'Configuration drift: explicitly reapply platform configuration'`)}`}
 else
   if test -e /etc/hysteria/config.yaml || systemctl is-active --quiet hysteria-server.service || test -e /etc/jetyet/config.yaml || command -v hysteria >/dev/null; then echo 'Existing unmanaged Hysteria installation; refusing overwrite' >&2; exit 1; fi
   if ss -H -lun | awk '{print $4}' | grep -Eq ':(${n.port}|9999)$'; then echo 'Port conflict' >&2; exit 1; fi
   if ss -H -ltn | awk '{print $4}' | grep -Eq ':9999$'; then echo 'Traffic API port conflict' >&2; exit 1; fi
 fi
 mkdir -p /etc/jetyet /usr/local/bin
-python3 -c ${quote(`import json,hashlib,os; m=json.loads(${JSON.stringify(manifest)}); m['phase']='installing'; p='/etc/jetyet/config.yaml'; m['previousConfigHash']=hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.exists(p) else None; f=open('/etc/jetyet/manifest.json.next','w'); json.dump(m,f); f.close(); os.replace('/etc/jetyet/manifest.json.next','/etc/jetyet/manifest.json')`)}
+python3 -c ${quote(`import json,hashlib,os; m=json.loads(${JSON.stringify(manifest)}); m['phase']='installing'; p='/etc/jetyet/config.yaml'; m['previousConfigHash']=hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.exists(p) else None; old=json.load(open('/etc/jetyet/manifest.json')) if os.path.exists('/etc/jetyet/manifest.json') else None; m['configHash']=old['configHash'] if old and old.get('configHash') else m['configHash']; f=open('/etc/jetyet/manifest.json.next','w'); json.dump(m,f); f.close(); os.replace('/etc/jetyet/manifest.json.next','/etc/jetyet/manifest.json')`)}
 case "$(uname -m)" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) echo 'Supported architectures: amd64, arm64' >&2; exit 1;; esac
 if ! test -x /usr/local/bin/hysteria || ! /usr/local/bin/hysteria version | grep -Fq ${quote(version)}; then
   curl -fLsS --retry 2 --max-time 120 ${quote(`https://github.com/apernet/hysteria/releases/download/app/${version}/hysteria-linux-`)}"$arch" -o /usr/local/bin/hysteria.next
@@ -97,40 +108,51 @@ printf %s ${quote(Buffer.from(unit).toString("base64"))} | base64 -d > /etc/syst
 if test -f /etc/jetyet/hopping-remove.sh; then bash /etc/jetyet/hopping-remove.sh; fi
 rm -f /etc/jetyet/hopping-remove.sh /etc/jetyet/hopping-add.sh
 ${n.hopping ? hopScript(n) : ""}
-printf %s ${quote(Buffer.from(manifest).toString("base64"))} | base64 -d > /etc/jetyet/manifest.json
 systemctl daemon-reload
 systemctl enable jetyet-hysteria.service >/dev/null
 systemctl restart jetyet-hysteria.service
 sleep 2
 systemctl is-active --quiet jetyet-hysteria.service
+printf %s ${quote(Buffer.from(manifest).toString("base64"))} | base64 -d > /etc/jetyet/manifest.json.next
+mv /etc/jetyet/manifest.json.next /etc/jetyet/manifest.json
 echo 'Deployment verified'
 `;
 }
 function hopScript(n: Entity) {
+  const isV6 = n.address.includes(":");
+  const cmd = isV6 ? "ip6tables" : "iptables";
+  const dest = `${n.address}/${isV6 ? 128 : 32}`;
   const range = n.hopping.replace("-", ":");
-  const base = `-t nat -p udp --dport ${range} -m comment --comment jetyet-${n.id} -j REDIRECT --to-ports ${n.port}`;
-  const lines = ["iptables", "ip6tables"].map(
-    (cmd) =>
-      `${cmd} -t nat -C PREROUTING ${base.replace("-t nat ", "")} 2>/dev/null || ${cmd} -t nat -A PREROUTING ${base.replace("-t nat ", "")}`,
-  );
-  const remove = ["iptables", "ip6tables"]
-    .map(
-      (cmd) =>
-        `${cmd} -t nat -D PREROUTING ${base.replace("-t nat ", "")} 2>/dev/null || true`,
-    )
-    .join("\n");
-  return `command -v iptables >/dev/null; command -v ip6tables >/dev/null\nprintf %s ${quote(Buffer.from("set -e\n" + lines.join("\n") + "\n").toString("base64"))} | base64 -d > /etc/jetyet/hopping-add.sh\nprintf %s ${quote(Buffer.from("set -e\n" + remove + "\n").toString("base64"))} | base64 -d > /etc/jetyet/hopping-remove.sh\n`;
+  const rule = `-d ${dest} -p udp --dport ${range} -m comment --comment jetyet-${n.id} -j REDIRECT --to-ports ${n.port}`;
+  const add = `${cmd} -t nat -C PREROUTING ${rule} 2>/dev/null || ${cmd} -t nat -A PREROUTING ${rule}`;
+  const remove = `${cmd} -t nat -D PREROUTING ${rule} 2>/dev/null || true`;
+  return `command -v ${cmd} >/dev/null\nprintf %s ${quote(Buffer.from("set -e\n" + add + "\n").toString("base64"))} | base64 -d > /etc/jetyet/hopping-add.sh\nprintf %s ${quote(Buffer.from("set -e\n" + remove + "\n").toString("base64"))} | base64 -d > /etc/jetyet/hopping-remove.sh\n`;
 }
 export const detectionScript = `set -euo pipefail
 python3 - <<'PY'
-import json,hashlib,subprocess
+import json,hashlib,os,shutil,subprocess
 m=json.load(open('/etc/jetyet/manifest.json'))
-m['actualHash']=hashlib.sha256(open('/etc/jetyet/config.yaml','rb').read()).hexdigest()
+p='/etc/jetyet/config.yaml'
+m['actualHash']=hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.exists(p) else None
 m['active']=subprocess.run(['systemctl','is-active','--quiet','jetyet-hysteria.service']).returncode==0
 m['actualVersion']=subprocess.run(['/usr/local/bin/hysteria','version'],capture_output=True,text=True).stdout.strip()
-if m.get('hopping'):
- for cmd in ['iptables','ip6tables']:
-  subprocess.run([cmd,'-t','nat','-C','PREROUTING','-p','udp','--dport',m['hopping'].replace('-',':'),'-m','comment','--comment','jetyet-'+m['nodeId'],'-j','REDIRECT','--to-ports',str(m['port'])],check=True,capture_output=True)
+if m['active'] and m.get('hopping'):
+ dport=m['hopping'].replace('-',':')
+ comment='jetyet-'+m['nodeId']
+ port=str(m['port'])
+ addr=m.get('address')
+ if addr:
+  is_v6=':' in addr
+  cmd='ip6tables' if is_v6 else 'iptables'
+  dest=addr+('/128' if is_v6 else '/32')
+  subprocess.run([cmd,'-t','nat','-C','PREROUTING','-d',dest,'-p','udp','--dport',dport,'-m','comment','--comment',comment,'-j','REDIRECT','--to-ports',port],check=True,capture_output=True)
+ else:
+  ok=False
+  for cmd in ['iptables','ip6tables']:
+   if shutil.which(cmd) and subprocess.run([cmd,'-t','nat','-C','PREROUTING','-p','udp','--dport',dport,'-m','comment','--comment',comment,'-j','REDIRECT','--to-ports',port],capture_output=True).returncode==0:
+    ok=True
+  if not ok:
+   raise Exception('Port hopping rule missing')
 print(json.dumps(m))
 PY
 `;

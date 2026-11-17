@@ -20,6 +20,7 @@ export function registerHostsRoutes({ app, s, entity, view, checked }: Routes) {
   app.put("/api/hosts/:id", async (c) => {
     const old = entity(c.req.param("id"), "host"),
       input = hostSchema.parse(await c.req.json());
+    if (old.deleting) throw Error("A host pending deletion cannot be modified");
     const { credential, passphrase, ...data } = input;
     const secret = s.secrets(old.id);
     if (old.authType !== data.authType && !credential)

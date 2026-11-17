@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Config } from "./config";
-import { vault } from "./crypto";
+import { digest, vault } from "./crypto";
 
 export function storage(config: Config) {
   mkdirSync(dirname(config.database), { recursive: true });
@@ -25,6 +25,8 @@ export function storage(config: Config) {
     CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, version TEXT NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS login_limits (key TEXT PRIMARY KEY, attempts INTEGER NOT NULL, reset INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS first_auth (node TEXT NOT NULL, user TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(node,user));
+    CREATE TABLE IF NOT EXISTS token_index (hash TEXT PRIMARY KEY, entity TEXT NOT NULL, kind TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS token_index_entity ON token_index(entity);
   `);
   const crypt = vault(config.masterKey);
   db.exec(
@@ -41,6 +43,28 @@ export function storage(config: Config) {
     .get();
   if (!check || crypt.open(check.value) !== "jetyet-vault")
     throw Error("Invalid encryption master key");
+  function syncTokenIndex(id: string, secret: Record<string, string>) {
+    db.query("DELETE FROM token_index WHERE entity=?").run(id);
+    if (secret.vpnToken)
+      db.query("INSERT OR REPLACE INTO token_index VALUES(?,?,?)").run(
+        digest(secret.vpnToken),
+        id,
+        "vpn",
+      );
+    if (secret.subscriptionToken)
+      db.query("INSERT OR REPLACE INTO token_index VALUES(?,?,?)").run(
+        digest(secret.subscriptionToken),
+        id,
+        "sub",
+      );
+  }
+  for (const row of db
+    .query<{ id: string; secret: string }, []>(
+      "SELECT id, secret FROM entities WHERE kind='user' AND deleted=0 AND NOT EXISTS (SELECT 1 FROM token_index WHERE entity=entities.id)",
+    )
+    .all()) {
+    syncTokenIndex(row.id, JSON.parse(crypt.open(row.secret)));
+  }
   type Row = {
     id: string;
     kind: string;
@@ -88,6 +112,7 @@ export function storage(config: Config) {
       existing?.created || Date.now(),
       Number(secret !== undefined),
     );
+    if (secret !== undefined && kind === "user") syncTokenIndex(id, secret);
     return get(id)!;
   }
   const secrets = (id: string): Record<string, string> => {

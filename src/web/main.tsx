@@ -261,12 +261,17 @@ function App() {
     );
   if (checking) return <div className="loading">Loading Jetyet…</div>;
   if (!session) return <Login onLogin={setSession} />;
-  const visible = (list: Row[]) =>
-    list.filter((r) =>
-      (r.name || r.kind || r.message || "")
+  const visible = (list: Row[]) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((r) =>
+      [r.name, r.address, r.note, r.kind, r.message, r.code]
+        .filter(Boolean)
+        .join(" ")
         .toLowerCase()
-        .includes(search.toLowerCase()),
+        .includes(q),
     );
+  };
   const activeAlerts = state.alerts.filter((a) => !a.closed),
     nodeHealthy = state.nodes.filter(
       (n) =>

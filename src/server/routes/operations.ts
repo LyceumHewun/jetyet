@@ -42,26 +42,40 @@ export function registerOperationsRoutes({
         if (e.kind === "user") {
           s.db.query("UPDATE entities SET deleted=1 WHERE id=?").run(e.id);
           kickUser(s, e.id);
+          s.event(e.id, "deletion.requested", {});
         } else {
-          unassign(
-            e.kind === "node"
-              ? [e.id]
-              : s
-                  .list("node")
-                  .filter((n) => n.hostId === e.id)
-                  .map((n) => n.id),
-          );
-          s.put(
-            e.kind,
-            { ...strip(e), deleting: true, enabled: false },
-            undefined,
-            e.id,
-          );
-          enqueue(s, e.kind === "host" ? e.id : e.hostId, "delete", {
-            entityId: e.id,
-          });
+          const hostId = e.kind === "host" ? e.id : e.hostId;
+          const childNodes =
+            e.kind === "host"
+              ? s.list("node").filter((n) => n.hostId === e.id)
+              : [];
+          unassign(e.kind === "node" ? [e.id] : childNodes.map((n) => n.id));
+          for (const n of childNodes) {
+            if (!n.deleting || n.enabled)
+              s.put(
+                "node",
+                { ...strip(n), deleting: true, enabled: false },
+                undefined,
+                n.id,
+              );
+          }
+          if (!e.deleting || e.enabled)
+            s.put(
+              e.kind,
+              { ...strip(e), deleting: true, enabled: false },
+              undefined,
+              e.id,
+            );
+          const activeDelete = s.db
+            .query<{ id: string }, [string, string]>(
+              "SELECT id FROM tasks WHERE host=? AND kind='delete' AND state IN ('queued','running') AND json_extract(payload,'$.entityId')=? LIMIT 1",
+            )
+            .get(hostId, e.id);
+          if (!activeDelete) {
+            enqueue(s, hostId, "delete", { entityId: e.id });
+            if (!e.deleting) s.event(e.id, "deletion.requested", {});
+          }
         }
-        s.event(e.id, "deletion.requested", {});
       })
       .immediate();
     return c.json({ ok: true }, 202);
@@ -145,12 +159,11 @@ export function registerOperationsRoutes({
       end = Number(c.req.query("end") || Date.now());
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
       throw Error("Invalid time range");
+    const now = Date.now(),
+      cutoffHour = now - 30 * 86400000 - 600000,
+      cutoffDay = now - 365 * 86400000 - 3600000;
     const resolution =
-      start < Date.now() - 365 * 86400000
-        ? "day"
-        : start < Date.now() - 30 * 86400000
-          ? "hour"
-          : "minute";
+      start < cutoffDay ? "day" : start < cutoffHour ? "hour" : "minute";
     const bucket =
       resolution === "day" ? 86400000 : resolution === "hour" ? 3600000 : 60000;
     const samples = s.db

@@ -1,14 +1,24 @@
 import type { Row } from "./types";
-export async function api(path: string, method = "GET", body?: unknown) {
+export async function api(
+  path: string,
+  method = "GET",
+  body?: unknown,
+  signal?: AbortSignal,
+) {
   const r = await fetch("/api/" + path, {
     method,
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   });
-  const data = await r.json();
+  const text = await r.text();
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {}
   if (!r.ok) {
     if (r.status === 401) window.dispatchEvent(new Event("signedout"));
-    throw Error(data.error || "Request failed");
+    throw Error(data?.error || `Request failed (${r.status})`);
   }
   return data;
 }

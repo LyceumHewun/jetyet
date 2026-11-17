@@ -139,6 +139,7 @@ export function addObservation(
       [string]
     >("SELECT * FROM counters WHERE source=?")
     .get(source);
+  if (prev && at < prev.at) return { inbound: 0, outbound: 0 };
   let din = 0,
     dout = 0;
   const u = usage(s, e);
@@ -148,19 +149,21 @@ export function addObservation(
     inbound >= prev.inbound &&
     outbound >= prev.outbound
   ) {
-    if (at < u.start || (prev.at < u.start && at >= u.start)) {
-      s.event(e.id, "traffic.gap", {
-        from: prev.at,
-        to: at,
-        reason: "Unsplit counters across accounting boundary",
-        measuredInbound: inbound - prev.inbound,
-        measuredOutbound: outbound - prev.outbound,
-      });
-      s.alert(
-        e.id,
-        "accounting-gap",
-        "Traffic crossed a reset boundary without sufficient observations.",
-      );
+    if (at < u.start || prev.at < u.start) {
+      if (inbound !== prev.inbound || outbound !== prev.outbound) {
+        s.event(e.id, "traffic.gap", {
+          from: prev.at,
+          to: at,
+          reason: "Unsplit counters across accounting boundary",
+          measuredInbound: inbound - prev.inbound,
+          measuredOutbound: outbound - prev.outbound,
+        });
+        s.alert(
+          e.id,
+          "accounting-gap",
+          "Traffic crossed a reset boundary without sufficient observations.",
+        );
+      }
     } else {
       din = inbound - prev.inbound;
       dout = outbound - prev.outbound;
@@ -190,7 +193,10 @@ export function addObservation(
           )
           .get(match[1], e.id)
       : null;
-    if (!reset || (first && first.at >= u.start)) {
+    if (inbound === 0 && outbound === 0) {
+      din = 0;
+      dout = 0;
+    } else if (!reset || (first && first.at >= u.start && at >= u.start)) {
       din = inbound;
       dout = outbound;
     } else {
@@ -225,7 +231,7 @@ export function sample(
 ) {
   s.db
     .query(
-      `INSERT INTO samples(entity,at,inbound,outbound,cpu,memory,disk,reachable,cpu_max,memory_max,disk_max,observations,successes,metric_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(entity,at,resolution) DO UPDATE SET inbound=samples.inbound+excluded.inbound,outbound=samples.outbound+excluded.outbound,cpu=COALESCE(excluded.cpu,samples.cpu),memory=COALESCE(excluded.memory,samples.memory),disk=COALESCE(excluded.disk,samples.disk),reachable=COALESCE(excluded.reachable,samples.reachable),observations=MAX(samples.observations,excluded.observations),successes=CASE WHEN excluded.reachable IS NULL THEN samples.successes ELSE excluded.successes END,metric_count=MAX(samples.metric_count,excluded.metric_count),cpu_max=MAX(COALESCE(samples.cpu_max,0),COALESCE(excluded.cpu_max,0)),memory_max=MAX(COALESCE(samples.memory_max,0),COALESCE(excluded.memory_max,0)),disk_max=MAX(COALESCE(samples.disk_max,0),COALESCE(excluded.disk_max,0))`,
+      `INSERT INTO samples(entity,at,inbound,outbound,cpu,memory,disk,reachable,cpu_max,memory_max,disk_max,observations,successes,metric_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(entity,at,resolution) DO UPDATE SET inbound=samples.inbound+excluded.inbound,outbound=samples.outbound+excluded.outbound,cpu=CASE WHEN samples.metric_count+excluded.metric_count>0 THEN (COALESCE(samples.cpu,0)*samples.metric_count+COALESCE(excluded.cpu,0)*excluded.metric_count)/(samples.metric_count+excluded.metric_count) ELSE NULL END,memory=CASE WHEN samples.metric_count+excluded.metric_count>0 THEN (COALESCE(samples.memory,0)*samples.metric_count+COALESCE(excluded.memory,0)*excluded.metric_count)/(samples.metric_count+excluded.metric_count) ELSE NULL END,disk=CASE WHEN samples.metric_count+excluded.metric_count>0 THEN (COALESCE(samples.disk,0)*samples.metric_count+COALESCE(excluded.disk,0)*excluded.metric_count)/(samples.metric_count+excluded.metric_count) ELSE NULL END,reachable=CAST(samples.successes+excluded.successes AS REAL)/NULLIF(samples.observations+excluded.observations,0),observations=samples.observations+excluded.observations,successes=samples.successes+excluded.successes,metric_count=samples.metric_count+excluded.metric_count,cpu_max=CASE WHEN samples.cpu_max IS NULL AND excluded.cpu_max IS NULL THEN NULL ELSE MAX(COALESCE(samples.cpu_max,0),COALESCE(excluded.cpu_max,0)) END,memory_max=CASE WHEN samples.memory_max IS NULL AND excluded.memory_max IS NULL THEN NULL ELSE MAX(COALESCE(samples.memory_max,0),COALESCE(excluded.memory_max,0)) END,disk_max=CASE WHEN samples.disk_max IS NULL AND excluded.disk_max IS NULL THEN NULL ELSE MAX(COALESCE(samples.disk_max,0),COALESCE(excluded.disk_max,0)) END`,
     )
     .run(
       entity,
@@ -239,7 +245,7 @@ export function sample(
       metrics.cpu ?? null,
       metrics.memory ?? null,
       metrics.disk ?? null,
-      metrics.reachable === undefined ? 0 : 1,
+      metrics.reachable === undefined || metrics.reachable === null ? 0 : 1,
       metrics.reachable === 1 ? 1 : 0,
       metrics.cpu === undefined || metrics.cpu === null ? 0 : 1,
     );
@@ -269,6 +275,7 @@ export function retention(s: Store) {
         .query("DELETE FROM alerts WHERE closed IS NOT NULL AND closed<?")
         .run(now - 90 * 86400000);
       s.db.query("DELETE FROM sessions WHERE expires<?").run(now);
+      s.db.query("DELETE FROM login_limits WHERE reset<?").run(now);
     })
     .immediate();
 }

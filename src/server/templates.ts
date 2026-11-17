@@ -172,3 +172,25 @@ export async function validateMihomo(s: Store, text: string) {
     await rm(dir, { recursive: true, force: true });
   }
 }
+export function templateGroupNames(s: Store): Set<string> {
+  const names = new Set<string>();
+  for (const t of s.list("template").filter((t) => t.published && t.body)) {
+    try {
+      const rendered = engine.parseAndRenderSync(t.body, {
+        proxies: [],
+        choices: ["DIRECT"],
+        user: { name: "check" },
+        nodes: [],
+      });
+      const parsed = YAML.parse(rendered, { maxAliasCount: 100 });
+      if (Array.isArray(parsed?.["proxy-groups"])) {
+        for (const g of parsed["proxy-groups"]) {
+          if (typeof g?.name === "string" && g.name) names.add(g.name);
+        }
+      }
+    } catch {
+      // Ignore unparseable custom templates here; publish validation checks full rendering.
+    }
+  }
+  return names;
+}

@@ -14,31 +14,51 @@ async function freePort(): Promise<number> {
   await new Promise<void>((res) => server.close(() => res()));
   return port;
 }
+async function stopChild(child: ReturnType<typeof Bun.spawn>) {
+  if (child.exitCode !== null) return;
+  child.kill();
+  const exited = await Promise.race([
+    child.exited.then(() => true),
+    Bun.sleep(3000).then(() => false),
+  ]);
+  if (!exited && child.exitCode === null) {
+    child.kill(9);
+    await child.exited;
+  }
+}
 export async function probeNode(s: Store, n: Entity) {
-  const dir = await mkdtemp(join(tmpdir(), "jetyet-probe-")),
-    port = await freePort();
+  const dir = await mkdtemp(join(tmpdir(), "jetyet-probe-"));
   let child: ReturnType<typeof Bun.spawn> | undefined;
   try {
     const path = join(dir, "config.yaml"),
       address = n.address.includes(":") ? `[${n.address}]` : n.address;
-    await writeFile(
-      path,
-      YAML.stringify({
-        server: `${address}:${n.port}`,
-        auth: s.secrets(n.id).probeToken,
-        tls: { insecure: true },
-        socks5: { listen: `127.0.0.1:${port}` },
-      }),
-      { mode: 0o600 },
-    );
-    child = Bun.spawn([s.config.hysteriaBinary, "client", "-c", path], {
-      stdout: "ignore",
-      stderr: "ignore",
-    });
+    let port = 0;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      port = await freePort();
+      await writeFile(
+        path,
+        YAML.stringify({
+          server: `${address}:${n.port}`,
+          auth: s.secrets(n.id).probeToken,
+          tls: { insecure: true },
+          socks5: { listen: `127.0.0.1:${port}` },
+        }),
+        { mode: 0o600 },
+      );
+      child = Bun.spawn([s.config.hysteriaBinary, "client", "-c", path], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      await Bun.sleep(700);
+      if (child.exitCode === null) break;
+      await stopChild(child);
+      child = undefined;
+      if (attempt === 1) throw Error("Probe client exited");
+    }
     let ok = false;
     for (let i = 0; i < 5; i++) {
-      await Bun.sleep(700);
-      if (child.exitCode !== null) throw Error("Probe client exited");
+      if (i > 0) await Bun.sleep(700);
+      if (!child || child.exitCode !== null) throw Error("Probe client exited");
       const req = Bun.spawn(
         [
           "curl",
@@ -62,10 +82,7 @@ export async function probeNode(s: Store, n: Entity) {
     }
     if (!ok) throw Error("Proxy HTTPS probe failed");
   } finally {
-    if (child) {
-      child.kill();
-      await child.exited;
-    }
+    if (child) await stopChild(child);
     await rm(dir, { recursive: true, force: true });
   }
 }

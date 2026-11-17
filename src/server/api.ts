@@ -41,8 +41,12 @@ export function createApp(s: Store) {
         },
         400,
       );
+    if (err instanceof SyntaxError)
+      return c.json({ error: "Invalid JSON payload" }, 400);
     if (err instanceof HttpError)
       return c.json({ error: err.message }, err.status as 400);
+    if (!c.req.path.startsWith("/api/") || c.req.path === "/api/login")
+      return c.json({ error: "Internal server error" }, 500);
     // Remote output can contain secrets. Do not return raw command exceptions.
     return c.json(
       {
@@ -59,29 +63,47 @@ export function createApp(s: Store) {
   });
   app.post("/api/login", async (c) => {
     requireOrigin(c.req.raw, s.config.origin);
-    const key = digest(c.req.header("x-real-ip") || "local"),
-      now = Date.now();
+    const isLoopback = ["127.0.0.1", "::1", "localhost"].includes(
+      s.config.listen,
+    );
+    const key = digest(
+      isLoopback ? c.req.header("x-real-ip") || "local" : "direct",
+    );
+    const globalKey = digest("__global__");
+    const now = Date.now();
     const limit = s.db
       .query<{ attempts: number; reset: number }, [string]>(
         "SELECT * FROM login_limits WHERE key=?",
       )
       .get(key);
-    if (limit && limit.reset > now && limit.attempts >= 10)
+    const globalLimit = s.db
+      .query<{ attempts: number; reset: number }, [string]>(
+        "SELECT * FROM login_limits WHERE key=?",
+      )
+      .get(globalKey);
+    if (
+      (limit && limit.reset > now && limit.attempts >= 10) ||
+      (globalLimit && globalLimit.reset > now && globalLimit.attempts >= 50)
+    )
       return c.json({ error: "Too many attempts. Retry in 15 minutes." }, 429);
     const { username, password } = z
       .object({ username: z.string().max(100), password: z.string().max(1000) })
       .parse(await c.req.json());
-    s.db
-      .query(
-        "INSERT INTO login_limits VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN reset<? THEN 1 ELSE attempts+1 END,reset=CASE WHEN reset<? THEN excluded.reset ELSE reset END",
-      )
-      .run(key, now + 900000, now, now);
+    const bumpLimit = (k: string) =>
+      s.db
+        .query(
+          "INSERT INTO login_limits VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN reset<? THEN 1 ELSE attempts+1 END,reset=CASE WHEN reset<? THEN excluded.reset ELSE reset END",
+        )
+        .run(k, now + 900000, now, now);
+    bumpLimit(key);
     const valid = await Bun.password.verify(
       password,
       s.config.admin.passwordHash!,
     );
-    if (!same(username, s.config.admin.username) || !valid)
+    if (!same(username, s.config.admin.username) || !valid) {
+      bumpLimit(globalKey);
       return c.json({ error: "Invalid username or password" }, 401);
+    }
     s.db.query("DELETE FROM login_limits WHERE key=?").run(key);
     const t = token(),
       expires = now + 7 * 86400000;
@@ -106,16 +128,31 @@ export function createApp(s: Store) {
       !same(c.req.param("secret"), s.secrets(n.id).authSecret)
     )
       return c.json({ ok: false }, 403);
+    let input: { auth: string };
+    try {
+      input = z
+        .object({ auth: z.string().max(2048) })
+        .parse(await c.req.json());
+    } catch {
+      return c.json({ ok: false }, 400);
+    }
     refreshPeriods(s);
-    const input = z
-      .object({ auth: z.string().max(2048) })
-      .parse(await c.req.json());
     if (!nodeAllowed(s, n)) return c.json({ ok: false });
     if (same(input.auth, s.secrets(n.id).probeToken))
       return c.json({ ok: true, id: `probe:${n.id}` });
-    const u = s
-      .list("user")
-      .find((u) => same(input.auth, s.secrets(u.id).vpnToken));
+    const row = s.db
+      .query<{ entity: string }, [string, string]>(
+        "SELECT entity FROM token_index WHERE hash=? AND kind=?",
+      )
+      .get(digest(input.auth), "vpn");
+    const candidate = row ? s.get(row.entity) : null;
+    const u =
+      candidate &&
+      candidate.kind === "user" &&
+      !candidate.deleted &&
+      same(input.auth, s.secrets(candidate.id).vpnToken)
+        ? candidate
+        : undefined;
     if (u && u.nodeIds.includes(n.id) && userAllowed(s, u)) {
       s.db
         .query("INSERT OR IGNORE INTO first_auth VALUES(?,?,?)")
@@ -134,11 +171,20 @@ export function createApp(s: Store) {
     }
   }
   app.get("/sub/:token", async (c) => {
-    const u = s
-      .list("user")
-      .find((u) =>
-        same(c.req.param("token"), s.secrets(u.id).subscriptionToken),
-      );
+    const rawToken = c.req.param("token");
+    const row = s.db
+      .query<{ entity: string }, [string, string]>(
+        "SELECT entity FROM token_index WHERE hash=? AND kind=?",
+      )
+      .get(digest(rawToken), "sub");
+    const candidate = row ? s.get(row.entity) : null;
+    const u =
+      candidate &&
+      candidate.kind === "user" &&
+      !candidate.deleted &&
+      same(rawToken, s.secrets(candidate.id).subscriptionToken)
+        ? candidate
+        : undefined;
     if (!u || !u.enabled || (u.expires && Date.parse(u.expires) <= Date.now()))
       return c.text("Subscription unavailable", 403);
     refreshPeriods(s);
@@ -147,13 +193,23 @@ export function createApp(s: Store) {
     const template = s.get(id);
     if (!template || template.deleted || !template.published)
       return c.text("Template unavailable", 404);
-    const text = render(s, u, template.body);
-    await checked(text);
+    let text: string;
+    try {
+      text = render(s, u, template.body);
+      await checked(text);
+    } catch (err) {
+      return c.text(
+        err instanceof Error ? err.message : "Subscription validation failed",
+        422,
+      );
+    }
     const use = usage(s, u);
+    const upload = u.quota.direction === "out" ? 0 : use.inbound;
+    const download = u.quota.direction === "in" ? 0 : use.outbound;
     c.header("Content-Type", "text/yaml; charset=utf-8");
     c.header(
       "subscription-userinfo",
-      `upload=${use.inbound}; download=${use.outbound}; total=${u.quota.limit ?? 0}; expire=${u.expires ? Math.floor(Date.parse(u.expires) / 1000) : 0}`,
+      `upload=${upload}; download=${download}; total=${u.quota.limit ?? 0}; expire=${u.expires ? Math.floor(Date.parse(u.expires) / 1000) : 0}`,
     );
     return c.body(text);
   });
@@ -191,26 +247,35 @@ export function createApp(s: Store) {
       Date.now() - (last || created) > 180000;
     const usageStale =
       e.kind === "host"
-        ? stale(e.lastSeen, e.created)
-        : s
+        ? !e.deleted &&
+          !e.deleting &&
+          !!e.fingerprint &&
+          e.enabled &&
+          stale(e.lastSeen, e.created)
+        : !e.deleted &&
+          !e.deleting &&
+          e.enabled &&
+          s
             .list("node")
             .filter(
               (n) =>
                 e.nodeIds.includes(n.id) &&
                 n.enabled &&
                 n.status === "ready" &&
-                !n.deleting,
+                !n.deleting &&
+                n.service !== false &&
+                (() => {
+                  const h = s.get(n.hostId);
+                  return (
+                    !!h &&
+                    !h.deleted &&
+                    !h.deleting &&
+                    h.enabled &&
+                    !!h.fingerprint
+                  );
+                })(),
             )
             .some((n) => stale(n.trafficSeen, n.created));
-    if (!e.deleted && !e.deleting) {
-      if (usageStale)
-        s.alert(
-          e.id,
-          "stale",
-          "Traffic observations are stale; authentication uses last known usage.",
-        );
-      else s.resolveAlert(e.id, "stale");
-    }
     return { ...e, usage: usage(s, e), exhausted: exhausted(s, e), usageStale };
   };
   app.get("/api/state", (c) => {

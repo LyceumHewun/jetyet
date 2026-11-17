@@ -21,7 +21,9 @@ const server = Bun.serve({
   development: process.env.NODE_ENV !== "production",
 });
 console.log(`Jetyet Web listening at ${server.url}`);
-process.on("SIGTERM", async () => {
+const shutdown = async () => {
   await server.stop();
   store.db.close();
-});
+};
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);

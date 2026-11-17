@@ -19,7 +19,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/jetyet /etc/jetyet
+ReadWritePaths=/var/lib/jetyet
 
 [Install]
 WantedBy=multi-user.target
