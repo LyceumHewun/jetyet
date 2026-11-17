@@ -58,7 +58,8 @@ export function deploymentScript(
   // Literal base64 payloads avoid interpolating user-controlled values as shell syntax.
   const encoded = Buffer.from(config).toString("base64");
   const unit = `[Unit]\nDescription=Jetyet Hysteria 2\nAfter=network-online.target\nWants=network-online.target\n[Service]\n${n.hopping ? "ExecStartPre=/bin/bash /etc/jetyet/hopping-add.sh\nExecStopPost=/bin/bash /etc/jetyet/hopping-remove.sh\n" : ""}ExecStart=/usr/local/bin/hysteria server -c /etc/jetyet/config.yaml\nRestart=on-failure\nRestartSec=3\nLimitNOFILE=1048576\n[Install]\nWantedBy=multi-user.target\n`;
-  return `set -euo pipefail
+  return `set -Eeuo pipefail
+trap 'status=$?; printf "Deployment failed at script line %s (exit %s)\\n" "$LINENO" "$status" >&2; exit "$status"' ERR
 umask 077
 test "$(id -u)" = 0 || { echo 'Root privileges required' >&2; exit 1; }
 exec 9>/run/jetyet-operation.lock
@@ -67,6 +68,14 @@ flock -w 15 9 || { echo 'Another remote operation is still running' >&2; exit 1;
 case "$ID" in debian|ubuntu) ;; *) echo 'Debian or Ubuntu required' >&2; exit 1;; esac
 test -d /run/systemd/system
 for cmd in curl openssl python3 ss ip sha256sum cmp flock; do command -v "$cmd" >/dev/null || { echo "Missing dependency: $cmd" >&2; exit 1; }; done
+${n.hopping ? `if ! command -v iptables >/dev/null || ! command -v ip6tables >/dev/null; then
+  echo 'Installing iptables for port hopping'
+  command -v apt-get >/dev/null || { echo 'Missing apt-get; cannot install port hopping dependencies' >&2; exit 1; }
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y iptables
+fi
+for cmd in iptables ip6tables; do command -v "$cmd" >/dev/null || { echo "Missing port hopping dependency after installation: $cmd" >&2; exit 1; }; done
+` : ""}
 if test -e /etc/jetyet/manifest.json; then
   python3 -c ${quote(`import json; m=json.load(open('/etc/jetyet/manifest.json')); assert m['owner']=='jetyet' and m['nodeId']=='${n.id}' and m['hostId']=='${n.hostId}', 'Foreign deployment'`)}
   ${reapply ? "true" : `python3 -c ${quote(`import json,hashlib,os; m=json.load(open('/etc/jetyet/manifest.json')); p='/etc/jetyet/config.yaml'; assert (hashlib.sha256(open(p,'rb').read()).hexdigest() in [m['configHash'],m.get('previousConfigHash')] and m['configHash']=='${desiredHash}' if os.path.exists(p) else m.get('phase')=='installing'), 'Configuration drift: explicitly reapply platform configuration'`)}`}

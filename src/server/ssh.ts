@@ -148,7 +148,7 @@ export function execute(
         if (code === 0) resolve(out);
         else
           reject(
-            Error(`Remote command failed (${code}): ${error.slice(0, 1000)}`),
+            Error(`Remote command failed (${code}): ${error.trim().slice(-1000) || "No stderr output was captured"}`),
           );
       });
       stream.on("error", (e: Error) => {
