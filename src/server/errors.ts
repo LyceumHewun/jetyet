@@ -1,7 +1,9 @@
 import type { Store } from "./db";
 export function safeError(s: Store, error: unknown) {
   let message = error instanceof Error ? error.message : "Operation failed";
-  const rows = s.db.query<{ id: string }, []>("SELECT id FROM entities").all();
+  const rows = s.db
+    .query<{ id: string }, []>("SELECT id FROM entities WHERE deleted=0")
+    .all();
   for (const { id } of rows) {
     for (const value of Object.values(s.secrets(id))) {
       if (!value) continue;

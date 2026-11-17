@@ -1,4 +1,4 @@
-import { loadConfig } from "../server/config";
+import { loadWorkerConfig } from "../server/config";
 import { digest } from "../server/crypto";
 import { storage, strip, type Store } from "../server/db";
 import {
@@ -38,7 +38,7 @@ export async function runOperation(s: Store, t: Task) {
     const run = (script: string) =>
       execute(c, script, h.username !== "root", 300000);
     if (["deploy", "upgrade", "reapply"].includes(t.kind)) {
-      if (!n || n.deleted) throw Error("Node removed");
+      if (!n || n.deleted || n.deleting) throw Error("Node removed");
       checkpoint(
         1,
         "Applying native Hysteria 2 deployment; existing connections may be interrupted",
@@ -46,56 +46,93 @@ export async function runOperation(s: Store, t: Task) {
       await run(deploymentScript(s, n, p.version, t.kind === "reapply"));
       checkpoint(2, "Verifying deployment");
       const actual = JSON.parse(await run(detectionScript));
+      const curHost = s.get(h.id);
+      const curNode = s.get(n.id);
+      if (!curHost || curHost.deleted || !curNode || curNode.deleted)
+        throw Error("Entity removed during deployment");
       if (
-        actual.nodeId !== n.id ||
+        actual.nodeId !== curNode.id ||
         actual.phase !== "ready" ||
         !actual.actualVersion.includes(actual.version) ||
-        actual.actualHash !== digest(serverConfig(s, n)) ||
+        actual.actualHash !== digest(serverConfig(s, curNode)) ||
         !actual.active
       )
         throw Error("Deployed configuration verification failed");
       s.put(
         "node",
         {
-          ...strip(s.get(n.id)!),
+          ...strip(curNode),
           status: "ready",
           version: actual.version,
           configHash: actual.configHash,
         },
         undefined,
-        n.id,
+        curNode.id,
       );
-      if (!n.enabled || !h.enabled)
+      if (
+        !curNode.enabled ||
+        !curHost.enabled ||
+        curNode.deleting ||
+        curHost.deleting
+      )
         await run("set -e\nsystemctl stop jetyet-hysteria.service\n");
     } else if (t.kind === "detect") {
-      if (!n) throw Error("Plan a node before detection");
+      if (!n || n.deleted || n.deleting)
+        throw Error("Plan a node before detection");
       checkpoint(1, "Detecting platform-owned deployment");
       const actual = JSON.parse(await run(detectionScript));
+      const curHost = s.get(h.id);
+      const curNode = s.get(n.id);
+      if (
+        !curHost ||
+        curHost.deleted ||
+        curHost.deleting ||
+        !curNode ||
+        curNode.deleted ||
+        curNode.deleting
+      )
+        throw Error("Entity removed during detection");
       if (
         actual.owner !== "jetyet" ||
         actual.phase !== "ready" ||
         !actual.actualVersion.includes(actual.version) ||
-        actual.nodeId !== n.id ||
-        actual.hostId !== h.id ||
-        actual.actualHash !== digest(serverConfig(s, n))
+        actual.nodeId !== curNode.id ||
+        actual.hostId !== curHost.id ||
+        actual.actualHash !== digest(serverConfig(s, curNode))
       )
         throw Error("Remote deployment does not match the planned node");
+      const wantActive = !!(curHost.enabled && curNode.enabled);
+      if (actual.active !== wantActive) {
+        await run(
+          `set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl ${wantActive ? "start" : "stop"} jetyet-hysteria.service\n`,
+        );
+      }
       s.put(
         "node",
         {
-          ...strip(s.get(n.id)!),
+          ...strip(curNode),
           status: "ready",
           version: actual.version,
           configHash: actual.configHash,
         },
         undefined,
-        n.id,
+        curNode.id,
       );
     } else if (t.kind === "host-state" || t.kind === "node-state") {
-      if (n && n.status !== "draft") {
+      const curHost = s.get(h.id);
+      const curNode = n ? s.get(n.id) : null;
+      if (
+        curHost &&
+        !curHost.deleted &&
+        !curHost.deleting &&
+        curNode &&
+        !curNode.deleted &&
+        !curNode.deleting &&
+        curNode.status !== "draft"
+      ) {
         checkpoint(1, "Applying administrator service state");
         await run(
-          `set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl ${h.enabled && n.enabled ? "start" : "stop"} jetyet-hysteria.service\n`,
+          `set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl ${curHost.enabled && curNode.enabled ? "start" : "stop"} jetyet-hysteria.service\n`,
         );
       }
     } else if (t.kind === "delete") {
@@ -119,12 +156,14 @@ export async function runOperation(s: Store, t: Task) {
   });
 }
 if (import.meta.main) {
-  const s = storage(loadConfig(false)),
+  const s = storage(await loadWorkerConfig()),
     owner = crypto.randomUUID();
   let stopping = false;
-  process.on("SIGTERM", () => {
+  const stop = () => {
     stopping = true;
-  });
+  };
+  process.on("SIGTERM", stop);
+  process.on("SIGINT", stop);
   let active: Task | null = null;
   const heartbeat = setInterval(() => {
     beat(s, "operations");

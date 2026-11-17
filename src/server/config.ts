@@ -51,6 +51,7 @@ export function loadConfig(initializePassword = true) {
     writeFileSync(`${configPath}.tmp`, JSON.stringify(config, null, 2) + "\n", {
       mode: 0o600,
     });
+    if (process.platform !== "win32") chmodSync(`${configPath}.tmp`, 0o600);
     renameSync(`${configPath}.tmp`, configPath);
     if (process.platform !== "win32") chmodSync(configPath, 0o600);
   }
@@ -58,5 +59,22 @@ export function loadConfig(initializePassword = true) {
     throw Error("Configure admin.password or admin.passwordHash");
   config.database = resolve(dirname(configPath), config.database);
   return config;
+}
+export async function loadWorkerConfig() {
+  for (let i = 0; ; i++) {
+    try {
+      return loadConfig(false);
+    } catch (err) {
+      if (
+        i < 10 &&
+        err instanceof Error &&
+        err.message === "Start Web first to process the administrator password"
+      ) {
+        await Bun.sleep(500);
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 export type Config = ReturnType<typeof loadConfig>;

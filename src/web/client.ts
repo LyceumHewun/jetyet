@@ -5,10 +5,14 @@ export async function api(path: string, method = "GET", body?: unknown) {
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const data = await r.json();
+  const text = await r.text();
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {}
   if (!r.ok) {
     if (r.status === 401) window.dispatchEvent(new Event("signedout"));
-    throw Error(data.error || "Request failed");
+    throw Error(data?.error || `Request failed (${r.status})`);
   }
   return data;
 }

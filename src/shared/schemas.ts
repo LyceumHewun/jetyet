@@ -24,6 +24,13 @@ export const quotaSchema = z.object({
   direction: z.enum(["out", "in", "both"]).default("both"),
   reset: resetSchema.default({ kind: "monthly", day: 1, hour: 0 }),
 });
+const reservedNodeNames = new Set([
+  "DIRECT",
+  "REJECT",
+  "REJECT-DROP",
+  "PASS",
+  "COMPATIBLE",
+]);
 export const hostSchema = z.object({
   name: z.string().trim().min(1).max(100),
   address: z
@@ -31,7 +38,16 @@ export const hostSchema = z.object({
     .trim()
     .min(1)
     .max(253)
-    .regex(/^[a-zA-Z0-9.:[\]-]+$/),
+    .transform((v) =>
+      v.startsWith("[") && v.endsWith("]") ? v.slice(1, -1) : v,
+    )
+    .refine(
+      (v) =>
+        v.length >= 1 &&
+        v.length <= 253 &&
+        (isIP(v) !== 0 || (/^[a-zA-Z0-9.-]+$/.test(v) && !v.startsWith("-"))),
+      "Invalid IP address or hostname",
+    ),
   port: z.number().int().min(1).max(65535).default(22),
   username: z
     .string()
@@ -51,7 +67,15 @@ export const hostSchema = z.object({
 });
 export const nodeSchema = z.object({
   hostId: z.uuid(),
-  name: z.string().trim().min(1).max(100),
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .refine(
+      (v) => !reservedNodeNames.has(v.toUpperCase()),
+      "Node name cannot use a reserved mihomo proxy name",
+    ),
   address: z
     .string()
     .refine(
@@ -72,9 +96,9 @@ export const nodeSchema = z.object({
         })(),
       "Invalid port range",
     ),
-  hopInterval: z.number().int().min(1).max(3600).default(30),
-  upMbps: z.number().min(0).max(100000).default(0),
-  downMbps: z.number().min(0).max(100000).default(0),
+  hopInterval: z.number().int().min(5).max(3600).default(30),
+  upMbps: z.number().int().min(0).max(100000).default(0),
+  downMbps: z.number().int().min(0).max(100000).default(0),
   enabled: z.boolean().default(true),
 });
 export const userSchema = z

@@ -21,25 +21,68 @@ export function History({
   const [range, setRange] = useState("24"),
     [custom, setCustom] = useState({ start: "", end: "" }),
     [data, setData] = useState<Row>({ samples: [], events: [] }),
+    [windowBounds, setWindowBounds] = useState<{
+      start: number;
+      end: number;
+    } | null>(null),
     [error, setError] = useState("");
   useEffect(() => {
+    if (range === "custom" && (!custom.start || !custom.end)) {
+      setError("");
+      return;
+    }
     const end = range === "custom" ? Date.parse(custom.end + "Z") : Date.now(),
       start =
         range === "custom"
           ? Date.parse(custom.start + "Z")
           : end - Number(range) * 3600000;
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      if (range === "custom") setError("Enter valid start and end timestamps.");
+      return;
+    }
+    if (end <= start) {
+      setError("End time must be after start time.");
+      return;
+    }
+    let cancelled = false;
+    setError("");
+    setWindowBounds({ start, end });
     api(`history/${entity.id}?start=${start}&end=${end}`)
-      .then(setData)
-      .catch((e) => setError(e.message));
-  }, [range, custom.start, custom.end]);
+      .then((res) => {
+        if (!cancelled) {
+          setData(res);
+          setError("");
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [entity.id, range, custom.start, custom.end]);
   const samples = data.samples as Row[],
     observations = samples.filter((p) => p.reachable !== null),
-    expected =
-      range === "custom"
-        ? (Date.parse(custom.end + "Z") - Date.parse(custom.start + "Z")) /
-          60000
-        : Number(range) * 60,
+    unitSuffix =
+      data.resolution === "day"
+        ? "/day"
+        : data.resolution === "hour"
+          ? "/hr"
+          : "/min",
+    createdAt =
+      typeof entity.created === "number"
+        ? entity.created
+        : entity.created
+          ? Date.parse(entity.created)
+          : NaN,
+    effectiveStart = windowBounds
+      ? Number.isFinite(createdAt)
+        ? Math.max(windowBounds.start, createdAt)
+        : windowBounds.start
+      : 0,
+    expected = windowBounds
+      ? Math.max(0, (windowBounds.end - effectiveStart) / 60000)
+      : 0,
     coverage = expected
       ? Math.min(
           100,
@@ -117,7 +160,7 @@ export function History({
             </span>
           </div>
         )}
-        <h3>Traffic</h3>
+        <h3>Traffic (MiB{unitSuffix})</h3>
         {!samples.length ? (
           <Empty title="No observations in this range">
             Unknown periods are not recorded as host downtime.
@@ -139,13 +182,13 @@ export function History({
                 <Tooltip />
                 <Area
                   dataKey="outMiB"
-                  name="Outbound MiB"
+                  name={`Outbound MiB${unitSuffix}`}
                   stroke="var(--accent)"
                   fill="var(--accent-soft)"
                 />
                 <Area
                   dataKey="inMiB"
-                  name="Inbound MiB"
+                  name={`Inbound MiB${unitSuffix}`}
                   stroke="var(--good)"
                   fill="var(--good-soft)"
                 />

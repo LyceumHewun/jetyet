@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 import { Client } from "ssh2";
 import type { Entity, Store } from "./db";
 export const quote = (v: string) => "'" + v.replaceAll("'", "'\\''") + "'";
@@ -8,22 +9,40 @@ const fingerprint = (key: Buffer) =>
 export function scanKey(host: Entity): Promise<string> {
   return new Promise((resolve, reject) => {
     const client = new Client();
-    let found = false;
-    client.on("error", (e) => {
-      if (!found) reject(e);
+    let settled = false;
+    const fail = (e: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      client.destroy();
+      reject(e);
+    };
+    const timer = setTimeout(
+      () => fail(Error("SSH key scan timed out")),
+      12000,
+    );
+    client.on("error", (e) => fail(e instanceof Error ? e : Error(String(e))));
+    client.on("close", () => {
+      fail(Error("SSH connection closed before host key was received"));
+      client.destroy();
     });
+    client.on("end", () =>
+      fail(Error("SSH connection ended before host key was received")),
+    );
     client.connect({
       host: host.address,
       port: host.port,
       username: host.username,
       readyTimeout: 10000,
       hostVerifier: (key: Buffer) => {
-        found = true;
-        resolve(fingerprint(key));
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(fingerprint(key));
+        }
         return false;
       },
     });
-    client.on("close", () => client.destroy());
   });
 }
 export async function connect(s: Store, host: Entity): Promise<Client> {
@@ -31,8 +50,27 @@ export async function connect(s: Store, host: Entity): Promise<Client> {
   const secret = s.secrets(host.id);
   return new Promise((resolve, reject) => {
     const c = new Client();
-    c.once("ready", () => resolve(c));
-    c.on("error", reject);
+    let settled = false;
+    const fail = (e: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      c.destroy();
+      reject(e);
+    };
+    const timer = setTimeout(
+      () => fail(Error("SSH connection timed out")),
+      17000,
+    );
+    c.once("ready", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(c);
+    });
+    c.on("error", (e) => fail(e instanceof Error ? e : Error(String(e))));
+    c.on("close", () => fail(Error("SSH connection closed before ready")));
+    c.on("end", () => fail(Error("SSH connection ended before ready")));
     c.connect({
       host: host.address,
       port: host.port,
@@ -66,31 +104,47 @@ export function execute(
   timeout = 120000,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    let settled = false;
     const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
       c.destroy();
       reject(Error("Remote command timed out"));
     }, timeout);
     c.exec(root ? "sudo -n bash -s" : "bash -s", (err, stream) => {
       if (err) {
         clearTimeout(timer);
-        reject(err);
+        if (!settled) {
+          settled = true;
+          reject(err);
+        }
         return;
       }
+      const outDec = new StringDecoder("utf8"),
+        errDec = new StringDecoder("utf8");
       let out = "",
         error = "";
       stream.on("data", (v: Buffer) => {
-        out += v;
+        out += outDec.write(v);
         if (out.length > 4 * 1024 * 1024) {
-          stream.close();
-          reject(Error("Remote output limit exceeded"));
+          clearTimeout(timer);
+          if (!settled) {
+            settled = true;
+            stream.close();
+            reject(Error("Remote output limit exceeded"));
+          }
         }
       });
       stream.stderr.on("data", (v: Buffer) => {
-        error += v;
+        error += errDec.write(v);
         if (error.length > 16384) error = error.slice(-16384);
       });
       stream.on("close", (code: number) => {
         clearTimeout(timer);
+        if (settled) return;
+        settled = true;
+        out += outDec.end();
+        error += errDec.end();
         if (code === 0) resolve(out);
         else
           reject(
@@ -99,6 +153,8 @@ export function execute(
       });
       stream.on("error", (e: Error) => {
         clearTimeout(timer);
+        if (settled) return;
+        settled = true;
         reject(e);
       });
       stream.end(script);

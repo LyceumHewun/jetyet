@@ -8,12 +8,12 @@ import {
   sample,
   userAllowed,
 } from "../server/accounting";
-import { loadConfig } from "../server/config";
+import { loadWorkerConfig } from "../server/config";
 import { digest } from "../server/crypto";
 import { storage, strip, type Entity, type Store } from "../server/db";
 import { serverConfig } from "../server/deployment";
 import { execute, statsApi, withHost } from "../server/ssh";
-import { beat, claim, enqueue, finish } from "../server/tasks";
+import { beat, claim, enqueue, finish, type Task } from "../server/tasks";
 import { probeNode } from "./probe";
 
 const hostScript = `set -euo pipefail
@@ -25,24 +25,66 @@ routes=[]
 for family in ['-4','-6']:
  r=subprocess.run(['ip','-j',family,'route','show','default'],capture_output=True,text=True)
  if r.returncode==0: routes+=json.loads(r.stdout)
-interfaces=set(r['dev'] for r in routes if 'dev' in r)
-if not interfaces: raise Exception('No default-route interface found')
+all_ifaces=set(r['dev'] for r in routes if 'dev' in r)
+if not all_ifaces: raise Exception('No default-route interface found')
+excluded=('tun','tap','wg','sit','ip6tnl','gif','docker','veth','br-','tailscale')
+filtered={n for n in all_ifaces if not (n=='lo' or any(n.startswith(p) for p in excluded))}
+interfaces=filtered if filtered else all_ifaces
 rx=tx=0
-for name in interfaces:
+for name in sorted(interfaces):
  rx+=int(read('/sys/class/net/'+name+'/statistics/rx_bytes'));tx+=int(read('/sys/class/net/'+name+'/statistics/tx_bytes'))
 cpu=list(map(int,read('/proc/stat').splitlines()[0].split()[1:9]))
 mem={line.split(':')[0]:int(line.split()[1]) for line in read('/proc/meminfo').splitlines()}
 disk=os.statvfs('/')
-out={'inbound':rx,'outbound':tx,'boot':read('/proc/sys/kernel/random/boot_id'),'uptime':float(read('/proc/uptime').split()[0]),'cpuTotal':sum(cpu),'cpuIdle':cpu[3]+cpu[4],'memory':100*(1-mem.get('MemAvailable',mem['MemFree'])/mem['MemTotal']),'disk':100*(1-disk.f_bavail/disk.f_blocks)}
+out={'inbound':rx,'outbound':tx,'ifaceEpoch':','.join(sorted(interfaces)),'boot':read('/proc/sys/kernel/random/boot_id'),'uptime':float(read('/proc/uptime').split()[0]),'cpuTotal':sum(cpu),'cpuIdle':cpu[3]+cpu[4],'memory':100*(1-mem.get('MemAvailable',mem['MemFree'])/mem['MemTotal']),'disk':100*(1-disk.f_bavail/disk.f_blocks)}
 out['service']=subprocess.run(['systemctl','is-active','--quiet','jetyet-hysteria.service']).returncode==0
 if os.path.exists('/etc/jetyet/manifest.json'):
  out['manifest']=json.loads(read('/etc/jetyet/manifest.json'))
- out['configHash']=hashlib.sha256(open('/etc/jetyet/config.yaml','rb').read()).hexdigest()
- out['config']=read('/etc/jetyet/config.yaml')
+ if os.path.exists('/etc/jetyet/config.yaml'):
+  out['configHash']=hashlib.sha256(open('/etc/jetyet/config.yaml','rb').read()).hexdigest()
+  out['config']=read('/etc/jetyet/config.yaml')
+ else:
+  out['configHash']=None
+  out['config']=''
  out['serviceEpoch']=subprocess.run(['systemctl','show','--value','--property=InvocationID','jetyet-hysteria.service'],capture_output=True,text=True).stdout.strip()
 print(json.dumps(out))
 PY
 `;
+
+const isStaleTime = (last: number | undefined, created: number, now: number) =>
+  now - (last || created) > 180000;
+
+function isUserStale(
+  u: Entity,
+  nodes: Entity[],
+  hostsById: Map<string, Entity>,
+  now: number,
+) {
+  return (
+    !u.deleted &&
+    !u.deleting &&
+    u.enabled &&
+    nodes.some((n) => {
+      if (
+        !u.nodeIds.includes(n.id) ||
+        !n.enabled ||
+        n.status !== "ready" ||
+        n.deleting ||
+        n.service === false
+      )
+        return false;
+      const h = hostsById.get(n.hostId);
+      return (
+        !!h &&
+        !h.deleted &&
+        !h.deleting &&
+        h.enabled &&
+        !!h.fingerprint &&
+        isStaleTime(n.trafficSeen, n.created, now)
+      );
+    })
+  );
+}
 
 export async function collectHost(s: Store, h: Entity) {
   const at = Date.now(),
@@ -59,13 +101,16 @@ export async function collectHost(s: Store, h: Entity) {
       totalDelta > 0
         ? Math.max(0, Math.min(100, 100 * (1 - idleDelta / totalDelta)))
         : 0;
+    const hostEpoch = data.ifaceEpoch
+      ? `${data.boot}:${data.ifaceEpoch}`
+      : data.boot;
     s.db
       .transaction(() => {
         const delta = addObservation(
           s,
           h,
           `host:${h.id}`,
-          data.boot,
+          hostEpoch,
           data.inbound,
           data.outbound,
           at,
@@ -113,7 +158,13 @@ export async function collectHost(s: Store, h: Entity) {
       const current = s.get(n.id)!;
       s.put(
         "node",
-        { ...strip(current), service: data.service, drift, lastSeen: at },
+        {
+          ...strip(current),
+          service: data.service,
+          drift,
+          lastSeen: at,
+          ...(data.service ? {} : { online: {} }),
+        },
         {
           ...s.secrets(n.id),
           observedConfig: typeof data.config === "string" ? data.config : "",
@@ -170,6 +221,18 @@ export async function collectHost(s: Store, h: Entity) {
             })
             .immediate();
           s.resolveAlert(n.id, "stats");
+          const now = Date.now();
+          const nodes = s.list("node");
+          const hostsById = new Map(
+            s.list("host").map((host) => [host.id, host]),
+          );
+          for (const u of s.list("user")) {
+            if (
+              u.nodeIds.includes(n.id) &&
+              !isUserStale(u, nodes, hostsById, now)
+            )
+              s.resolveAlert(u.id, "stale");
+          }
         } catch {
           s.alert(
             n.id,
@@ -204,82 +267,112 @@ export async function collectHost(s: Store, h: Entity) {
   }
 }
 async function urgent(s: Store, owner: string) {
-  for (let i = 0; i < 100; i++) {
-    const task = claim(s, true, owner);
-    if (!task) return;
-    const p = JSON.parse(task.payload),
-      n = s.get(p.nodeId);
-    const timer = setInterval(
-      () =>
-        s.db
-          .query("UPDATE tasks SET lease=? WHERE id=? AND owner=?")
-          .run(Date.now() + 90000, task.id, owner),
-      20000,
-    );
-    try {
-      if (n && !n.deleted) {
-        await statsApi(s, n, "/kick", p.userIds);
-      }
-      finish(s, task, "succeeded");
-      if (n && !n.deleted) {
-        const current = s.get(n.id)!;
-        const online = { ...current.online };
-        for (const id of p.userIds) delete online[id];
-        s.put("node", { ...strip(current), online }, undefined, n.id);
-      }
-      if (
-        !s.db
-          .query(
-            "SELECT id FROM tasks WHERE host=? AND kind='kick' AND state IN ('queued','running')",
-          )
-          .get(task.host)
-      )
-        s.resolveAlert(task.host, "kick-pending");
-    } catch {
-      s.db
-        .query(
-          "UPDATE tasks SET state='queued',owner=NULL,lease=?,error=?,updated=? WHERE id=? AND owner=?",
-        )
-        .run(
-          Date.now() + 15000,
-          "SSH disconnection pending",
-          Date.now(),
-          task.id,
-          owner,
-        );
-      s.alert(
-        task.host,
-        "kick-pending",
-        "Connection revocation is waiting for remote access.",
-      );
-      return;
-    } finally {
-      clearInterval(timer);
+  for (let round = 0; round < 20; round++) {
+    const batch: Task[] = [];
+    for (let i = 0; i < 5; i++) {
+      const task = claim(s, true, owner);
+      if (!task) break;
+      batch.push(task);
     }
+    if (!batch.length) return;
+    let progressed = false;
+    await pool(batch, 5, async (task) => {
+      const p = JSON.parse(task.payload),
+        n = s.get(p.nodeId);
+      const timer = setInterval(
+        () =>
+          s.db
+            .query("UPDATE tasks SET lease=? WHERE id=? AND owner=?")
+            .run(Date.now() + 90000, task.id, owner),
+        20000,
+      );
+      try {
+        if (
+          n &&
+          !n.deleted &&
+          !n.deleting &&
+          n.status === "ready" &&
+          n.service !== false
+        ) {
+          await statsApi(s, n, "/kick", p.userIds);
+        }
+        finish(s, task, "succeeded");
+        progressed = true;
+        if (n && !n.deleted) {
+          const current = s.get(n.id)!;
+          const online = { ...current.online };
+          for (const id of p.userIds) delete online[id];
+          s.put("node", { ...strip(current), online }, undefined, n.id);
+        }
+        if (
+          !s.db
+            .query(
+              "SELECT id FROM tasks WHERE host=? AND kind='kick' AND state IN ('queued','running')",
+            )
+            .get(task.host)
+        )
+          s.resolveAlert(task.host, "kick-pending");
+      } catch {
+        s.db
+          .query(
+            "UPDATE tasks SET state='queued',owner=NULL,lease=?,error=?,updated=? WHERE id=? AND owner=?",
+          )
+          .run(
+            Date.now() + 15000,
+            "SSH disconnection pending",
+            Date.now(),
+            task.id,
+            owner,
+          );
+        s.alert(
+          task.host,
+          "kick-pending",
+          "Connection revocation is waiting for remote access.",
+        );
+      } finally {
+        clearInterval(timer);
+      }
+    });
+    if (!progressed) return;
   }
 }
 function enforce(s: Store) {
+  const now = Date.now();
+  const hostsById = new Map(s.list("host").map((h) => [h.id, h]));
+  const nodes = s.list("node");
   for (const u of s.list("user")) {
     if (exhausted(s, u))
       s.alert(u.id, "quota", "User traffic allowance exhausted.");
     else s.resolveAlert(u.id, "quota");
     if (!userAllowed(s, u)) {
-      for (const n of s.list("node"))
-        if (n.online?.[u.id]) queueKick(s, n, [u.id]);
+      for (const n of nodes) if (n.online?.[u.id]) queueKick(s, n, [u.id]);
     }
+    if (isUserStale(u, nodes, hostsById, now))
+      s.alert(
+        u.id,
+        "stale",
+        "Traffic observations are stale; authentication uses last known usage.",
+      );
+    else s.resolveAlert(u.id, "stale");
   }
-  for (const h of s.list("host")) {
+  for (const h of hostsById.values()) {
     if (exhausted(s, h)) {
       s.alert(h.id, "quota", "VPS traffic allowance exhausted.");
-      for (const n of s.list("node").filter((n) => n.hostId === h.id))
+      for (const n of nodes.filter((n) => n.hostId === h.id))
         queueKick(s, n, Object.keys(n.online || {}));
     } else s.resolveAlert(h.id, "quota");
-    if (h.lastSeen && Date.now() - h.lastSeen > 180000)
+    if (
+      !h.deleting &&
+      !!h.fingerprint &&
+      h.enabled &&
+      isStaleTime(h.lastSeen, h.created, now)
+    )
       s.alert(
         h.id,
         "stale",
         "Traffic observations are stale; authentication uses last known usage.",
       );
+    else s.resolveAlert(h.id, "stale");
   }
 }
 function queueKick(s: Store, n: Entity, ids: string[]) {
@@ -307,7 +400,7 @@ async function pool<T>(
   );
 }
 if (import.meta.main) {
-  const s = storage(loadConfig(false)),
+  const s = storage(await loadWorkerConfig()),
     owner = crypto.randomUUID();
   let stopping = false,
     collecting = false,
@@ -316,9 +409,11 @@ if (import.meta.main) {
     lastCollect = 0,
     lastProbe = 0,
     lastRetention = 0;
-  process.on("SIGTERM", () => {
+  const stop = () => {
     stopping = true;
-  });
+  };
+  process.on("SIGTERM", stop);
+  process.on("SIGINT", stop);
   const hb = setInterval(() => beat(s, "monitor"), 10000);
   beat(s, "monitor");
   while (!stopping) {

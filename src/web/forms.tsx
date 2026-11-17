@@ -1,8 +1,33 @@
 import { ArrowUpRight, Network } from "lucide-react";
-import { useState } from "react";
+import { useState, type InputHTMLAttributes } from "react";
 import { api } from "./client";
 import { Badge, Confirm, Dialog, Field } from "./components";
 import type { Row, State } from "./types";
+
+function toDatetimeLocal(iso: string | null | undefined): string {
+  const ms = Date.parse(iso || "");
+  return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 16) : "";
+}
+
+function fromDatetimeLocal(val: string): string | null {
+  if (!val) return null;
+  const normalized = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(val)
+    ? val + ":00Z"
+    : val.endsWith("Z")
+      ? val
+      : val + "Z";
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+function inferQuotaUnit(limit: unknown): string {
+  if (typeof limit === "number" && Number.isInteger(limit) && limit > 0) {
+    if (limit % 1024 ** 4 === 0) return "TiB";
+    if (limit % 1024 ** 3 === 0) return "GiB";
+    if (limit % 1e9 === 0) return "GB";
+  }
+  return "GiB";
+}
 export function Login({ onLogin }: { onLogin: (name: string) => void }) {
   const [name, setName] = useState("admin"),
     [password, setPassword] = useState(""),
@@ -83,7 +108,7 @@ export function QuotaFields({
   value: Row;
   onChange: (q: Row) => void;
 }) {
-  const [unit, setUnit] = useState("GiB");
+  const [unit, setUnit] = useState(() => inferQuotaUnit(value.limit));
   const factor = unit === "GB" ? 1e9 : unit === "TiB" ? 1024 ** 4 : 1024 ** 3;
   const reset = value.reset;
   return (
@@ -204,11 +229,14 @@ export function QuotaFields({
               <input
                 type="datetime-local"
                 required
-                value={new Date(reset.anchor).toISOString().slice(0, 16)}
+                value={toDatetimeLocal(reset.anchor)}
                 onChange={(e) =>
                   onChange({
                     ...value,
-                    reset: { ...reset, anchor: e.target.value + ":00Z" },
+                    reset: {
+                      ...reset,
+                      anchor: fromDatetimeLocal(e.target.value) ?? "",
+                    },
                   })
                 }
               />
@@ -290,7 +318,13 @@ export function EntityForm({
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const set = (k: string, v: any) => setData({ ...data, [k]: v });
-  const input = (key: string, label: string, type = "text", hint?: string) => (
+  const input = (
+    key: string,
+    label: string,
+    type = "text",
+    hint?: string,
+    extra?: InputHTMLAttributes<HTMLInputElement>,
+  ) => (
     <Field label={label} hint={hint}>
       <input
         type={type}
@@ -301,6 +335,7 @@ export function EntityForm({
         required={
           !["note", "credential", "passphrase", "hopping"].includes(key)
         }
+        {...extra}
       />
     </Field>
   );
@@ -313,6 +348,14 @@ export function EntityForm({
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          if (
+            kind !== "nodes" &&
+            data.quota?.reset?.kind === "interval" &&
+            !Number.isFinite(Date.parse(data.quota.reset.anchor || ""))
+          ) {
+            setError("Anchor (UTC) must be a valid date and time.");
+            return;
+          }
           setBusy(true);
           setError("");
           onSave(data)
@@ -399,16 +442,38 @@ export function EntityForm({
                   </select>
                 </Field>
                 {input("address", "Advertised IP address")}
-                {input("port", "UDP listen port", "number")}
+                {input("port", "UDP listen port", "number", undefined, {
+                  min: 1,
+                  max: 65535,
+                  step: 1,
+                })}
                 {input(
                   "hopping",
                   "Hopping range",
                   "text",
                   "Optional, e.g. 20000-50000. Open this UDP range in your provider firewall.",
                 )}
-                {input("hopInterval", "Hop interval (seconds)", "number")}
-                {input("upMbps", "Client upload hint (Mbps)", "number")}
-                {input("downMbps", "Client download hint (Mbps)", "number")}
+                {input(
+                  "hopInterval",
+                  "Hop interval (seconds)",
+                  "number",
+                  undefined,
+                  { min: 5, step: 1 },
+                )}
+                {input(
+                  "upMbps",
+                  "Client upload hint (Mbps)",
+                  "number",
+                  undefined,
+                  { min: 0, step: 1 },
+                )}
+                {input(
+                  "downMbps",
+                  "Client download hint (Mbps)",
+                  "number",
+                  undefined,
+                  { min: 0, step: 1 },
+                )}
                 <p className="form-note full">
                   Native Hysteria 2 · self-signed certificate · certificate
                   verification skipped. Network parameter changes require an
@@ -425,16 +490,9 @@ export function EntityForm({
                 >
                   <input
                     type="datetime-local"
-                    value={
-                      data.expires
-                        ? new Date(data.expires).toISOString().slice(0, 16)
-                        : ""
-                    }
+                    value={toDatetimeLocal(data.expires)}
                     onChange={(e) =>
-                      set(
-                        "expires",
-                        e.target.value ? e.target.value + ":00Z" : null,
-                      )
+                      set("expires", fromDatetimeLocal(e.target.value))
                     }
                   />
                 </Field>
@@ -505,16 +563,28 @@ export function EntityForm({
                         <input
                           type="checkbox"
                           checked={data.templateIds.includes(t.id)}
-                          onChange={(e) =>
-                            set(
-                              "templateIds",
-                              e.target.checked
-                                ? [...data.templateIds, t.id]
-                                : data.templateIds.filter(
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setData((prev) => {
+                              const nextTemplateIds = checked
+                                ? prev.templateIds.includes(t.id)
+                                  ? prev.templateIds
+                                  : [...prev.templateIds, t.id]
+                                : prev.templateIds.filter(
                                     (id: string) => id !== t.id,
-                                  ),
-                            )
-                          }
+                                  );
+                              const nextDefault = !checked
+                                ? prev.defaultTemplate === t.id
+                                  ? nextTemplateIds[0] || ""
+                                  : prev.defaultTemplate
+                                : prev.defaultTemplate || t.id;
+                              return {
+                                ...prev,
+                                templateIds: nextTemplateIds,
+                                defaultTemplate: nextDefault,
+                              };
+                            });
+                          }}
                         />
                         {t.name}
                       </label>

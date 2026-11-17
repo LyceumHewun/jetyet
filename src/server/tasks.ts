@@ -29,7 +29,12 @@ export function enqueue(
 export function kickUser(s: Store, userId: string, onlyNodes?: string[]) {
   for (const n of s
     .list("node")
-    .filter((n) => !onlyNodes || onlyNodes.includes(n.id))) {
+    .filter(
+      (n) =>
+        n.status === "ready" &&
+        !n.deleting &&
+        (!onlyNodes || onlyNodes.includes(n.id)),
+    )) {
     const pending = s.db
       .query(
         "SELECT id FROM tasks WHERE host=? AND kind=? AND payload=? AND state IN ('queued','running')",
@@ -53,7 +58,7 @@ export function claim(s: Store, monitor: boolean, owner: string): Task | null {
         )
         .run(now);
       const filter = monitor
-        ? "t.kind='kick'"
+        ? "t.kind='kick' AND NOT EXISTS (SELECT 1 FROM tasks busy WHERE busy.host=t.host AND busy.state='running' AND busy.kind='kick')"
         : "t.kind!='kick' AND NOT EXISTS (SELECT 1 FROM tasks busy WHERE busy.host=t.host AND busy.state='running' AND busy.kind!='kick')";
       const t = s.db
         .query<Task, [number]>(
