@@ -473,6 +473,14 @@ try {
     { nav: "Alerts", file: "alerts" },
   ];
 
+  let mobileSearchGeometry: {
+    searchBoxHeight: number;
+    toolbarHeight: number;
+    firstRowGap: number;
+  } | null = null;
+  let mobileTableAriaSnapshot = "";
+  let mobileTableAxCounts: Record<string, number> | null = null;
+
   for (const { nav, file } of screens) {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.locator(".sidebar-nav").getByRole("button", { name: new RegExp(`^${nav}`) }).click();
@@ -485,6 +493,78 @@ try {
 
     await page.setViewportSize({ width: 375, height: 812 });
     await sleep(200);
+    if (file === "vps") {
+      mobileSearchGeometry = await page.evaluate(() => {
+        const sb = document.querySelector(".search-box")?.getBoundingClientRect();
+        const tb = document.querySelector(".toolbar")?.getBoundingClientRect();
+        const row = document.querySelector("tbody tr")?.getBoundingClientRect();
+        if (!sb || !tb || !row) throw Error("Missing mobile VPS toolbar or row");
+        return {
+          searchBoxHeight: Math.round(sb.height),
+          toolbarHeight: Math.round(tb.height),
+          firstRowGap: Math.round(row.top - tb.bottom),
+        };
+      });
+      if (mobileSearchGeometry.searchBoxHeight > 64) {
+        throw Error(
+          `Mobile search box height regressed: ${JSON.stringify(mobileSearchGeometry)}`,
+        );
+      }
+      if (mobileSearchGeometry.firstRowGap > 48) {
+        throw Error(
+          `Mobile first row gap too large: ${JSON.stringify(mobileSearchGeometry)}`,
+        );
+      }
+
+      mobileTableAriaSnapshot = await page.locator("table").ariaSnapshot();
+      for (const expected of [
+        'table "VPS hosts"',
+        'columnheader "Host"',
+        'columnheader "SSH identity"',
+        'columnheader "Health"',
+        'columnheader "Current usage"',
+        'columnheader "Next reset"',
+        'columnheader "Actions"',
+        'rowheader "Tokyo-01',
+        'rowheader "Frankfurt-02',
+      ]) {
+        if (!mobileTableAriaSnapshot.includes(expected)) {
+          throw Error(
+            `Mobile table ARIA snapshot missing ${expected}:\n${mobileTableAriaSnapshot}`,
+          );
+        }
+      }
+
+      const cdp = await page.context().newCDPSession(page);
+      try {
+        const ax = await cdp.send("Accessibility.getFullAXTree");
+        const counts: Record<string, number> = {
+          table: 0,
+          rowgroup: 0,
+          row: 0,
+          columnheader: 0,
+          rowheader: 0,
+          cell: 0,
+        };
+        for (const node of ax.nodes) {
+          const r = node.role?.value;
+          if (r && r in counts && !node.ignored) counts[r]++;
+        }
+        if (
+          counts.table < 1 ||
+          counts.columnheader !== 6 ||
+          counts.rowheader < 2 ||
+          counts.cell < 10
+        ) {
+          throw Error(
+            `Mobile AXTree missing table semantics: ${JSON.stringify(counts)}`,
+          );
+        }
+        mobileTableAxCounts = counts;
+      } finally {
+        await cdp.detach();
+      }
+    }
     await page.screenshot({
       path: `.local/screenshots/${file}-375.png`,
       fullPage: true,
@@ -598,6 +678,9 @@ try {
       {
         overflowChecks,
         reducedOpacity,
+        mobileSearchGeometry,
+        mobileTableAxCounts,
+        mobileTableAriaSnapshot,
         pageErrors: errors,
         screenshots: resolve(".local/screenshots"),
       },

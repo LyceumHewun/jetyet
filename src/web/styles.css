@@ -1522,6 +1522,7 @@ main {
 
 /* Data Tables & Container-query mobile stacked cards */
 .table-scroll {
+  position: relative;
   overflow: auto;
   max-inline-size: 100%;
   container-type: inline-size;
@@ -1626,7 +1627,15 @@ tbody tr:hover td {
   }
 
   thead {
-    display: none;
+    position: absolute;
+    clip-path: inset(50%);
+    overflow: hidden;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    white-space: nowrap;
   }
 
   tbody tr {
@@ -1674,18 +1683,23 @@ tbody tr:hover td {
 
   tbody td:nth-child(2)::before {
     content: var(--label-2);
+    content: var(--label-2) / "";
   }
   tbody td:nth-child(3)::before {
     content: var(--label-3);
+    content: var(--label-3) / "";
   }
   tbody td:nth-child(4)::before {
     content: var(--label-4);
+    content: var(--label-4) / "";
   }
   tbody td:nth-child(5)::before {
     content: var(--label-5);
+    content: var(--label-5) / "";
   }
   tbody td:nth-child(6)::before {
     content: var(--label-6);
+    content: var(--label-6) / "";
   }
 }
 
@@ -3019,6 +3033,7 @@ dialog.dialog[open]:where(:not([data-closing]))::backdrop {
   }
 
   .search-box {
+    flex: 0 0 auto;
     max-width: none;
     width: 100%;
   }

@@ -280,20 +280,20 @@ export function Table({
       role="region"
       aria-labelledby={captionId}
     >
-      <table style={labelVars}>
+      <table role="table" style={labelVars}>
         <caption id={captionId} className="visually-hidden">
           {caption}
         </caption>
-        <thead>
-          <tr>
+        <thead role="rowgroup">
+          <tr role="row">
             {headings.map((h) => (
-              <th key={h} scope="col">
+              <th key={h} scope="col" role="columnheader">
                 {h}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody>{children}</tbody>
+        <tbody role="rowgroup">{children}</tbody>
       </table>
     </div>
   );

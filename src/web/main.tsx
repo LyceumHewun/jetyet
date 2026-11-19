@@ -386,10 +386,14 @@ function App() {
                   headings={["Name", "Created", "History"]}
                 >
                   {rows.map((r: Row) => (
-                    <tr key={r.id}>
-                      <th scope="row">{r.name}</th>
-                      <td className="nowrap mono">{when(r.created)}</td>
-                      <td>
+                    <tr key={r.id} role="row">
+                      <th scope="row" role="rowheader">
+                        {r.name}
+                      </th>
+                      <td role="cell" className="nowrap mono">
+                        {when(r.created)}
+                      </td>
+                      <td role="cell">
                         <button
                           type="button"
                           className="compact-button"
@@ -1206,8 +1210,8 @@ function App() {
                     ]}
                   >
                     {filteredList.map((h) => (
-                      <tr key={h.id}>
-                        <th scope="row">
+                      <tr key={h.id} role="row">
+                        <th scope="row" role="rowheader">
                           <div className="cell-stack">
                             <button
                               type="button"
@@ -1224,7 +1228,7 @@ function App() {
                             )}
                           </div>
                         </th>
-                        <td>
+                        <td role="cell">
                           <button
                             type="button"
                             className={`trust-pill ${h.fingerprint ? "trusted" : "untrusted"}`}
@@ -1243,7 +1247,7 @@ function App() {
                             )}
                           </button>
                         </td>
-                        <td>
+                        <td role="cell">
                           <div className="cell-stack">
                             <Badge
                               tone={
@@ -1266,11 +1270,13 @@ function App() {
                             </small>
                           </div>
                         </td>
-                        <td>
+                        <td role="cell">
                           <QuotaBar row={h} />
                         </td>
-                        <td className="nowrap mono">{when(h.usage.next)}</td>
-                        <td className="actions-cell">
+                        <td role="cell" className="nowrap mono">
+                          {when(h.usage.next)}
+                        </td>
+                        <td role="cell" className="actions-cell">
                           <Actions
                             label={`Actions for ${h.name}`}
                             items={[
@@ -1416,8 +1422,8 @@ function App() {
                       );
 
                       return (
-                        <tr key={n.id}>
-                          <th scope="row">
+                        <tr key={n.id} role="row">
+                          <th scope="row" role="rowheader">
                             <div className="cell-stack">
                               <button
                                 type="button"
@@ -1432,11 +1438,11 @@ function App() {
                               </small>
                             </div>
                           </th>
-                          <td>
+                          <td role="cell">
                             {state.hosts.find((h) => h.id === n.hostId)?.name ||
                               "Removed"}
                           </td>
-                          <td>
+                          <td role="cell">
                             <div className="cell-stack">
                               <Badge
                                 tone={
@@ -1455,14 +1461,16 @@ function App() {
                               </small>
                             </div>
                           </td>
-                          <td className="tabular-cell">
+                          <td role="cell" className="tabular-cell">
                             <strong>{onlineCount}</strong>{" "}
                             <small className="inline-unit">
                               {onlineCount === 1 ? "instance" : "instances"}
                             </small>
                           </td>
-                          <td className="mono">{n.version || "—"}</td>
-                          <td className="actions-cell">
+                          <td role="cell" className="mono">
+                            {n.version || "—"}
+                          </td>
+                          <td role="cell" className="actions-cell">
                             <Actions
                               label={`Actions for ${n.name}`}
                               items={[
@@ -1588,8 +1596,8 @@ function App() {
                       );
 
                       return (
-                        <tr key={u.id}>
-                          <th scope="row">
+                        <tr key={u.id} role="row">
+                          <th scope="row" role="rowheader">
                             <div className="cell-stack">
                               <button
                                 type="button"
@@ -1606,7 +1614,7 @@ function App() {
                               )}
                             </div>
                           </th>
-                          <td>
+                          <td role="cell">
                             <Badge
                               tone={
                                 !u.enabled || u.exhausted || expired
@@ -1623,10 +1631,10 @@ function App() {
                                     : "Enabled"}
                             </Badge>
                           </td>
-                          <td>
+                          <td role="cell">
                             <QuotaBar row={u} />
                           </td>
-                          <td>
+                          <td role="cell">
                             <div className="cell-stack">
                               <span>
                                 {u.nodeIds.length}{" "}
@@ -1640,8 +1648,10 @@ function App() {
                               </small>
                             </div>
                           </td>
-                          <td className="nowrap mono">{when(u.usage.next)}</td>
-                          <td className="actions-cell">
+                          <td role="cell" className="nowrap mono">
+                            {when(u.usage.next)}
+                          </td>
+                          <td role="cell" className="actions-cell">
                             <Actions
                               label={`Actions for ${u.name}`}
                               items={[
@@ -1809,8 +1819,8 @@ function App() {
                     headings={["Operation", "VPS", "Status", "Updated", "Actions"]}
                   >
                     {state.tasks.map((t) => (
-                      <tr key={t.id}>
-                        <th scope="row">
+                      <tr key={t.id} role="row">
+                        <th scope="row" role="rowheader">
                           <div className="cell-stack">
                             <strong>{t.kind}</strong>
                             <small className="mono">
@@ -1818,11 +1828,11 @@ function App() {
                             </small>
                           </div>
                         </th>
-                        <td>
+                        <td role="cell">
                           {state.hosts.find((h) => h.id === t.host)?.name ||
                             "Removed host"}
                         </td>
-                        <td>
+                        <td role="cell">
                           <div className="cell-stack">
                             <Badge
                               tone={
@@ -1841,8 +1851,10 @@ function App() {
                             {t.error && <small>{t.error}</small>}
                           </div>
                         </td>
-                        <td className="nowrap mono">{when(t.updated)}</td>
-                        <td className="actions-cell">
+                        <td role="cell" className="nowrap mono">
+                          {when(t.updated)}
+                        </td>
+                        <td role="cell" className="actions-cell">
                           <Actions
                             label={`Actions for operation ${t.id.slice(0, 8)}`}
                             items={[
