@@ -64,6 +64,147 @@ export function directionMeta(dir?: string): { short: string; label: string } {
   return { short: "Both", label: "Outbound + inbound" };
 }
 
+export function parsePayload(raw: unknown): Row {
+  if (raw && typeof raw === "object") return raw as Row;
+  if (typeof raw !== "string" || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function formatAlertCode(code: string): string {
+  const text = String(code || "alert")
+    .replaceAll("-", " ")
+    .replace(/\bssh\b/gi, "SSH")
+    .replace(/\bvps\b/gi, "VPS")
+    .replace(/\bvpn\b/gi, "VPN");
+  return text ? text[0].toUpperCase() + text.slice(1) : "Alert";
+}
+
+const taskKindLabels: Record<string, string> = {
+  deploy: "Deploy Hysteria 2",
+  upgrade: "Upgrade Hysteria 2",
+  reapply: "Reapply configuration",
+  detect: "Detect installation",
+  "host-state": "Sync VPS state",
+  "node-state": "Sync node state",
+  kick: "Disconnect sessions",
+  delete: "Remove remote service",
+};
+
+export function formatTaskKind(kind: string): string {
+  return taskKindLabels[kind] || kind || "Operation";
+}
+
+export type TaskStep = {
+  label: string;
+  state: "done" | "active" | "error" | "pending";
+};
+
+export function taskProgress(task: Row): {
+  percent: number;
+  phaseLabel: string;
+  steps: TaskStep[];
+} {
+  const labels =
+    task.kind === "detect"
+      ? ["Connect SSH", "Inspect deployment", "Verify service", "Completed"]
+      : task.kind === "delete"
+        ? ["Connect SSH", "Remove service", "Confirm cleanup", "Completed"]
+        : ["Connect SSH", "Apply changes", "Verify node", "Completed"];
+  const step = Math.max(0, Math.min(3, Number(task.step ?? 0)));
+  const status = String(task.state || "queued");
+
+  if (status === "succeeded") {
+    return {
+      percent: 100,
+      phaseLabel: "Completed",
+      steps: labels.map((label) => ({ label, state: "done" })),
+    };
+  }
+  if (status === "failed" || status === "cancelled") {
+    const failIdx = Math.min(3, step);
+    return {
+      percent: failIdx === 0 ? 15 : failIdx === 1 ? 45 : 75,
+      phaseLabel: status === "cancelled" ? "Cancelled" : "Failed",
+      steps: labels.map((label, idx) => ({
+        label,
+        state: idx < failIdx ? "done" : idx === failIdx ? "error" : "pending",
+      })),
+    };
+  }
+  if (status === "queued") {
+    return {
+      percent: 5,
+      phaseLabel: "Queued for worker",
+      steps: labels.map((label, idx) => ({
+        label,
+        state: idx === 0 ? "active" : "pending",
+      })),
+    };
+  }
+  const percent = step <= 0 ? 25 : step === 1 ? 55 : step === 2 ? 85 : 95;
+  return {
+    percent,
+    phaseLabel: labels[step] || "Running",
+    steps: labels.map((label, idx) => ({
+      label,
+      state: idx < step ? "done" : idx === step ? "active" : "pending",
+    })),
+  };
+}
+
+export function isHostReadyForNode(host: Row, nodes: Row[]): boolean {
+  return Boolean(
+    host &&
+      host.fingerprint &&
+      !host.deleting &&
+      !nodes.some((n) => n.hostId === host.id),
+  );
+}
+
+export function isNodeHealthy(node: Row, hosts: Row[]): boolean {
+  const host = hosts.find((h) => h.id === node.hostId);
+  return Boolean(
+    node.enabled &&
+      !node.deleting &&
+      host?.enabled &&
+      !host?.exhausted &&
+      node.probe === "healthy" &&
+      Date.now() - (node.probed || 0) < 600000,
+  );
+}
+
+export function nodeStatusLabel(node: Row, hosts: Row[]): string {
+  const host = hosts.find((h) => h.id === node.hostId);
+  if (node.deleting || host?.deleting) return "Pending deletion";
+  if (!node.enabled || !host?.enabled) return "Disabled";
+  if (host?.exhausted) return "Quota exhausted";
+  if (node.status === "draft") return "Planned";
+  return node.service ? "Running" : "Stopped";
+}
+
+export async function copyText(text: string): Promise<void> {
+  if (!navigator.clipboard?.writeText) {
+    throw Error("Clipboard access unavailable. Select and copy manually.");
+  }
+  await navigator.clipboard.writeText(text);
+}
+
+const ipv4Pattern =
+  /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+
+export function isValidIpLiteral(value: string): boolean {
+  const v = value.trim();
+  if (!v) return false;
+  if (ipv4Pattern.test(v)) return true;
+  if (!v.includes(":")) return false;
+  return /^[0-9a-fA-F:]+$/.test(v) && v.split(":").length >= 3;
+}
+
 let supportsDisplayTransition: boolean | undefined;
 
 export function canTransitionDisplay(): boolean {

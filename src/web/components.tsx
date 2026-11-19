@@ -2,6 +2,7 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowDown,
+  ArrowLeft,
   ArrowUp,
   ArrowUpDown,
   ArrowUpRight,
@@ -9,9 +10,6 @@ import {
   CheckCircle2,
   Copy,
   Minus,
-  MoreHorizontal,
-  Network,
-  ShieldAlert,
   X,
   XCircle,
 } from "lucide-react";
@@ -26,13 +24,91 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { amount, directionMeta, fmt, supportsTopLayerExit } from "./client";
+import {
+  amount,
+  copyText,
+  directionMeta,
+  fmt,
+  supportsTopLayerExit,
+} from "./client";
 import type { Row } from "./types";
 
 const DialogCloseContext = createContext<(() => void) | null>(null);
 
 export function useDialogClose() {
   return useContext(DialogCloseContext);
+}
+
+export function BrandMark({
+  size = "md",
+  showText = true,
+}: {
+  size?: "sm" | "md" | "lg";
+  showText?: boolean;
+}) {
+  const iconSize = size === "sm" ? 18 : size === "lg" ? 26 : 20;
+  return (
+    <span className={`brand-lockup ${size}`}>
+      <span className={`brand-mark ${size}`} aria-hidden="true">
+        <svg
+          width={iconSize}
+          height={iconSize}
+          viewBox="0 0 24 24"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M4.5 14.5L11.2 4.5L13.4 10.6L19.5 9.5L12.8 19.5L10.6 13.4L4.5 14.5Z"
+            stroke="currentColor"
+            strokeWidth="2.1"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <circle cx="18.5" cy="5.5" r="2" fill="currentColor" />
+        </svg>
+      </span>
+      {showText && (
+        <span className="brand-text">
+          jetyet<span className="brand-dot">.</span>
+        </span>
+      )}
+    </span>
+  );
+}
+
+export function BrushWord({ children }: { children: ReactNode }) {
+  return (
+    <span className="brush-word">
+      <span>{children}</span>
+      <svg
+        className="brush-stroke"
+        viewBox="0 0 220 18"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        <path
+          d="M4 13.5C58 5.5 148 4.5 216 11.5"
+          stroke="url(#jetyet-brush-grad)"
+          strokeWidth="6.5"
+          strokeLinecap="round"
+          fill="none"
+        />
+        <defs>
+          <linearGradient
+            id="jetyet-brush-grad"
+            x1="0"
+            y1="0"
+            x2="220"
+            y2="0"
+            gradientUnits="userSpaceOnUse"
+          >
+            <stop offset="0%" stopColor="#cdb0e8" stopOpacity="0.65" />
+            <stop offset="100%" stopColor="#b074d1" stopOpacity="0.72" />
+          </linearGradient>
+        </defs>
+      </svg>
+    </span>
+  );
 }
 
 const defaultBadgeIcons: Record<string, ReactNode> = {
@@ -76,7 +152,7 @@ export function Empty({
   return (
     <div className="empty">
       <div className="empty-icon" aria-hidden="true">
-        {icon ?? <Network size={28} strokeWidth={2} />}
+        {icon ?? <AlertCircle size={26} strokeWidth={2} />}
       </div>
       <h3>{title}</h3>
       <p>{children}</p>
@@ -91,6 +167,8 @@ export function Field({
   children,
   hint,
   hintId,
+  errorText,
+  errorId,
   required,
   className = "",
 }: {
@@ -99,6 +177,8 @@ export function Field({
   children: ReactNode;
   hint?: string;
   hintId?: string;
+  errorText?: string;
+  errorId?: string;
   required?: boolean;
   className?: string;
 }) {
@@ -118,6 +198,14 @@ export function Field({
         </p>
       )}
       {children}
+      {errorText && errorId && (
+        <span id={errorId} className="field-error">
+          <span role="img" aria-label="Error">
+            !
+          </span>{" "}
+          {errorText}
+        </span>
+      )}
     </div>
   );
 }
@@ -156,65 +244,16 @@ export function SwitchField({
   );
 }
 
-export function Stat({
-  label,
-  value,
-  detail,
-  icon,
-  tone = "accent",
-  onClick,
-  index = 0,
+export function QuotaBar({
+  row,
+  compact = false,
 }: {
-  label: string;
-  value: ReactNode;
-  detail: string;
-  icon: ReactNode;
-  tone?: "accent" | "good" | "warning" | "danger" | "neutral";
-  onClick?: () => void;
-  index?: number;
+  row: Row;
+  compact?: boolean;
 }) {
-  const style = { "--i": index } as CSSProperties;
-  const content = (
-    <>
-      <div className="stat-top">
-        <span className="stat-label">{label}</span>
-        <span className={`stat-icon ${tone}`} aria-hidden="true">
-          {icon}
-        </span>
-      </div>
-      <strong className="stat-value">{value}</strong>
-      <div className="stat-bottom">
-        <small>{detail}</small>
-        {onClick && (
-          <ArrowUpRight size={16} className="stat-arrow" aria-hidden="true" />
-        )}
-      </div>
-    </>
-  );
-
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        className={`stat stat-interactive ${tone}`}
-        style={style}
-        onClick={onClick}
-      >
-        {content}
-      </button>
-    );
-  }
-
-  return (
-    <div className={`stat ${tone}`} style={style}>
-      {content}
-    </div>
-  );
-}
-
-export function QuotaBar({ row }: { row: Row }) {
   const used = amount(row);
-  const limit = row.quota?.limit ?? null;
+  const rawLimit = row.quota?.limit;
+  const limit = rawLimit === undefined ? null : rawLimit;
   const ratio =
     limit === null ? 0 : limit === 0 ? 1 : Math.min(1, used / limit);
   const dir = directionMeta(row.quota?.direction);
@@ -231,7 +270,7 @@ export function QuotaBar({ row }: { row: Row }) {
       : "";
 
   return (
-    <div className="quota">
+    <div className={compact ? "quota compact" : "quota"}>
       <div className="quota-head">
         <span className="quota-amounts">
           <strong>{fmt(used)}</strong>
@@ -259,131 +298,303 @@ export function QuotaBar({ row }: { row: Row }) {
   );
 }
 
-export function Table({
-  caption,
-  headings,
-  children,
+export function CopyButton({
+  text,
+  label = "Copy",
+  copiedLabel = "Copied",
+  variant = "default",
+  className = "",
+  disabled = false,
+  onCopied,
 }: {
-  caption: string;
-  headings: string[];
-  children: ReactNode;
+  text: string;
+  label?: string;
+  copiedLabel?: string;
+  variant?: "default" | "primary" | "compact";
+  className?: string;
+  disabled?: boolean;
+  onCopied?: () => void;
 }) {
-  const captionId = useId();
-  const labelVars = Object.fromEntries(
-    headings.map((h, i) => [`--label-${i + 1}`, JSON.stringify(h)]),
-  ) as CSSProperties;
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState("");
+
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(t);
+  }, [copied]);
+
+  const cls = [
+    variant === "primary"
+      ? "primary"
+      : variant === "compact"
+        ? "compact-button"
+        : "",
+    copied ? "is-copied" : "",
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <span className="copy-wrap">
+      <button
+        type="button"
+        className={cls}
+        disabled={disabled || !text}
+        onClick={() => {
+          setCopyError("");
+          void copyText(text)
+            .then(() => {
+              setCopied(true);
+              onCopied?.();
+            })
+            .catch((e) =>
+              setCopyError(
+                e instanceof Error
+                  ? e.message
+                  : "Clipboard unavailable. Copy text manually.",
+              ),
+            );
+        }}
+      >
+        {copied ? (
+          <Check size={16} className="copy-pop" aria-hidden="true" />
+        ) : (
+          <Copy size={16} aria-hidden="true" />
+        )}
+        <span>{copied ? copiedLabel : label}</span>
+      </button>
+      <span className="visually-hidden" aria-live="polite">
+        {copied ? copiedLabel : ""}
+      </span>
+      {copyError && (
+        <span className="copy-error" role="alert">
+          {copyError}
+        </span>
+      )}
+    </span>
+  );
+}
+
+export function ProgressRing({
+  percent,
+  tone = "accent",
+  size = 56,
+}: {
+  percent: number;
+  tone?: "accent" | "good" | "danger" | "neutral";
+  size?: number;
+}) {
+  const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+  const radius = 20;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference * (1 - clamped / 100);
 
   return (
     <div
-      className="table-scroll"
-      tabIndex={0}
-      role="region"
-      aria-labelledby={captionId}
+      className={`progress-ring ${tone}`}
+      style={{ width: size, height: size }}
+      aria-label={`${clamped}% progress`}
     >
-      <table role="table" style={labelVars}>
-        <caption id={captionId} className="visually-hidden">
-          {caption}
-        </caption>
-        <thead role="rowgroup">
-          <tr role="row">
-            {headings.map((h) => (
-              <th key={h} scope="col" role="columnheader">
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody role="rowgroup">{children}</tbody>
-      </table>
+      <svg viewBox="0 0 48 48" aria-hidden="true">
+        <circle className="progress-ring-bg" cx="24" cy="24" r={radius} />
+        <circle
+          className="progress-ring-fill"
+          cx="24"
+          cy="24"
+          r={radius}
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+        />
+      </svg>
+      <span className="progress-ring-text">{clamped}%</span>
     </div>
   );
 }
 
-export type ActionItem = {
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-  icon?: ReactNode;
-};
-
-export function Actions({
-  label = "Row actions",
-  items,
+export function SectionTabs({
+  tabs,
+  active,
+  onChange,
+  label = "Workspace views",
 }: {
+  tabs: Array<{ id: string; label: string; badge?: string | number }>;
+  active: string;
+  onChange: (id: string) => void;
   label?: string;
-  items: ActionItem[];
 }) {
-  const id = useId();
-  const [fallbackStyle, setFallbackStyle] = useState<CSSProperties | undefined>(
-    undefined,
+  return (
+    <div className="section-tabs" role="tablist" aria-label={label}>
+      {tabs.map((t) => {
+        const selected = t.id === active;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            className={selected ? "section-tab active" : "section-tab"}
+            onClick={() => onChange(t.id)}
+          >
+            <span>{t.label}</span>
+            {t.badge !== undefined && t.badge !== "" && (
+              <span className="section-tab-badge">{t.badge}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
   );
+}
+
+export function StackDrillDown({
+  hasDetail,
+  backLabel,
+  detailTitle,
+  onBack,
+  listPane,
+  detailPane,
+  listAriaLabel = "Records",
+}: {
+  hasDetail: boolean;
+  backLabel: string;
+  detailTitle: string;
+  onBack: () => void;
+  listPane: ReactNode;
+  detailPane: ReactNode;
+  listAriaLabel?: string;
+}) {
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia("(max-width: 959px)").matches
+      : false,
+  );
+  const [prevNav, setPrevNav] = useState({ hasDetail, isMobile });
+  const [animDir, setAnimDir] = useState<"forward" | "back" | null>(null);
+  const listContentRef = useRef<HTMLDivElement>(null);
+  const backButtonRef = useRef<HTMLButtonElement>(null);
+  const returnHrefRef = useRef<string | null>(null);
+  const prevHasDetailRef = useRef(hasDetail);
+
+  if (prevNav.hasDetail !== hasDetail || prevNav.isMobile !== isMobile) {
+    const nextDir =
+      isMobile && prevNav.isMobile && prevNav.hasDetail !== hasDetail
+        ? hasDetail
+          ? "forward"
+          : "back"
+        : null;
+    setPrevNav({ hasDetail, isMobile });
+    setAnimDir(nextDir);
+  }
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(max-width: 959px)");
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    const wasDetail = prevHasDetailRef.current;
+    prevHasDetailRef.current = hasDetail;
+    if (!isMobile || wasDetail === hasDetail) return;
+
+    if (hasDetail) {
+      window.scrollTo({ top: 0, behavior: "instant" });
+      const frame = requestAnimationFrame(() => {
+        backButtonRef.current?.focus({ preventScroll: true });
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const targetHref = returnHrefRef.current;
+      returnHrefRef.current = null;
+      const listEl = listContentRef.current;
+      let focusTarget: HTMLElement | null = listEl;
+      if (targetHref && listEl) {
+        for (const anchor of listEl.querySelectorAll<HTMLAnchorElement>(
+          "a[href]",
+        )) {
+          if (anchor.getAttribute("href") === targetHref) {
+            focusTarget = anchor;
+            break;
+          }
+        }
+      }
+      focusTarget?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [hasDetail, isMobile]);
+
+  if (!isMobile) {
+    return (
+      <div className="workspace-split">
+        <section className="workspace-list-pane" aria-label={listAriaLabel}>
+          {listPane}
+        </section>
+        <section className="workspace-detail-pane" aria-label={detailTitle}>
+          {detailPane}
+        </section>
+      </div>
+    );
+  }
+
+  const paneAnimClass =
+    animDir === "forward"
+      ? " drill-forward"
+      : animDir === "back"
+        ? " drill-back"
+        : "";
 
   return (
-    <>
-      <button
-        type="button"
-        className="icon-button action-trigger"
-        aria-label={label}
-        popoverTarget={id}
-        onClick={(e) => {
-          if (
-            typeof CSS !== "undefined" &&
-            CSS.supports("position-area: block-end")
-          ) {
-            setFallbackStyle(undefined);
-            return;
-          }
-          const r = e.currentTarget.getBoundingClientRect();
-          const menuWidth = 236;
-          const menuHeight = Math.min(360, items.length * 46 + 16);
-          setFallbackStyle({
-            position: "fixed",
-            inset: "auto",
-            margin: 0,
-            left: Math.max(
-              10,
-              Math.min(window.innerWidth - menuWidth - 10, r.right - menuWidth),
-            ),
-            top: Math.max(
-              10,
-              Math.min(window.innerHeight - menuHeight - 10, r.bottom + 6),
-            ),
-          });
-        }}
-      >
-        <MoreHorizontal size={20} aria-hidden="true" />
-      </button>
-      <div
-        popover="auto"
-        id={id}
-        className="action-popover"
-        style={fallbackStyle}
-      >
-        {items.map((item) => (
-          <button
-            type="button"
-            key={item.label}
-            className={item.danger ? "action-item danger" : "action-item"}
-            onClick={(e) => {
-              const pop = e.currentTarget.closest(
-                "[popover]",
-              ) as HTMLElement | null;
-              try {
-                pop?.hidePopover();
-              } catch {}
-              item.onClick();
-            }}
-          >
-            {item.icon && (
-              <span className="action-icon" aria-hidden="true">
-                {item.icon}
-              </span>
-            )}
-            <span>{item.label}</span>
-          </button>
-        ))}
-      </div>
-    </>
+    <div
+      className="mobile-drill"
+      onClick={(e) => {
+        const trigger = (e.target as HTMLElement | null)?.closest(
+          "a[href]",
+        ) as HTMLAnchorElement | null;
+        if (trigger && listContentRef.current?.contains(trigger)) {
+          returnHrefRef.current = trigger.getAttribute("href");
+        }
+      }}
+    >
+      {hasDetail ? (
+        <section
+          key="detail"
+          className={`drill-pane${paneAnimClass}`}
+          aria-label={detailTitle}
+        >
+          <div className="stack-detail-bar">
+            <button
+              ref={backButtonRef}
+              type="button"
+              className="stack-back-btn"
+              aria-label={`Back to ${backLabel}`}
+              onClick={onBack}
+            >
+              <ArrowLeft size={18} aria-hidden="true" />
+              <span>{backLabel}</span>
+            </button>
+            <span className="stack-detail-title">{detailTitle}</span>
+          </div>
+          <div className="stack-detail-body">{detailPane}</div>
+        </section>
+      ) : (
+        <section
+          key="list"
+          ref={listContentRef}
+          className={`drill-pane${paneAnimClass}`}
+          tabIndex={-1}
+          aria-label={listAriaLabel}
+        >
+          {listPane}
+        </section>
+      )}
+    </div>
   );
 }
 
@@ -606,71 +817,6 @@ export function Confirm({
         >
           {busy ? "Working…" : action}
         </button>
-      </div>
-    </Dialog>
-  );
-}
-
-export function Code({
-  title,
-  notice = "Sensitive output. Share only with the intended recipient.",
-  text,
-  onClose,
-}: {
-  title: string;
-  notice?: string;
-  text: string;
-  onClose: () => void;
-}) {
-  const [copied, setCopied] = useState(false);
-  const [copyError, setCopyError] = useState("");
-
-  useEffect(() => {
-    if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 2000);
-    return () => clearTimeout(t);
-  }, [copied]);
-
-  return (
-    <Dialog title={title} onClose={onClose} wide>
-      <div className="dialog-body">
-        <p className="notice-banner">
-          <ShieldAlert size={18} aria-hidden="true" />
-          <span>{notice}</span>
-        </p>
-        <pre className="code-output">{text}</pre>
-        {copyError && (
-          <p className="form-error" role="alert">
-            <AlertCircle size={18} aria-hidden="true" />
-            <span>{copyError}</span>
-          </p>
-        )}
-      </div>
-      <div className="dialog-footer">
-        <button
-          type="button"
-          onClick={() => {
-            setCopyError("");
-            navigator.clipboard
-              .writeText(text)
-              .then(() => setCopied(true))
-              .catch(() =>
-                setCopyError(
-                  "Clipboard access unavailable. Select and copy the text manually.",
-                ),
-              );
-          }}
-        >
-          {copied ? (
-            <Check size={17} className="copy-pop" aria-hidden="true" />
-          ) : (
-            <Copy size={17} aria-hidden="true" />
-          )}
-          <span>{copied ? "Copied" : "Copy"}</span>
-        </button>
-        <DialogDismissButton className="primary" autoFocus>
-          Done
-        </DialogDismissButton>
       </div>
     </Dialog>
   );
