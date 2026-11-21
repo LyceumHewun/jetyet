@@ -389,8 +389,10 @@ describe("authorization and templates", () => {
   });
   test("preview redacts tokens and file tags cannot bypass the sandbox", () => {
     const { user } = fixture();
-    expect(render(s, user, defaultTemplate, true)).toContain("REDACTED");
-    expect(render(s, user, defaultTemplate, true)).not.toContain(
+    expect(render(s, user, defaultTemplate, "admin-preview")).toContain(
+      "REDACTED",
+    );
+    expect(render(s, user, defaultTemplate, "admin-preview")).not.toContain(
       s.secrets(user.id).vpnToken,
     );
     expect(() => render(s, user, "{%- include 'package.json' -%}")).toThrow();
@@ -407,6 +409,141 @@ describe("authorization and templates", () => {
         })
       ).status,
     ).toBe(403);
+  });
+  test("portal password links rotate, expire, and invalidate old sessions only after use", async () => {
+    const { user } = fixture();
+    s.put("user", { ...strip(user), username: "friend" }, undefined, user.id);
+    const app = createApp(s);
+    const post = (path: string, body: unknown, cookie = "") =>
+      app.request(path, {
+        method: "POST",
+        headers: { origin: s.config.origin, cookie },
+        body: JSON.stringify(body),
+      });
+    const admin = await post("/api/login", {
+      username: "ADMIN",
+      password: "correct-password",
+    });
+    expect(admin.status).toBe(200);
+    const adminCookie = admin.headers.get("set-cookie")!.split(";")[0];
+    const issue = async () => {
+      const response = await post(
+        `/api/users/${user.id}/password-link`,
+        {},
+        adminCookie,
+      );
+      expect(response.status).toBe(200);
+      const { url } = await response.json();
+      return new URL(url).hash.slice(1);
+    };
+    const revoked = await issue();
+    const active = await issue();
+    const path = "/api/portal-password";
+    expect((await post(path, { token: revoked })).status).toBe(403);
+    expect((await post(path, { token: active })).status).toBe(200);
+    const initial = await post(path, {
+      token: active,
+      password: "first-portal-password",
+    });
+    expect(initial.status).toBe(200);
+    expect((await post(path, { token: active })).status).toBe(403);
+    const oldCookie = initial.headers.get("set-cookie")!.split(";")[0];
+    const portal = (cookie: string) =>
+      app.request("/api/portal", { headers: { cookie } });
+    expect((await portal(oldCookie)).status).toBe(200);
+    expect(
+      (await app.request("/api/state", { headers: { cookie: oldCookie } }))
+        .status,
+    ).toBe(401);
+    const expiring = await issue();
+    setSystemTime(now + 86400000);
+    expect((await post(path, { token: expiring })).status).toBe(403);
+    const reset = await issue();
+    expect((await portal(oldCookie)).status).toBe(200);
+    const changed = await post(path, {
+      token: reset,
+      password: "second-portal-password",
+    });
+    expect(changed.status).toBe(200);
+    expect((await portal(oldCookie)).status).toBe(401);
+    expect(
+      (
+        await post("/api/login", {
+          username: "friend",
+          password: "first-portal-password",
+        })
+      ).status,
+    ).toBe(401);
+    const newCookie = changed.headers.get("set-cookie")!.split(";")[0];
+    s.put(
+      "user",
+      {
+        ...strip(user),
+        username: "friend",
+        expires: new Date(now).toISOString(),
+      },
+      undefined,
+      user.id,
+    );
+    expect(await (await portal(newCookie)).json()).toMatchObject({
+      expired: true,
+    });
+    s.put(
+      "user",
+      { ...strip(user), username: "friend", enabled: false },
+      undefined,
+      user.id,
+    );
+    expect((await portal(newCookie)).status).toBe(401);
+  });
+  test("personal template publication is owner-scoped and previews hide live node details", async () => {
+    const { user, template } = fixture();
+    const app = createApp(s);
+    const another = s.put(
+      "user",
+      { ...strip(user), name: "Other" },
+      {
+        vpnToken: token(),
+        subscriptionToken: token(),
+      },
+    );
+    s.put("user", { ...strip(user), username: "friend" }, undefined, user.id);
+    const secret = token();
+    s.db
+      .query("INSERT INTO portal_sessions VALUES(?,?,?)")
+      .run(digest(secret), user.id, now + 60000);
+    const request = (path: string, method = "GET", body?: unknown) =>
+      app.request(path, {
+        method,
+        headers: { origin: s.config.origin, cookie: `jetyet=${secret}` },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    const created = await request("/api/portal/templates", "POST", {
+      sourceId: template.id,
+      name: "Personal",
+    });
+    expect(created.status).toBe(201);
+    const { id } = await created.json();
+    const root = `/api/portal/templates/${id}`;
+    const subscription = (u: typeof user, templateQuery = `?template=${id}`) =>
+      app.request(`/sub/${s.secrets(u.id).subscriptionToken}${templateQuery}`);
+    expect((await request(root + "/publish", "POST")).status).toBe(409);
+    expect((await subscription(user)).status).toBe(403);
+    const preview = await request(root + "/preview", "POST");
+    expect(preview.status).toBe(200);
+    const { text } = await preview.json();
+    expect(text).toContain("Preview node 1");
+    expect(text).not.toContain("203.0.113.1");
+    expect(text).not.toContain(s.secrets(user.id).vpnToken);
+    expect((await request(root + "/publish", "POST")).status).toBe(200);
+    expect(await (await subscription(user)).text()).toContain("203.0.113.1");
+    expect((await subscription(another)).status).toBe(403);
+    expect(
+      (await request(root, "PUT", { name: "Broken", body: "dns:" })).status,
+    ).toBe(200);
+    expect((await request(root + "/preview", "POST")).status).toBe(422);
+    expect((await subscription(user)).status).toBe(200);
+    expect((await subscription(user, "")).status).toBe(200);
   });
 });
 describe("queue and encryption", () => {
@@ -557,7 +694,12 @@ describe("detect operation and concurrent safety", () => {
       });
 
     // 1. Concurrent enabled toggle during remote start + queued node-state convergence
-    s.put("node", { ...strip(node), status: "draft", enabled: true }, undefined, node.id);
+    s.put(
+      "node",
+      { ...strip(node), status: "draft", enabled: true },
+      undefined,
+      node.id,
+    );
     enqueue(s, host.id, "detect", { nodeId: node.id });
     const t1 = claim(s, false, "ops")!;
     let detects = 0;

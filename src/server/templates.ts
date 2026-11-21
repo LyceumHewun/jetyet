@@ -12,6 +12,59 @@ const engine = new Liquid({
   renderLimit: 1000,
   memoryLimit: 10000000,
 });
+const credentialField =
+  /^(?:password|passwd|uuid|token|secret|username|authentication|auth|authorization|api[-_]?key|private[-_]?key|access[-_]?key)$/i;
+
+function redactPreview(text: string) {
+  const config = YAML.parse(text, { maxAliasCount: 100 });
+  const names = new Map<string, string>();
+  const groupNames = new Set(
+    config["proxy-groups"].map((g: { name: string }) => g.name),
+  );
+  for (const proxy of config.proxies) {
+    let placeholder = `Preview node ${names.size + 1}`;
+    while (groupNames.has(placeholder)) placeholder += " (preview)";
+    names.set(proxy.name, placeholder);
+    proxy.server = `node-${names.size}.invalid`;
+    proxy.port = 443;
+    if ("ports" in proxy) proxy.ports = "443-444";
+    if ("sni" in proxy) proxy.sni = proxy.server;
+  }
+  function redact(value: unknown): unknown {
+    if (typeof value === "string") {
+      const renamed = names.get(value);
+      if (renamed) return renamed;
+      // Rule policies follow a comma and can be followed by the no-resolve flag.
+      return value
+        .replace(/,([^,]+)(,no-resolve)?$/, (match, policy, suffix) =>
+          names.has(policy) ? `,${names.get(policy)}${suffix ?? ""}` : match,
+        )
+        .replace(
+          /\/sub\/[a-zA-Z0-9_-]+|\/set-password#[a-zA-Z0-9_-]+/g,
+          "[REDACTED]",
+        )
+        .replace(/(https?:\/\/)[^\s/@]+@/gi, "$1REDACTED@")
+        .replace(
+          /([?&](?:token|secret|password|key|auth)=)[^&#\s]+/gi,
+          "$1REDACTED",
+        );
+    }
+    if (Array.isArray(value)) return value.map(redact);
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [
+          key,
+          credentialField.test(key)
+            ? Array.isArray(item)
+              ? []
+              : "REDACTED"
+            : redact(item),
+        ]),
+      );
+    return value;
+  }
+  return YAML.stringify(redact(config));
+}
 for (const name of ["include", "render", "layout", "extends"])
   engine.registerTag(name, {
     parse() {
@@ -45,12 +98,15 @@ rules:
   - IP-CIDR,192.168.0.0/16,DIRECT
   - MATCH,Proxy
 `;
-engine.registerFilter("indent", (v, n) =>
-  String(v)
+engine.registerFilter("indent", (v, n) => {
+  const width = Number(n);
+  if (!Number.isInteger(width) || width < 0 || width > 64)
+    throw Error("Indent must be between 0 and 64 spaces");
+  return String(v)
     .split("\n")
-    .map((l) => " ".repeat(Number(n)) + l)
-    .join("\n"),
-);
+    .map((l) => " ".repeat(width) + l)
+    .join("\n");
+});
 export function seedTemplate(s: Store) {
   if (!s.list("template").length)
     s.put("template", {
@@ -60,7 +116,11 @@ export function seedTemplate(s: Store) {
       format: "mihomo",
     });
 }
-function proxies(s: Store, u: Entity, redacted: boolean) {
+function proxies(
+  s: Store,
+  u: Entity,
+  mode: "live" | "admin-preview" | "portal-preview",
+) {
   const nodes = s.list("node").filter(
     (n) =>
       u.nodeIds.includes(n.id) &&
@@ -73,17 +133,22 @@ function proxies(s: Store, u: Entity, redacted: boolean) {
       })(),
   );
   const names = new Set<string>();
-  return nodes.map((n) => {
+  return nodes.map((n, i) => {
     if (names.has(n.name))
       throw Error("Authorized nodes have duplicate display names");
     names.add(n.name);
     return {
-      name: n.name,
+      name: mode === "portal-preview" ? `Node ${i + 1}` : n.name,
       type: "hysteria2",
-      server: n.address,
-      port: n.port,
-      ...(n.hopping ? { ports: n.hopping, "hop-interval": n.hopInterval } : {}),
-      password: redacted ? "REDACTED" : s.secrets(u.id).vpnToken,
+      server: mode === "portal-preview" ? `node-${i + 1}.invalid` : n.address,
+      port: mode === "portal-preview" ? 443 : n.port,
+      ...(n.hopping
+        ? {
+            ports: mode === "portal-preview" ? "443-444" : n.hopping,
+            "hop-interval": n.hopInterval,
+          }
+        : {}),
+      password: mode === "live" ? s.secrets(u.id).vpnToken : "REDACTED",
       "skip-cert-verify": true,
       udp: true,
       ...(n.upMbps ? { up: n.upMbps } : {}),
@@ -91,20 +156,25 @@ function proxies(s: Store, u: Entity, redacted: boolean) {
     };
   });
 }
-export function render(s: Store, u: Entity, body: string, redacted = false) {
+export function render(
+  s: Store,
+  u: Entity,
+  body: string,
+  mode: "live" | "admin-preview" | "portal-preview" = "live",
+) {
   if (/{%\s*(include|render|layout|extends)\b/i.test(body))
     throw Error("File and partial loading is not allowed");
-  const p = proxies(s, u, redacted);
+  const p = proxies(s, u, mode);
   const text = engine.parseAndRenderSync(body, {
     proxies: p,
     choices: p.length ? p.map((p) => p.name) : ["DIRECT"],
-    user: { name: u.name },
+    user: { name: mode === "portal-preview" ? "Subscriber" : u.name },
     nodes: p,
   });
   if (Buffer.byteLength(text) > 1024 * 1024)
     throw Error("Rendered configuration is too large");
   validateStructure(text);
-  return text;
+  return mode === "portal-preview" ? redactPreview(text) : text;
 }
 export function validateStructure(text: string) {
   const doc = YAML.parseDocument(text, { uniqueKeys: true });

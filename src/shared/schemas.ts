@@ -101,9 +101,20 @@ export const nodeSchema = z.object({
   downMbps: z.number().int().min(0).max(100000).default(0),
   enabled: z.boolean().default(true),
 });
+export const usernameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .regex(
+    /^[a-zA-Z0-9_.-]+$/,
+    "Use letters, numbers, dots, underscores, or hyphens",
+  );
+
 export const userSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
+    username: usernameSchema.transform((name) => name.toLowerCase()),
     note: z.string().max(2000).default(""),
     enabled: z.boolean().default(true),
     expires: z.iso.datetime({ offset: true }).nullable().default(null),

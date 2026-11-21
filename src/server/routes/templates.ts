@@ -54,7 +54,7 @@ export function registerTemplatesRoutes({
         .object({ userId: z.uuid(), body: z.string().max(100000).optional() })
         .parse(await c.req.json());
     const u = entity(userId, "user");
-    const text = render(s, u, body ?? t.draft ?? t.body, true);
+    const text = render(s, u, body ?? t.draft ?? t.body, "admin-preview");
     await checked(text);
     s.event(t.id, "template.previewed", {
       userId,
