@@ -143,10 +143,14 @@ export function registerPortalRoutes(
         .immediate(),
     );
   });
-  function preview(s: Store, user: Entity, body: string) {
+  function preview(user: Entity, body: string, personal: boolean) {
     try {
-      render(s, user, body);
-      return render(s, user, body, "portal-preview");
+      return render(
+        s,
+        user,
+        body,
+        personal ? "portal-preview" : "assigned-preview",
+      );
     } catch {
       throw new HttpError(
         422,
@@ -159,7 +163,7 @@ export function registerPortalRoutes(
     const t = template(user, c.req.param("id"));
     const draft = t.kind === personalKind ? t.draft : null;
     const body = draft ?? t.body;
-    const text = preview(s, user, body);
+    const text = preview(user, body, t.kind === personalKind);
     if (typeof draft === "string")
       s.put(
         personalKind,
@@ -176,7 +180,7 @@ export function registerPortalRoutes(
         const t = template(user, c.req.param("id"), true);
         if (typeof t.draft !== "string" || t.previewed !== digest(t.draft))
           throw new HttpError(409, "Preview the saved draft before publishing");
-        preview(s, user, t.draft);
+        preview(user, t.draft, true);
         s.put(
           personalKind,
           {

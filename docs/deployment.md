@@ -35,6 +35,7 @@
 - Set a sign-in username on each existing subscription user to enable portal onboarding. Create a password link in the management interface and send it to the intended recipient. The same action issues reset links.
 - Portal password links are single-use and expire after 24 hours. Issuing a new link invalidates the previous link. Completing a reset revokes previous portal sessions.
 - Treat assigned subscription template source as shareable with its recipients. Supply live VPN credentials through generated node data and keep secrets out of template literals.
+- Personal template preview and publication validate YAML structure and routing policies using simulated node data. Reference managed nodes through the template's generated collections.
 - Encrypt SSH passwords, SSH private keys, and VPN credentials before storing them in SQLite.
 - Supply the encryption master key through the configuration file; do not store it in the database. Startup requires the key.
 - Keep database backups and the encryption master key separately; administrator passwords remain irreversible hashes rather than encrypted credentials.

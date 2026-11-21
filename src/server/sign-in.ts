@@ -7,6 +7,8 @@ import { HttpError, requireOrigin } from "./errors";
 
 const day = 86400000;
 const sessionDays = 7;
+const invalidLink = () =>
+  new HttpError(403, "This password link is invalid or expired");
 
 export function issuePasswordLink(s: Store, user: string) {
   const secret = token();
@@ -149,18 +151,18 @@ export function registerSignIn(app: Hono, s: Store) {
       )
       .get(linkHash, Date.now());
     const user = row && availableUser(row.user);
-    if (!user)
-      throw new HttpError(403, "This password link is invalid or expired");
+    if (!user) throw invalidLink();
     return user;
   }
   app.post("/api/portal-password", async (c) => {
     requireOrigin(c.req.raw, s.config.origin);
     const input = z
       .object({
-        token: z.string().regex(/^[a-zA-Z0-9_-]{43}$/),
+        token: z.string(),
         password: z.string().min(12).max(1000).optional(),
       })
       .parse(await c.req.json());
+    if (!/^[a-zA-Z0-9_-]{43}$/.test(input.token)) throw invalidLink();
     const linkHash = digest(input.token);
     const user = passwordLinkUser(linkHash);
     if (input.password === undefined)

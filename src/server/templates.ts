@@ -13,7 +13,7 @@ const engine = new Liquid({
   memoryLimit: 10000000,
 });
 const credentialField =
-  /^(?:password|passwd|uuid|token|secret|username|authentication|auth|authorization|api[-_]?key|private[-_]?key|access[-_]?key)$/i;
+  /(?:^|[-_])(?:password|passwd|uuid|token|secret|username|authentication|auth|authorization|key|cookie|psk)(?:$|[-_])|^(?:api|private|access)key$/i;
 const commaPayloadRules = new Set([
   "NOT",
   "OR",
@@ -44,6 +44,8 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
     proxy.port = 443;
     if ("ports" in proxy) proxy.ports = "443-444";
     if ("sni" in proxy) proxy.sni = proxy.server;
+    if ("servername" in proxy) proxy.servername = proxy.server;
+    if ("server-name" in proxy) proxy["server-name"] = proxy.server;
   }
   for (const [literal, simulated] of literalNames) {
     const placeholder = names.get(simulated);
@@ -74,7 +76,7 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
           /\/sub\/[a-zA-Z0-9_-]+|\/set-password#[a-zA-Z0-9_-]+/g,
           "[REDACTED]",
         )
-        .replace(/(https?:\/\/)[^\s/@]+@/gi, "$1REDACTED@")
+        .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1REDACTED@")
         .replace(
           /([?&](?:token|secret|password|key|auth)=)[^&#\s]+/gi,
           "$1REDACTED",
@@ -147,11 +149,14 @@ export function seedTemplate(s: Store) {
       format: "mihomo",
     });
 }
-function proxies(
-  s: Store,
-  u: Entity,
-  mode: "live" | "admin-preview" | "portal-preview",
-) {
+type RenderMode =
+  "live" | "admin-preview" | "portal-preview" | "assigned-preview";
+
+function isPortalPreview(mode: RenderMode) {
+  return mode === "portal-preview" || mode === "assigned-preview";
+}
+
+function proxies(s: Store, u: Entity, mode: RenderMode) {
   const nodes = s.list("node").filter(
     (n) =>
       u.nodeIds.includes(n.id) &&
@@ -169,27 +174,30 @@ function proxies(
   const literalNames = new Map<string, string>();
   const rows = nodes.map((n, i) => {
     let name = n.name;
-    if (mode === "portal-preview") {
-      name = `Node ${i + 1}`;
-      while (names.has(name)) name += " (simulated)";
-      literalNames.set(n.name, name);
+    const simulated = isPortalPreview(mode);
+    if (simulated) {
+      name = `Preview input ${i + 1}`;
+      if (mode === "assigned-preview") {
+        while (names.has(name)) name += " (simulated)";
+        literalNames.set(n.name, name);
+      }
     }
     return {
       name,
       type: "hysteria2",
-      server: mode === "portal-preview" ? `node-${i + 1}.invalid` : n.address,
-      port: mode === "portal-preview" ? 443 : n.port,
-      ...(n.hopping
+      server: simulated ? `node-${i + 1}.invalid` : n.address,
+      port: simulated ? 443 : n.port,
+      ...(!simulated && n.hopping
         ? {
-            ports: mode === "portal-preview" ? "443-444" : n.hopping,
+            ports: n.hopping,
             "hop-interval": n.hopInterval,
           }
         : {}),
       password: mode === "live" ? s.secrets(u.id).vpnToken : "REDACTED",
       "skip-cert-verify": true,
       udp: true,
-      ...(n.upMbps ? { up: n.upMbps } : {}),
-      ...(n.downMbps ? { down: n.downMbps } : {}),
+      ...(!simulated && n.upMbps ? { up: n.upMbps } : {}),
+      ...(!simulated && n.downMbps ? { down: n.downMbps } : {}),
     };
   });
   return { rows, literalNames };
@@ -198,7 +206,7 @@ export function render(
   s: Store,
   u: Entity,
   body: string,
-  mode: "live" | "admin-preview" | "portal-preview" = "live",
+  mode: RenderMode = "live",
 ) {
   if (/{%\s*(include|render|layout|extends)\b/i.test(body))
     throw Error("File and partial loading is not allowed");
@@ -206,13 +214,14 @@ export function render(
   const text = engine.parseAndRenderSync(body, {
     proxies: p,
     choices: p.length ? p.map((p) => p.name) : ["DIRECT"],
-    user: { name: mode === "portal-preview" ? "Subscriber" : u.name },
+    user: { name: isPortalPreview(mode) ? "Subscriber" : u.name },
     nodes: p,
   });
   if (Buffer.byteLength(text) > 1024 * 1024)
     throw Error("Rendered configuration is too large");
-  const output =
-    mode === "portal-preview" ? redactPreview(text, literalNames) : text;
+  const output = isPortalPreview(mode)
+    ? redactPreview(text, literalNames)
+    : text;
   validateStructure(output);
   return output;
 }

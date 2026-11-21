@@ -440,6 +440,11 @@ describe("authorization and templates", () => {
     const revoked = await issue();
     const active = await issue();
     const path = "/api/portal-password";
+    const malformed = await post(path, { token: "short" });
+    expect(malformed.status).toBe(403);
+    expect(await malformed.json()).toEqual({
+      error: "This password link is invalid or expired",
+    });
     expect((await post(path, { token: revoked })).status).toBe(403);
     expect((await post(path, { token: active })).status).toBe(200);
     const initial = await post(path, {
@@ -500,10 +505,6 @@ describe("authorization and templates", () => {
   });
   test("personal template publication is owner-scoped and previews hide live node details", async () => {
     const { node, user, template } = fixture();
-    const body = defaultTemplate
-      .replace("{{ choices | yaml | indent: 6 }}", `      - ${node.name}`)
-      .replace("MATCH,Proxy", `MATCH,${node.name}`);
-    s.put("template", { ...strip(template), body }, undefined, template.id);
     const app = createApp(s);
     const another = s.put(
       "user",
@@ -528,6 +529,24 @@ describe("authorization and templates", () => {
     expect(await overview.json()).toMatchObject({
       defaultLink: `${s.config.origin}/sub/${s.secrets(user.id).subscriptionToken}`,
     });
+    const literalBody = defaultTemplate
+      .replace("{{ choices | yaml | indent: 6 }}", `      - ${node.name}`)
+      .replace("MATCH,Proxy", `MATCH,${node.name}`);
+    s.put(
+      "template",
+      { ...strip(template), body: literalBody },
+      undefined,
+      template.id,
+    );
+    const assigned = await request(
+      `/api/portal/templates/${template.id}/preview`,
+      "POST",
+    );
+    expect(assigned.status).toBe(200);
+    const assignedText = (await assigned.json()).text;
+    expect(assignedText).toContain("MATCH,Preview node 1");
+    expect(assignedText).not.toMatch(/\bNode\b/);
+    s.put("template", strip(template), undefined, template.id);
     const created = await request("/api/portal/templates", "POST", {
       sourceId: template.id,
       name: "Personal",
@@ -543,8 +562,6 @@ describe("authorization and templates", () => {
     expect(preview.status).toBe(200);
     const { text } = await preview.json();
     expect(text).toContain("Preview node 1");
-    expect(text).toContain("MATCH,Preview node 1");
-    expect(text).not.toMatch(/\bNode\b/);
     expect(text).not.toContain("203.0.113.1");
     expect(text).not.toContain(s.secrets(user.id).vpnToken);
     expect((await request(root + "/publish", "POST")).status).toBe(200);
@@ -554,7 +571,7 @@ describe("authorization and templates", () => {
       (
         await request(root, "PUT", {
           name: "Bad rule",
-          body: body.replace(`MATCH,${node.name}`, "MATCH,Missing policy"),
+          body: defaultTemplate.replace("MATCH,Proxy", "MATCH,Missing policy"),
         })
       ).status,
     ).toBe(200);
@@ -565,6 +582,25 @@ describe("authorization and templates", () => {
     expect((await request(root + "/preview", "POST")).status).toBe(422);
     expect((await subscription(user)).status).toBe(200);
     expect((await subscription(user, "")).status).toBe(200);
+    const simulatedBody = `{% if nodes[0].server != 'node-1.invalid' %}invalid{% else %}${defaultTemplate}
+proxy-providers:
+  example:
+    type: http
+    url: socks5://proxy-user:proxy-password@provider.invalid/list
+    header:
+      X-Api-Key: [secret-header-value]
+{% endif %}`;
+    expect(
+      (await request(root, "PUT", { name: "Simulation", body: simulatedBody }))
+        .status,
+    ).toBe(200);
+    const simulated = await request(root + "/preview", "POST");
+    expect(simulated.status).toBe(200);
+    const simulatedText = (await simulated.json()).text;
+    expect(simulatedText).toContain("node-1.invalid");
+    expect(simulatedText).not.toContain("203.0.113.1");
+    expect(simulatedText).not.toContain("proxy-password");
+    expect(simulatedText).not.toContain("secret-header-value");
   });
 });
 describe("queue and encryption", () => {
