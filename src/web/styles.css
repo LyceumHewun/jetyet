@@ -2566,3 +2566,314 @@ legend {
     scroll-behavior: auto !important;
   }
 }
+.visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important;
+  clip-path: inset(50%) !important;
+  overflow: hidden !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  white-space: nowrap !important;
+}
+.copy-wrap {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+}
+.copy-btn {
+  min-inline-size: 28px;
+  min-block-size: 28px;
+}
+.ui-input:is(:user-invalid, .user-invalid-fallback),
+.ui-textarea:is(:user-invalid, .user-invalid-fallback) {
+  border-color: var(--danger);
+}
+.login-step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  flex-wrap: wrap;
+}
+.login-back-btn {
+  padding: var(--space-1) 0;
+  font-size: 12px;
+}
+.login-guidance {
+  display: block;
+  text-align: center;
+  margin-top: var(--space-5);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.set-password-state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.set-password-footer {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--space-4);
+}
+.account-chip-name {
+  font-size: 12px;
+  color: var(--ink);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.portal-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+.portal-loading {
+  padding: var(--space-8);
+  text-align: center;
+  font-size: 13px;
+}
+.portal-hero-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.portal-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.portal-expired-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--warning);
+  background: var(--warning-soft);
+  color: var(--ink);
+  font-size: 13px;
+}
+.portal-expired-banner svg {
+  color: var(--warning);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.portal-expired-banner p {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+.portal-links-list {
+  display: flex;
+  flex-direction: column;
+}
+.portal-link-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 240px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border);
+}
+.portal-link-row:last-child {
+  border-bottom: 0;
+}
+.portal-link-row.is-default {
+  background: var(--paper);
+}
+.portal-link-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.portal-link-meta strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.portal-link-url {
+  font-size: 11.5px;
+  color: var(--muted);
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  overflow-x: auto;
+  white-space: nowrap;
+  user-select: all;
+  min-width: 0;
+}
+.portal-link-row.is-default .portal-link-url {
+  background: var(--surface);
+  color: var(--ink);
+}
+.portal-links-empty {
+  padding: var(--space-5);
+  font-size: 12px;
+}
+.portal-workbench {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+.portal-sidebar {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+.portal-side-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.portal-side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.portal-tpl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.portal-tpl-item {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  padding: 8px 10px;
+  justify-content: space-between;
+  gap: var(--space-2);
+  text-align: left;
+  font-size: 13px;
+  white-space: normal;
+}
+.portal-tpl-item:hover {
+  background: var(--accent-hover-bg);
+  border-color: transparent;
+  color: var(--accent);
+}
+.portal-tpl-item.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.portal-tpl-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.portal-side-empty {
+  font-size: 12px;
+  padding: var(--space-2) 0;
+}
+.portal-main {
+  min-width: 0;
+}
+.portal-assigned-view,
+.portal-personal-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.portal-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.portal-detail-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.portal-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.portal-inline-link {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.portal-inline-link-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.portal-inline-link-row .link-url {
+  flex: 1;
+  min-width: 0;
+}
+.portal-preview-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.portal-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.portal-editor-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.portal-editor-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.portal-editor-name-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+@media (max-width: 960px) {
+  .portal-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .portal-link-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2);
+  }
+}
+@media (max-width: 640px) {
+  .account-chip-name {
+    display: none;
+  }
+  .portal-link-row {
+    padding: var(--space-3) var(--space-4);
+  }
+}

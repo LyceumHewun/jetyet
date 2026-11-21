@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   ArrowUpRight,
   FileCode2,
   Moon,
@@ -8,7 +9,7 @@ import {
   Sun,
   Users,
 } from "lucide-react";
-import { useState, type InputHTMLAttributes } from "react";
+import { useEffect, useState, type InputHTMLAttributes } from "react";
 import { api, fmt } from "./client";
 import {
   Badge,
@@ -27,7 +28,7 @@ import {
   SwitchPill,
   TextArea,
 } from "./components";
-import type { Row, State } from "./types";
+import type { Row, Session, State } from "./types";
 
 function toDatetimeLocal(iso: string | null | undefined): string {
   const ms = Date.parse(iso || "");
@@ -58,14 +59,18 @@ export function Login({
   theme = "light",
   onToggleTheme,
 }: {
-  onLogin: (name: string) => void;
+  onLogin: (session: Session) => void;
   theme?: "light" | "dark";
   onToggleTheme?: () => void;
 }) {
-  const [name, setName] = useState("admin"),
+  const [step, setStep] = useState<"username" | "password">("username"),
+    [name, setName] = useState(""),
     [password, setPassword] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
+
+  const trimmedName = name.trim();
+
   return (
     <div className="login-page">
       {onToggleTheme && (
@@ -91,43 +96,325 @@ export function Login({
           </span>
         </div>
         <div className="login-card">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              setBusy(true);
-              setError("");
-              api("login", "POST", { username: name, password })
-                .then((x) => onLogin(x.username))
-                .catch((e) => setError(e.message))
-                .finally(() => setBusy(false));
-            }}
-          >
-            <h2>Sign in</h2>
-            <p>Sign in to your network workspace.</p>
-            <Field label="Username">
-              <Input
+          {step === "username" ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!trimmedName) {
+                  setError("Enter your username.");
+                  return;
+                }
+                setError("");
+                setPassword("");
+                setStep("password");
+              }}
+            >
+              <h2>Sign in</h2>
+              <p>Enter your username to continue.</p>
+              <Field label="Username" htmlFor="login-username">
+                <Input
+                  id="login-username"
+                  name="username"
+                  autoComplete="username"
+                  spellCheck={false}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  enterKeyHint="next"
+                  required
+                  autoFocus
+                  aria-invalid={error ? "true" : "false"}
+                  aria-describedby={error ? "login-step1-error" : undefined}
+                  value={name}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    if (error) setError("");
+                  }}
+                />
+              </Field>
+              {error && (
+                <p id="login-step1-error" className="form-error" role="alert">
+                  {error}
+                </p>
+              )}
+              <Button variant="primary" type="submit">
+                Continue
+                <ArrowUpRight size={16} />
+              </Button>
+            </form>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setBusy(true);
+                setError("");
+                api("login", "POST", { username: trimmedName, password })
+                  .then((x) =>
+                    onLogin({ username: x.username, role: x.role }),
+                  )
+                  .catch((err) => setError((err as Error).message))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              <div className="login-step-head">
+                <button
+                  type="button"
+                  className="text-button login-back-btn"
+                  onClick={() => {
+                    setStep("username");
+                    setPassword("");
+                    setError("");
+                  }}
+                >
+                  <ArrowLeft size={13} />
+                  Change user
+                </button>
+                <Chip mono>{trimmedName}</Chip>
+              </div>
+              <h2>Enter password</h2>
+              <p>Sign in with your password.</p>
+              <input
+                type="text"
+                name="username"
                 autoComplete="username"
-                required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                value={trimmedName}
+                readOnly
+                className="visually-hidden"
+                tabIndex={-1}
+                aria-hidden="true"
               />
-            </Field>
-            <Field label="Password">
-              <Input
-                autoComplete="current-password"
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+              <Field label="Password" htmlFor="login-password">
+                <Input
+                  id="login-password"
+                  name="password"
+                  autoComplete="current-password"
+                  type="password"
+                  enterKeyHint="done"
+                  required
+                  autoFocus
+                  aria-invalid={error ? "true" : "false"}
+                  aria-describedby={error ? "login-step2-error" : undefined}
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (error) setError("");
+                  }}
+                />
+              </Field>
+              {error && (
+                <p id="login-step2-error" className="form-error" role="alert">
+                  {error}
+                </p>
+              )}
+              <Button variant="primary" type="submit" disabled={busy}>
+                {busy ? "Signing in…" : "Sign in"}
+                <ArrowUpRight size={16} />
+              </Button>
+              <small className="login-guidance">
+                First time signing in or forgot your password? Ask your
+                administrator for a portal password link.
+              </small>
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function SetPassword({
+  onSuccess,
+  onBackToSignIn,
+  theme = "light",
+  onToggleTheme,
+}: {
+  onSuccess: (session: Session) => void;
+  onBackToSignIn: () => void;
+  theme?: "light" | "dark";
+  onToggleTheme?: () => void;
+}) {
+  const [token] = useState(() => {
+    const raw = window.location.hash;
+    const stripped = raw.startsWith("#") ? raw.slice(1).trim() : "";
+    if (!stripped) return "";
+    try {
+      return decodeURIComponent(stripped).trim();
+    } catch {
+      return stripped;
+    }
+  });
+  const [verifying, setVerifying] = useState(true),
+    [verifyError, setVerifyError] = useState(""),
+    [username, setUsername] = useState(""),
+    [password, setPassword] = useState(""),
+    [submitError, setSubmitError] = useState(""),
+    [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (window.location.hash) {
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.search,
+      );
+    }
+    if (!token) {
+      setVerifyError(
+        "Missing or invalid portal password link. Ask your administrator for a new link.",
+      );
+      setVerifying(false);
+      return;
+    }
+    let cancelled = false;
+    api("portal-password", "POST", { token })
+      .then((res) => {
+        if (cancelled) return;
+        setUsername(res.username || "");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setVerifyError(
+          (err as Error).message ||
+            "This link is invalid or has expired. Ask your administrator for a new link.",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setVerifying(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  return (
+    <div className="login-page">
+      {onToggleTheme && (
+        <button
+          aria-label={
+            theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
+          }
+          className="icon-button login-theme-toggle"
+          onClick={onToggleTheme}
+          title={theme === "dark" ? "Light mode" : "Dark mode"}
+          type="button"
+        >
+          {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+        </button>
+      )}
+      <div className="login-wrap">
+        <div className="login-brand">
+          <span className="brand">
+            <span className="brand-symbol">
+              <Network size={22} />
+            </span>
+            jetyet<span className="brand-period">.</span>
+          </span>
+        </div>
+        <div className="login-card">
+          {verifying ? (
+            <div className="set-password-state">
+              <h2>Verifying link</h2>
+              <p className="muted">Checking portal password link…</p>
+            </div>
+          ) : verifyError ? (
+            <div className="set-password-state">
+              <h2>Link unavailable</h2>
+              <p className="form-error" role="alert">
+                {verifyError}
+              </p>
+              <Button variant="primary" onClick={onBackToSignIn}>
+                Back to sign in
+                <ArrowUpRight size={16} />
+              </Button>
+            </div>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (password.length < 12 || password.length > 1000) {
+                  setSubmitError(
+                    "Password must be between 12 and 1000 characters.",
+                  );
+                  return;
+                }
+                setBusy(true);
+                setSubmitError("");
+                api("portal-password", "POST", { token, password })
+                  .then((res) =>
+                    onSuccess({
+                      username: res.username || username,
+                      role: res.role || "subscriber",
+                    }),
+                  )
+                  .catch((err) => setSubmitError((err as Error).message))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              <div className="login-step-head">
+                <Chip>Portal Password</Chip>
+                <Chip mono>{username}</Chip>
+              </div>
+              <h2>Set password</h2>
+              <p>Choose a password for your subscription portal account.</p>
+              <input
+                type="text"
+                name="username"
+                autoComplete="username"
+                value={username}
+                readOnly
+                className="visually-hidden"
+                tabIndex={-1}
+                aria-hidden="true"
               />
-            </Field>
-            {error && <p className="form-error">{error}</p>}
-            <Button variant="primary" type="submit" disabled={busy}>
-              {busy ? "Signing in…" : "Sign in"}
-              <ArrowUpRight size={16} />
-            </Button>
-            <small>Credentials are managed in your server configuration.</small>
-          </form>
+              <Field
+                label="New password"
+                htmlFor="set-password-input"
+                hint="12–1000 characters."
+                hintAbove
+                hintId="set-password-hint"
+              >
+                <Input
+                  id="set-password-input"
+                  name="password"
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={12}
+                  maxLength={1000}
+                  enterKeyHint="done"
+                  required
+                  autoFocus
+                  aria-invalid={submitError ? "true" : "false"}
+                  aria-describedby={
+                    submitError
+                      ? "set-password-hint set-password-error"
+                      : "set-password-hint"
+                  }
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (submitError) setSubmitError("");
+                  }}
+                />
+              </Field>
+              {submitError && (
+                <p id="set-password-error" className="form-error" role="alert">
+                  {submitError}
+                </p>
+              )}
+              <Button variant="primary" type="submit" disabled={busy}>
+                {busy ? "Saving password…" : "Set password & sign in"}
+                <ArrowUpRight size={16} />
+              </Button>
+              <div className="set-password-footer">
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={onBackToSignIn}
+                >
+                  Back to sign in
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       </div>
     </div>
@@ -337,6 +624,7 @@ export function EntityForm({
           }
         : {
             name: "",
+            username: "",
             note: "",
             enabled: true,
             expires: null,
@@ -426,7 +714,12 @@ export function EntityForm({
                 </strong>
                 <small className="mono">
                   {kind === "users"
-                    ? data.note || "No note"
+                    ? [
+                        data.username ? `@${data.username}` : null,
+                        data.note || null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || "No username"
                     : `${data.address || "0.0.0.0"}:${data.port || 22}`}
                 </small>
               </div>
@@ -485,6 +778,15 @@ export function EntityForm({
           onSubmit={(e) => {
             e.preventDefault();
             if (
+              kind === "users" &&
+              !/^[A-Za-z0-9._-]{1,100}$/.test((data.username || "").trim())
+            ) {
+              setError(
+                "Sign-in username must be 1–100 characters using ASCII letters, digits, ., _, or -.",
+              );
+              return;
+            }
+            if (
               kind !== "nodes" &&
               data.quota?.reset?.kind === "interval" &&
               !Number.isFinite(Date.parse(data.quota.reset.anchor || ""))
@@ -494,7 +796,11 @@ export function EntityForm({
             }
             setBusy(true);
             setError("");
-            onSave(data)
+            const payload =
+              kind === "users"
+                ? { ...data, username: (data.username || "").trim() }
+                : data;
+            onSave(payload)
               .catch((e) => setError(e.message))
               .finally(() => setBusy(false));
           }}
@@ -619,6 +925,20 @@ export function EntityForm({
               )}
               {kind === "users" && (
                 <>
+                  {input(
+                    "username",
+                    "Sign-in username",
+                    "text",
+                    "ASCII letters, digits, . _ - (max 100)",
+                    {
+                      autoComplete: "off",
+                      spellCheck: false,
+                      autoCapitalize: "none",
+                      autoCorrect: "off",
+                      maxLength: 100,
+                      pattern: "[A-Za-z0-9._-]{1,100}",
+                    },
+                  )}
                   {input("note", "Note")}
                   <Field label="Expires (UTC)" hint="Empty = never">
                     <DateTimePicker

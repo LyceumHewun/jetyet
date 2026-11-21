@@ -1,8 +1,8 @@
-import { Check, Copy, ExternalLink, Link2, Terminal } from "lucide-react";
+import { Check, Copy, ExternalLink, KeyRound, Link2, Terminal } from "lucide-react";
 import { useState } from "react";
-import { when } from "../client";
+import { copyToClipboard, when } from "../client";
 import type { Row } from "../types";
-import { Badge, Button, Chip, SearchInput } from "./primitives";
+import { Badge, Button, Chip, CopyButton, SearchInput } from "./primitives";
 import { Modal } from "./workspace";
 
 export type LinkItem = {
@@ -24,7 +24,8 @@ export function SubscriptionLinksModal({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const copy = (id: string, text: string) => {
-    void navigator.clipboard.writeText(text).then(() => {
+    void copyToClipboard(text).then((ok) => {
+      if (!ok) return;
       setCopiedId(id);
       setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 2000);
     });
@@ -315,6 +316,62 @@ export function LogsModal({
           {copied ? <Check size={14} /> : <Copy size={14} />}
           {copied ? "Copied" : "Copy log"}
         </Button>
+        <Button variant="primary" onClick={onClose}>
+          Done
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+export function PasswordLinkModal({
+  userName,
+  username,
+  url,
+  expires,
+  onClose,
+}: {
+  userName: string;
+  username?: string;
+  url: string;
+  expires: number;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      title={userName}
+      tag="Portal Password Link"
+      subtitle="Single-use link for setting or replacing the subscriber's portal password."
+      onClose={onClose}
+      wide
+    >
+      <div className="modal-body">
+        <div className="link-card default">
+          <div className="link-card-head">
+            <div className="chip-group">
+              <KeyRound size={14} className="muted" />
+              <strong>{username ? `@${username}` : userName}</strong>
+              <Badge tone="good">Single-use</Badge>
+            </div>
+            <CopyButton
+              text={url}
+              label="Copy link"
+              copiedLabel="Copied"
+              variant="primary"
+              className="link-action-btn"
+            />
+          </div>
+          <div className="link-url mono">{url}</div>
+        </div>
+        <div className="chip-group">
+          <Chip mono>Expires {when(expires)}</Chip>
+          <span className="muted">
+            Generating this link invalidated any prior unused link; existing
+            password and sessions stay active until replaced.
+          </span>
+        </div>
+      </div>
+      <div className="modal-foot">
         <Button variant="primary" onClick={onClose}>
           Done
         </Button>
