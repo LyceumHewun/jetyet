@@ -9,7 +9,6 @@ import {
   t as translate,
   useLocale,
 } from "./i18n";
-import "@fontsource-variable/space-grotesk";
 import {
   Activity,
   Archive,
@@ -44,6 +43,7 @@ import {
   Actions,
   Badge,
   BrandMark,
+  BrandWordmark,
   Button,
   Chip,
   Code,
@@ -78,7 +78,7 @@ import { History } from "./history";
 import { SubscriptionPortal } from "./portal";
 import "./styles.css";
 import { alertLabel, operationLabel, probeLabel, taskLabel } from "./labels";
-import type { Row, Session, State } from "./types";
+import type { PortalData, Row, Session, State } from "./types";
 
 type AppRoute = "/" | "/portal" | "/set-password";
 
@@ -252,7 +252,6 @@ function App() {
       locale={locale}
       onChange={setLocale}
       label={translate("Language")}
-      compact
     />
   );
   useEffect(() => initDocumentScrollbars({ overflow: { x: "hidden" } }), []);
@@ -260,12 +259,12 @@ function App() {
   const [modal, setModal] = useAppView(locale);
   const [route, setRoute] = useState<AppRoute>(readRoute),
     [session, setSession] = useState<Session | null>(null),
+    [initialPortal, setInitialPortal] = useState<PortalData | null>(null),
     [checking, setChecking] = useState(() => readRoute() !== "/set-password"),
     [state, setState] = useState<State>(initial),
     [tab, setTab] = useState<(typeof tabs)[number][0]>("Infra"),
     [toast, setToast] = useState(""),
     [error, setError] = useState<UiError>(""),
-    [loading, setLoading] = useState(false),
     [search, setSearch] = useState(""),
     [expandedHost, setExpandedHost] = useState<string | null | undefined>(
       undefined,
@@ -324,9 +323,10 @@ function App() {
     if (route === "/set-password") {
       setChecking(false);
     } else {
-      api("session")
+      api(route === "/portal" ? "session?portal=1" : "session")
         .then((x) => {
           if (x?.username && x?.role) {
+            if (x.role === "subscriber") setInitialPortal(x.portal ?? null);
             setSession({ username: x.username, role: x.role });
           } else {
             setSession(null);
@@ -337,6 +337,7 @@ function App() {
     }
     const out = () => {
       setSession(null);
+      setInitialPortal(null);
       setState(initial);
       setStage(null);
       setModal(null);
@@ -368,7 +369,6 @@ function App() {
   }, [toast]);
 
   const run = async (fn: () => Promise<any>, message = "Saved") => {
-    setLoading(true);
     try {
       const result = await fn();
       await refresh();
@@ -377,8 +377,6 @@ function App() {
     } catch (e) {
       setError(asUiError(e));
       throw e;
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -620,12 +618,14 @@ function App() {
     return (
       <SubscriptionPortal
         session={session}
+        initialPortal={initialPortal}
         theme={theme}
         onToggleTheme={toggleTheme}
         languageControl={languageControl}
         onLogout={() =>
           void api("logout", "POST").then(() => {
             setSession(null);
+            setInitialPortal(null);
             setState(initial);
           })
         }
@@ -667,11 +667,6 @@ function App() {
       return "warning";
     if (node.status === "draft") return "neutral";
     return node.service ? "good" : "warning";
-  };
-
-  const worker = (name: string) => {
-    const w = state.workers.find((w) => w.name === name);
-    return w && Date.now() - w.at < 30000;
   };
 
   const hostsReachable = state.hosts.filter((h) => h.reachable).length;
@@ -727,33 +722,9 @@ function App() {
                 setTab("Infra");
               }}
             >
-              <span className="brand-symbol">
-                <BrandMark size={19} />
-              </span>
-              jetyet<span className="brand-period">.</span>
+              <BrandMark size={19} />
+              <BrandWordmark />
             </a>
-            <div
-              className="worker-pills"
-              aria-label={translate("Background workers")}
-            >
-              {(
-                [
-                  ["monitor", "MON"],
-                  ["operations", "OPS"],
-                ] as const
-              ).map(([name, short]) => (
-                <span
-                  key={name}
-                  className={
-                    "worker-pill " + (worker(name) ? "online" : "offline")
-                  }
-                  title={`${translate(name)}: ${worker(name) ? translate("Running") : translate("No heartbeat")}`}
-                >
-                  <i />
-                  {short}
-                </span>
-              ))}
-            </div>
           </div>
           <ScrollArea
             as="nav"
@@ -806,16 +777,6 @@ function App() {
               }
             >
               {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-            </Button>
-            <Button
-              variant="icon"
-              aria-label={translate("Refresh")}
-              className={loading ? "spinning" : ""}
-              disabled={loading}
-              onClick={() => void refresh()}
-              title={translate("Refresh")}
-            >
-              <RefreshCw size={15} />
             </Button>
             <button
               type="button"
@@ -871,7 +832,8 @@ function App() {
                         </Chip>
                         <Chip mono>
                           <Radio size={11} />
-                          {nodeHealthy}/{formatNumber(state.nodes.length)}
+                          {formatNumber(nodeHealthy)}/
+                          {formatNumber(state.nodes.length)}
                           {" " + translate("Nodes")}
                         </Chip>
                         <Chip mono>
@@ -1085,8 +1047,9 @@ function App() {
                                   </Button>
                                   <Actions items={hostActions} />
                                   <Button
-                                    variant="subtle"
+                                    variant="icon"
                                     onClick={() => setExpandedHost(null)}
+                                    aria-label={translate("Collapse")}
                                     title={translate("Collapse")}
                                   >
                                     <ChevronUp size={15} />
@@ -1432,8 +1395,9 @@ function App() {
                                   </Button>
                                   <Actions items={userActions} />
                                   <Button
-                                    variant="subtle"
+                                    variant="icon"
                                     onClick={() => setExpandedUser(null)}
+                                    aria-label={translate("Collapse")}
                                     title={translate("Collapse")}
                                   >
                                     <ChevronUp size={15} />

@@ -196,10 +196,8 @@ export const zhHans = {
   "Quota exhausted": "配额已用尽",
   Planned: "待部署",
   Running: "运行中",
-  "Background workers": "后台进程",
   "No heartbeat": "暂无心跳",
   "Primary navigation": "主导航",
-  Refresh: "刷新",
   "Sign out ({0})": "退出登录（{0}）",
   Dismiss: "关闭提示",
   "Filter VPS or nodes…": "筛选 VPS 或节点…",
@@ -287,9 +285,7 @@ export const zhHans = {
   "Template name is required.": "模板名称不能为空。",
   "Draft saved": "草稿已保存",
   "Personal template published": "个人模板已发布",
-  Portal: "门户",
   "Subscription Portal": "订阅门户",
-  "Refresh portal": "刷新门户",
   "Dismiss error": "关闭错误提示",
   "Loading subscription portal…": "正在加载订阅门户…",
   "Subscription expired": "订阅已过期",
@@ -346,8 +342,6 @@ export const zhHans = {
   "this template": "此模板",
   "You have unsaved edits to “{0}”. Switching to “{1}” will discard them.":
     "「{0}」有未保存的更改。切换到「{1}」将丢弃这些更改。",
-  "You have unsaved edits to “{0}”. Refreshing will discard them.":
-    "「{0}」有未保存的更改。刷新将丢弃这些更改。",
   "You have unsaved edits to “{0}”. Creating a new personal template will discard them.":
     "「{0}」有未保存的更改。创建个人模板将丢弃这些更改。",
   "Clear date": "清除日期",
@@ -372,8 +366,15 @@ export const zhHans = {
   "Select…": "请选择…",
   "No options": "暂无选项",
   "Subscription Links": "订阅链接",
-  "Personal subscription URLs. Keep private and share only with this user.":
-    "个人订阅链接。请妥善保管，仅分享给这位用户。",
+  "Keep these links private. Share them only with {0}.":
+    "请妥善保管这些链接，仅分享给 {0}。",
+  "Copy link for {0}": "复制 {0} 的链接",
+  "Uses {0}. Copy this link for your client.": "使用 {0} 模板。复制此链接到客户端。",
+  "Copy this link for your client.": "复制此链接到客户端。",
+  "Pinned link": "模板专用链接",
+  "Close editor": "关闭编辑器",
+  "Closing the editor will discard your unsaved changes.": "关闭编辑器会丢弃未保存的修改。",
+  "Redacted preview": "脱敏预览",
   "Open URL": "打开链接",
   "Filter {0} templates…": "筛选 {0} 个模板…",
   "Copied all": "已全部复制",
@@ -588,10 +589,15 @@ export const zhHans = {
     "发布前，请以所选用户的身份验证并预览此草稿",
   "Keep at least one published template so new users can be created":
     "请至少保留一个已发布模板，以便创建新用户",
-  monitor: "监控",
-  operations: "操作",
   "Validation failed. {0}": "验证失败。{0}",
   "Exp {0}": "过期时间 {0}",
+  "Quota usage": "配额用量",
+  "Counted: {0}": "计量方向：{0}",
+  "Cycle start": "周期开始",
+  "Next reset": "下次重置",
+  "Last 24 hours": "过去 24 小时",
+  "Last 24 hours ({0}{1})": "过去 24 小时（{0}{1}）",
+  "No traffic recorded in the last 24 hours.": "过去 24 小时暂无流量记录。",
 } as const;
 
 export type Message = keyof typeof zhHans;

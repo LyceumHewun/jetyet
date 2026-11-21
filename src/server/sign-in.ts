@@ -4,6 +4,7 @@ import { z } from "zod";
 import { digest, same, token } from "./crypto";
 import type { Store } from "./db";
 import { HttpError, requireOrigin } from "./errors";
+import { portalOverview } from "./routes/portal";
 
 const day = 86400000;
 const sessionDays = 7;
@@ -188,8 +189,12 @@ export function registerSignIn(app: Hono, s: Store) {
   app.get("/api/session", (c) => {
     if (isAdmin(c)) return c.json({ username: admin, role: "admin" });
     const user = sessionUser(c);
-    if (user) return c.json({ username: user.username, role: "subscriber" });
-    return c.json({ error: "Sign in required" }, 401);
+    if (!user) return c.json({ error: "Sign in required" }, 401);
+    return c.json({
+      username: user.username,
+      role: "subscriber",
+      ...(c.req.query("portal") === "1" && { portal: portalOverview(s, user) }),
+    });
   });
   app.post("/api/logout", (c) => {
     requireOrigin(c.req.raw, s.config.origin);
