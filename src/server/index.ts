@@ -11,6 +11,8 @@ const server = Bun.serve({
   maxRequestBodySize: 2 * 1024 * 1024,
   routes: {
     "/": page,
+    "/portal": page,
+    "/set-password": page,
     "/api/*": app.fetch,
     "/auth/*": app.fetch,
     "/sub/*": app.fetch,

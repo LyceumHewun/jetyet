@@ -3,6 +3,7 @@ export { InlineTelemetry } from "./InlineTelemetry";
 export {
   DriftModal,
   LogsModal,
+  PasswordLinkModal,
   SubscriptionLinksModal,
   type LinkItem,
 } from "./inspectors";
@@ -13,6 +14,7 @@ export {
   Checkbox,
   Chip,
   ChipPicker,
+  CopyButton,
   Field,
   Input,
   SearchInput,

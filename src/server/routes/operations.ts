@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { strip } from "../db";
+import { revokePortalAccess } from "../sign-in";
 import { enqueue, kickUser } from "../tasks";
 import type { Routes } from "./context";
 
@@ -41,6 +42,8 @@ export function registerOperationsRoutes({
       .transaction(() => {
         if (e.kind === "user") {
           s.db.query("UPDATE entities SET deleted=1 WHERE id=?").run(e.id);
+          revokePortalAccess(s, e.id);
+          s.db.query("DELETE FROM portal_passwords WHERE user=?").run(e.id);
           kickUser(s, e.id);
           s.event(e.id, "deletion.requested", {});
         } else {

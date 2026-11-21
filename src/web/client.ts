@@ -86,6 +86,35 @@ export function canTransitionDisplay(): boolean {
   return supportsDisplayTransition;
 }
 
+export function legacyCopy(text: string): boolean {
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.setAttribute("readonly", "");
+  field.style.cssText =
+    "position:fixed;inset-block-start:0;inset-inline-start:0;opacity:0;pointer-events:none;";
+  document.body.append(field);
+  field.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    field.remove();
+  }
+}
+
+export async function copyToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return legacyCopy(text);
+    }
+  }
+  return legacyCopy(text);
+}
+
 export function supportsTopLayerExit(): boolean {
   return (
     typeof window !== "undefined" &&

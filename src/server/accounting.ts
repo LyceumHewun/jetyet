@@ -275,6 +275,8 @@ export function retention(s: Store) {
         .query("DELETE FROM alerts WHERE closed IS NOT NULL AND closed<?")
         .run(now - 90 * 86400000);
       s.db.query("DELETE FROM sessions WHERE expires<?").run(now);
+      s.db.query("DELETE FROM portal_sessions WHERE expires<?").run(now);
+      s.db.query("DELETE FROM portal_password_links WHERE expires<?").run(now);
       s.db.query("DELETE FROM login_limits WHERE reset<?").run(now);
     })
     .immediate();

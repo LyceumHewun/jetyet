@@ -22,9 +22,18 @@ A managed source of VPN client configurations published in supported output form
 **Subscription Template**:
 A customizable definition of a complete VPN client configuration, rendered with platform-generated user-specific node data.
 
+**Personal Template**:
+A **Subscription Template** created by a **Subscription User** for their own subscription.
+
 **Subscription User**:
 A VPN service recipient with an individual subscription link and a configurable traffic allowance.
 _Avoid_: Administrator, registered account, subscription child user.
+
+**Subscription Portal**:
+A standalone page where a **Subscription User** can choose subscription links and create or preview templates.
+
+**Portal Password Link**:
+A single-use link that lets one **Subscription User** set or replace their **Subscription Portal** password.
 
 **Traffic Allowance**:
 The maximum counted traffic a VPS or Subscription User may consume in its current accounting period before the corresponding VPN access is suspended.
@@ -51,11 +60,20 @@ The proportion of expected reachability observations actually performed during a
 - **Subscription Templates** define how **Subscriptions** are rendered.
 - Friends access VPN client configurations through subscription links provided by the administrator.
 - Administrators can create **Subscription Users** without requiring recipients to register.
+- Administrators sign in to the management interface, and **Subscription Users** sign in to the **Subscription Portal**.
+- The shared sign-in page asks for a username first and shows the same password step for everyone. A valid **Portal Password Link** opens the password-setting form.
+- The shared sign-in page asks for a username first, then shows the same password step and first-time or forgotten-password guidance for everyone. Setting a password requires a valid **Portal Password Link**.
+- Each **Subscription User** has an administrator-assigned sign-in username that is independent of their display name. Sign-in usernames are case-insensitive and unique across administrators and subscription users.
+- Administrators issue **Portal Password Links**. **Subscription Users** use the same flow to set their first portal password or replace it.
+- A **Portal Password Link** expires after 24 hours. Issuing a new link for the same **Subscription User** invalidates the previous link.
+- Issuing a **Portal Password Link** preserves the current password and portal sessions. Successfully replacing the password invalidates the previous password and all existing portal sessions.
+- **Portal Password Links** and subscription links are separate credentials. Subscription links grant access to VPN client configurations only.
 - Each **Subscription User** has an individual subscription link and a configurable traffic allowance.
 - A **Subscription User** may have an unlimited allowance: traffic is still recorded, but user-level quota exhaustion does not suspend access; VPS allowances, node authorization, and administrator suspension still apply.
 - A **VPS** may have an unlimited allowance: host traffic is still recorded, but VPS-level quota exhaustion does not suspend its nodes; user allowances remain independently enforced.
 - **Subscription Users** may have an expiration time and default to never expiring.
 - Expiration blocks subscription retrieval and VPN access while retaining configuration and history.
+- Expired **Subscription Users** can still sign in to the **Subscription Portal**.
 - Extending validity removes the expiration restriction but does not override allowances, administrator suspension, or other access restrictions.
 - User quota exhaustion alone does not block subscription retrieval: output retains otherwise eligible authorized nodes and exposes usage information while VPN access remains suspended.
 - Administrator suspension and expiration still block subscription retrieval; a quota reset does not require adding a new subscription link.
@@ -182,11 +200,17 @@ The proportion of expected reachability observations actually performed during a
 - Client compatibility validation belongs to template authoring. Subscription retrieval renders the published template with current node authorizations and credentials, checks the generated structure, and returns an error if it cannot produce a structurally valid configuration.
 - Multiple **Subscription Templates** may target the same output format.
 - Administrators assign each **Subscription User** a set of available templates and a default template.
+- **Personal Templates** are available only to their creators for editing, preview, and subscription output. They are separate from administrator-assigned templates.
+- A new **Personal Template** starts as an independent draft copied from the selected published template. Later changes to the source do not affect the copy.
+- **Subscription Users** can save incomplete **Personal Template** drafts and publish them after a redacted preview and successful validation. A draft or failed publication leaves the last published version active.
+- **Subscription Portal** previews hide real credentials, links containing credentials, and node names, addresses, and ports. Placeholder node data preserves group and routing relationships.
+- Selecting a template in the **Subscription Portal** changes the current preview and template-specific link. The default subscription link continues to use the administrator-assigned default template.
 - Users obtain configurations through the corresponding subscription links; selecting a template does not alter node authorization or traffic allowances.
 - Temporarily unreachable or unhealthy nodes remain in subscription output; the platform displays their health state.
 - Administrator-disabled nodes and nodes no longer authorized for a user are excluded from that user's subscription output.
 - Retaining a node in subscription output does not bypass quota suspensions or other access restrictions.
 - Administrator suspension of a **Subscription User** blocks subscription retrieval and disables all of that user's VPN credentials while preserving configuration and usage history.
+- Administrator suspension also blocks sign-in and access to the **Subscription Portal**, including access through existing sessions.
 - Re-enabling a user restores access only where user allowances, VPS allowances, and node authorization permit it.
 
 ## Example dialogue

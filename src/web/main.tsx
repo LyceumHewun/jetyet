@@ -9,6 +9,7 @@ import {
   ChevronUp,
   Clock,
   FileCode2,
+  KeyRound,
   Link2,
   LogOut,
   Moon,
@@ -41,6 +42,7 @@ import {
   InlineTelemetry,
   LogsModal,
   MiniBar,
+  PasswordLinkModal,
   QuotaBar,
   SearchInput,
   SegmentedControl,
@@ -55,11 +57,28 @@ import {
   ForceRemove,
   Login,
   OperationForm,
+  SetPassword,
   TemplateEditor,
 } from "./forms";
 import { History } from "./history";
+import { SubscriptionPortal } from "./portal";
 import "./styles.css";
-import type { Row, State } from "./types";
+import type { Row, Session, State } from "./types";
+
+type AppRoute = "/" | "/portal" | "/set-password";
+
+function readRoute(): AppRoute {
+  const path = window.location.pathname.replace(/\/+$/, "") || "/";
+  if (path === "/portal") return "/portal";
+  if (path === "/set-password") return "/set-password";
+  return "/";
+}
+
+function replaceRoute(to: AppRoute) {
+  if (readRoute() !== to || window.location.hash) {
+    window.history.replaceState(null, "", to);
+  }
+}
 
 const initial: State = {
   hosts: [],
@@ -173,8 +192,9 @@ function ArchiveView({
 }
 
 function App() {
-  const [session, setSession] = useState<string | null>(null),
-    [checking, setChecking] = useState(true),
+  const [route, setRoute] = useState<AppRoute>(readRoute),
+    [session, setSession] = useState<Session | null>(null),
+    [checking, setChecking] = useState(() => readRoute() !== "/set-password"),
     [state, setState] = useState<State>(initial),
     [tab, setTab] = useState("Infra"),
     [stage, setStage] = useState<ReactNode>(null),
@@ -219,12 +239,29 @@ function App() {
   };
 
   useEffect(() => {
-    api("session")
-      .then((x) => setSession(x.username))
-      .catch(() => {})
-      .finally(() => setChecking(false));
+    const onPop = () => setRoute(readRoute());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  useEffect(() => {
+    if (route === "/set-password") {
+      setChecking(false);
+    } else {
+      api("session")
+        .then((x) => {
+          if (x?.username && x?.role) {
+            setSession({ username: x.username, role: x.role });
+          } else {
+            setSession(null);
+          }
+        })
+        .catch(() => {})
+        .finally(() => setChecking(false));
+    }
     const out = () => {
       setSession(null);
+      setState(initial);
       setStage(null);
       setModal(null);
     };
@@ -233,11 +270,20 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session || route === "/set-password") return;
+    const target: AppRoute = session.role === "admin" ? "/" : "/portal";
+    if (route !== target) {
+      replaceRoute(target);
+      setRoute(target);
+    }
+  }, [session, route]);
+
+  useEffect(() => {
+    if (!session || session.role !== "admin" || route !== "/") return;
     void refresh();
     const id = setInterval(refresh, 10000);
     return () => clearInterval(id);
-  }, [session]);
+  }, [session, route]);
 
   useEffect(() => {
     if (!toast) return;
@@ -345,6 +391,26 @@ function App() {
     }
   };
 
+  const passwordLink = async (u: Row) => {
+    try {
+      const data = (await api(`users/${u.id}/password-link`, "POST")) as {
+        url: string;
+        expires: number;
+      };
+      setModal(
+        <PasswordLinkModal
+          userName={u.name}
+          username={u.username}
+          url={data.url}
+          expires={data.expires}
+          onClose={() => setModal(null)}
+        />,
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
   const trust = async (h: Row) => {
     try {
       const result = await api(`hosts/${h.id}/fingerprint`, "POST");
@@ -433,21 +499,58 @@ function App() {
       )
       .catch((e) => setError(e.message));
 
+  if (route === "/set-password") {
+    return (
+      <SetPassword
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        onSuccess={(s) => {
+          setSession(s);
+          replaceRoute("/portal");
+          setRoute("/portal");
+        }}
+        onBackToSignIn={() => {
+          replaceRoute("/");
+          setRoute("/");
+        }}
+      />
+    );
+  }
   if (checking) return <div className="loading">Loading Jetyet…</div>;
   if (!session)
     return (
       <Login
-        onLogin={setSession}
+        onLogin={(s) => {
+          setSession(s);
+          const target: AppRoute = s.role === "admin" ? "/" : "/portal";
+          replaceRoute(target);
+          setRoute(target);
+        }}
         theme={theme}
         onToggleTheme={toggleTheme}
       />
     );
+  if (session.role === "subscriber") {
+    return (
+      <SubscriptionPortal
+        session={session}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        onLogout={() =>
+          void api("logout", "POST").then(() => {
+            setSession(null);
+            setState(initial);
+          })
+        }
+      />
+    );
+  }
 
   const visible = (list: Row[]) => {
     const q = search.trim().toLowerCase();
     if (!q) return list;
     return list.filter((r) =>
-      [r.name, r.address, r.note, r.kind, r.message, r.code]
+      [r.name, r.username, r.address, r.note, r.kind, r.message, r.code]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
@@ -618,11 +721,16 @@ function App() {
               type="button"
               className="account-chip"
               onClick={() =>
-                void api("logout", "POST").then(() => setSession(null))
+                void api("logout", "POST").then(() => {
+                  setSession(null);
+                  setState(initial);
+                })
               }
-              title={`Sign out (${session})`}
+              title={`Sign out (${session.username})`}
             >
-              <span className="avatar">{session[0]?.toUpperCase()}</span>
+              <span className="avatar">
+                {session.username[0]?.toUpperCase()}
+              </span>
               <LogOut size={14} />
             </button>
           </div>
@@ -1097,6 +1205,7 @@ function App() {
                         const userActions: [string, () => void][] = [
                           ["Edit", () => save("users", u)],
                           ["Subscription links", () => void links(u)],
+                          ["Portal password link", () => void passwordLink(u)],
                           ["Full telemetry", () => history(u)],
                           ["Reset usage", () => reset(u)],
                           ...(["subscription", "vpn", "both"] as const).map(
@@ -1155,6 +1264,9 @@ function App() {
                                     {u.name[0]?.toUpperCase()}
                                   </span>
                                   <h2>{u.name}</h2>
+                                  {u.username && (
+                                    <Chip mono>@{u.username}</Chip>
+                                  )}
                                   {u.note && (
                                     <span className="muted">{u.note}</span>
                                   )}
@@ -1183,6 +1295,10 @@ function App() {
                                   >
                                     <Link2 size={14} />
                                     Links
+                                  </Button>
+                                  <Button onClick={() => void passwordLink(u)}>
+                                    <KeyRound size={14} />
+                                    Password link
                                   </Button>
                                   <Button onClick={() => save("users", u)}>
                                     Edit
@@ -1287,7 +1403,11 @@ function App() {
                                 <strong className="compact-name">
                                   {u.name}
                                 </strong>
-                                <small>{u.note || "—"}</small>
+                                <small>
+                                  {u.username
+                                    ? `@${u.username}${u.note ? ` · ${u.note}` : ""}`
+                                    : u.note || "—"}
+                                </small>
                               </div>
                               <Badge tone={statusTone}>{statusLabel}</Badge>
                               <Button

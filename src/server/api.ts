@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import {
   exhausted,
@@ -8,9 +7,11 @@ import {
   usage,
   userAllowed,
 } from "./accounting";
-import { digest, same, token } from "./crypto";
+import { digest, same } from "./crypto";
 import { type Entity, type Store } from "./db";
-import { safeError } from "./errors";
+import { HttpError, requireOrigin, safeError } from "./errors";
+import { registerSignIn } from "./sign-in";
+import { registerPortalRoutes, subscriptionTemplate } from "./routes/portal";
 import { registerAccountingRoutes } from "./routes/accounting";
 import { registerHostsRoutes } from "./routes/hosts";
 import { registerNodesRoutes } from "./routes/nodes";
@@ -22,9 +23,6 @@ import { render, seedTemplate, validateMihomo } from "./templates";
 export function createApp(s: Store) {
   seedTemplate(s);
   const app = new Hono();
-  const sessionVersion = digest(
-    s.config.admin.username + ":" + s.config.admin.passwordHash,
-  );
   const entity = (id: string, kind?: string) => {
     const e = s.get(id);
     if (!e || e.deleted || (kind && e.kind !== kind))
@@ -45,7 +43,11 @@ export function createApp(s: Store) {
       return c.json({ error: "Invalid JSON payload" }, 400);
     if (err instanceof HttpError)
       return c.json({ error: err.message }, err.status as 400);
-    if (!c.req.path.startsWith("/api/") || c.req.path === "/api/login")
+    if (
+      !c.req.path.startsWith("/api/") ||
+      c.req.path === "/api/login" ||
+      c.req.path.startsWith("/api/portal")
+    )
       return c.json({ error: "Internal server error" }, 500);
     // Remote output can contain secrets. Do not return raw command exceptions.
     return c.json(
@@ -61,64 +63,8 @@ export function createApp(s: Store) {
     c.header("Cache-Control", "no-store");
     await next();
   });
-  app.post("/api/login", async (c) => {
-    requireOrigin(c.req.raw, s.config.origin);
-    const isLoopback = ["127.0.0.1", "::1", "localhost"].includes(
-      s.config.listen,
-    );
-    const key = digest(
-      isLoopback ? c.req.header("x-real-ip") || "local" : "direct",
-    );
-    const globalKey = digest("__global__");
-    const now = Date.now();
-    const limit = s.db
-      .query<{ attempts: number; reset: number }, [string]>(
-        "SELECT * FROM login_limits WHERE key=?",
-      )
-      .get(key);
-    const globalLimit = s.db
-      .query<{ attempts: number; reset: number }, [string]>(
-        "SELECT * FROM login_limits WHERE key=?",
-      )
-      .get(globalKey);
-    if (
-      (limit && limit.reset > now && limit.attempts >= 10) ||
-      (globalLimit && globalLimit.reset > now && globalLimit.attempts >= 50)
-    )
-      return c.json({ error: "Too many attempts. Retry in 15 minutes." }, 429);
-    const { username, password } = z
-      .object({ username: z.string().max(100), password: z.string().max(1000) })
-      .parse(await c.req.json());
-    const bumpLimit = (k: string) =>
-      s.db
-        .query(
-          "INSERT INTO login_limits VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN reset<? THEN 1 ELSE attempts+1 END,reset=CASE WHEN reset<? THEN excluded.reset ELSE reset END",
-        )
-        .run(k, now + 900000, now, now);
-    bumpLimit(key);
-    const valid = await Bun.password.verify(
-      password,
-      s.config.admin.passwordHash!,
-    );
-    if (!same(username, s.config.admin.username) || !valid) {
-      bumpLimit(globalKey);
-      return c.json({ error: "Invalid username or password" }, 401);
-    }
-    s.db.query("DELETE FROM login_limits WHERE key=?").run(key);
-    const t = token(),
-      expires = now + 7 * 86400000;
-    s.db
-      .query("INSERT INTO sessions VALUES(?,?,?)")
-      .run(digest(t), sessionVersion, expires);
-    setCookie(c, "jetyet", t, {
-      httpOnly: true,
-      secure: new URL(s.config.origin).protocol === "https:",
-      sameSite: "Strict",
-      path: "/",
-      maxAge: 7 * 86400,
-    });
-    return c.json({ username });
-  });
+  const { isAdmin, sessionUser } = registerSignIn(app, s);
+  registerPortalRoutes(app, s, sessionUser);
   app.post("/auth/hysteria/:node/:secret", async (c) => {
     const n = s.get(c.req.param("node"));
     if (
@@ -189,10 +135,8 @@ export function createApp(s: Store) {
       return c.text("Subscription unavailable", 403);
     refreshPeriods(s);
     const id = c.req.query("template") || u.defaultTemplate;
-    if (!u.templateIds.includes(id)) return c.text("Template unavailable", 403);
-    const template = s.get(id);
-    if (!template || template.deleted || !template.published)
-      return c.text("Template unavailable", 404);
+    const template = subscriptionTemplate(s, u, id);
+    if (!template) return c.text("Template unavailable", 403);
     let text: string;
     try {
       text = render(s, u, template.body);
@@ -213,32 +157,11 @@ export function createApp(s: Store) {
     return c.body(text);
   });
   app.use("/api/*", async (c, next) => {
-    const t = getCookie(c, "jetyet");
-    const session = t
-      ? s.db
-          .query<{ version: string; expires: number }, [string]>(
-            "SELECT * FROM sessions WHERE hash=?",
-          )
-          .get(digest(t))
-      : null;
-    if (
-      !session ||
-      session.expires < Date.now() ||
-      session.version !== sessionVersion
-    )
-      return c.json({ error: "Sign in required" }, 401);
+    if (!isAdmin(c)) return c.json({ error: "Sign in required" }, 401);
     if (!["GET", "HEAD"].includes(c.req.method))
       requireOrigin(c.req.raw, s.config.origin);
     refreshPeriods(s);
     await next();
-  });
-  app.get("/api/session", (c) => c.json({ username: s.config.admin.username }));
-  app.post("/api/logout", (c) => {
-    s.db
-      .query("DELETE FROM sessions WHERE hash=?")
-      .run(digest(getCookie(c, "jetyet") || ""));
-    deleteCookie(c, "jetyet", { path: "/" });
-    return c.json({ ok: true });
   });
   const view = (e: Entity) => {
     if (!["host", "user"].includes(e.kind)) return { ...e };
@@ -322,16 +245,4 @@ export function createApp(s: Store) {
   registerTemplatesRoutes({ app, s, entity, view, checked });
   registerOperationsRoutes({ app, s, entity, view, checked });
   return app;
-}
-export class HttpError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-function requireOrigin(req: Request, origin: string) {
-  if (req.headers.get("origin") !== new URL(origin).origin)
-    throw new HttpError(403, "Request origin mismatch");
 }

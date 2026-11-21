@@ -1,4 +1,18 @@
 import type { Store } from "./db";
+
+export class HttpError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export function requireOrigin(req: Request, origin: string) {
+  if (req.headers.get("origin") !== new URL(origin).origin)
+    throw new HttpError(403, "Request origin mismatch");
+}
 export function safeError(s: Store, error: unknown) {
   let message = error instanceof Error ? error.message : "Operation failed";
   const rows = s.db

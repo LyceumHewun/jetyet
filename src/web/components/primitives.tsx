@@ -1,11 +1,14 @@
-import { Check, Eye, EyeOff, Search, X } from "lucide-react";
+import { Check, Copy, Eye, EyeOff, Search, X } from "lucide-react";
 import {
+  useEffect,
+  useRef,
   useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
   type TextareaHTMLAttributes,
 } from "react";
+import { copyToClipboard } from "../client";
 
 export type ButtonVariant =
   | "default"
@@ -123,19 +126,110 @@ export function SearchInput({
 
 export function Field({
   label,
+  htmlFor,
   children,
   hint,
+  hintAbove = false,
+  hintId,
 }: {
   label: string;
+  htmlFor?: string;
   children: ReactNode;
   hint?: string;
+  hintAbove?: boolean;
+  hintId?: string;
 }) {
   return (
     <div className="field">
-      <span className="field-label">{label}</span>
+      {htmlFor ? (
+        <label htmlFor={htmlFor} className="field-label">
+          {label}
+        </label>
+      ) : (
+        <span className="field-label">{label}</span>
+      )}
+      {hint && hintAbove && (
+        <small id={hintId} className="field-hint">
+          {hint}
+        </small>
+      )}
       {children}
-      {hint && <small>{hint}</small>}
+      {hint && !hintAbove && (
+        <small id={hintId} className="field-hint">
+          {hint}
+        </small>
+      )}
     </div>
+  );
+}
+
+let lastCopyAnnouncement = "";
+
+export function CopyButton({
+  text,
+  label = "Copy",
+  copiedLabel = "Copied",
+  ariaLabel,
+  variant = "subtle",
+  className = "",
+}: {
+  text: string;
+  label?: string;
+  copiedLabel?: string;
+  ariaLabel?: string;
+  variant?: ButtonVariant;
+  className?: string;
+}) {
+  const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
+  const [announcement, setAnnouncement] = useState("");
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const handleCopy = async () => {
+    const ok = await copyToClipboard(text);
+    const nextStatus = ok ? "copied" : "failed";
+    setStatus(nextStatus);
+    let msg = ok ? copiedLabel : "Copy failed";
+    if (msg === lastCopyAnnouncement) msg += "\u00A0";
+    lastCopyAnnouncement = msg;
+    setAnnouncement(msg);
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => {
+      setStatus("idle");
+      setAnnouncement("");
+    }, 2000);
+  };
+
+  return (
+    <span className="copy-wrap">
+      <Button
+        variant={status === "copied" ? "primary" : variant}
+        className={["copy-btn", className].filter(Boolean).join(" ")}
+        aria-label={ariaLabel}
+        onClick={() => void handleCopy()}
+      >
+        {status === "copied" ? (
+          <Check size={13} aria-hidden="true" />
+        ) : (
+          <Copy size={13} aria-hidden="true" />
+        )}
+        <span>
+          {status === "copied"
+            ? copiedLabel
+            : status === "failed"
+              ? "Failed"
+              : label}
+        </span>
+      </Button>
+      <span className="visually-hidden" role="status">
+        {announcement}
+      </span>
+    </span>
   );
 }
 

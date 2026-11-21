@@ -24,6 +24,7 @@
 - Serve the management interface and subscription download endpoints under one domain over HTTPS, terminated by a reverse proxy.
 - Management and subscription HTTPS use a normally validated certificate; the self-signed, verification-skipping policy applies only to VPN node connections.
 - Administrator credentials are configured in a local configuration file.
+- Setup prompts for the administrator username. Change it later through `admin.username` and restart Web. Usernames are case-insensitive, and Web rejects conflicts with subscription usernames.
 - An administrator can supply a new password as plaintext in that file; after a successful application startup processes it, the application replaces the plaintext with a protected representation.
 - Store passwords as irreversible password hashes, not reversible ciphertext.
 - Configuration uses `password` for a newly supplied plaintext password and `passwordHash` for the stored hash. Supplying `password` requests initial setup or a password change and replaces any previous hash.
@@ -31,6 +32,10 @@
 - If the updated configuration cannot be persisted, stop startup rather than continue with plaintext remaining in the configuration.
 - Administrator password changes invalidate all existing login sessions.
 - Login sessions expire after 7 days and support explicit logout.
+- Set a sign-in username on each existing subscription user to enable portal onboarding. Create a password link in the management interface and send it to the intended recipient. The same action issues reset links.
+- Portal password links are single-use and expire after 24 hours. Issuing a new link invalidates the previous link. Completing a reset revokes previous portal sessions.
+- Treat assigned subscription template source as shareable with its recipients. Supply live VPN credentials through generated node data and keep secrets out of template literals.
+- Personal template preview and publication validate YAML structure and routing policies using simulated node data. Reference managed nodes through the template's generated collections.
 - Encrypt SSH passwords, SSH private keys, and VPN credentials before storing them in SQLite.
 - Supply the encryption master key through the configuration file; do not store it in the database. Startup requires the key.
 - Keep database backups and the encryption master key separately; administrator passwords remain irreversible hashes rather than encrypted credentials.

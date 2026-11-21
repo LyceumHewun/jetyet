@@ -1,6 +1,7 @@
 import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { z } from "zod";
+import { usernameSchema } from "../shared/schemas";
 const schema = z.object({
   origin: z.url(),
   listen: z.string().default("127.0.0.1"),
@@ -8,7 +9,7 @@ const schema = z.object({
   database: z.string().default("./data/jetyet.sqlite"),
   masterKey: z.string().regex(/^[a-f0-9]{64}$/i),
   admin: z.object({
-    username: z.string().min(1),
+    username: usernameSchema,
     password: z.string().min(12).optional(),
     passwordHash: z.string().optional(),
   }),
