@@ -1,4 +1,13 @@
-import { Check, Copy, ExternalLink, KeyRound, Link2, Terminal } from "lucide-react";
+import { ScrollArea } from "./Scrollbars";
+import { t as translate } from "../i18n";
+import {
+  Check,
+  Copy,
+  ExternalLink,
+  KeyRound,
+  Link2,
+  Terminal,
+} from "lucide-react";
 import { useState } from "react";
 import { copyToClipboard, when } from "../client";
 import type { Row } from "../types";
@@ -45,19 +54,21 @@ export function SubscriptionLinksModal({
   return (
     <Modal
       title={userName}
-      tag="Subscription Links"
-      subtitle="Personal subscription URLs. Keep private and share only with this user."
+      tag={translate("Subscription Links")}
+      subtitle={translate(
+        "Personal subscription URLs. Keep private and share only with this user.",
+      )}
       onClose={onClose}
       wide
     >
-      <div className="modal-body">
+      <ScrollArea axis="y" className="modal-body">
         {defaultItem && (
           <div className="link-card default">
             <div className="link-card-head">
               <div className="chip-group">
                 <Link2 size={14} className="muted" />
                 <strong>{defaultItem.label}</strong>
-                <Badge tone="good">Default</Badge>
+                <Badge tone="good">{translate("Default")}</Badge>
               </div>
               <div className="link-card-actions">
                 <Button
@@ -70,21 +81,25 @@ export function SubscriptionLinksModal({
                   ) : (
                     <Copy size={13} />
                   )}
-                  {copiedId === defaultItem.id ? "Copied" : "Copy"}
+                  {copiedId === defaultItem.id
+                    ? translate("Copied")
+                    : translate("Copy")}
                 </Button>
                 <a
                   href={defaultItem.url}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="icon-button link-open-btn"
-                  title="Open URL"
-                  aria-label="Open default subscription"
+                  title={translate("Open URL")}
+                  aria-label={translate("Open default subscription")}
                 >
                   <ExternalLink size={14} />
                 </a>
               </div>
             </div>
-            <div className="link-url mono">{defaultItem.url}</div>
+            <ScrollArea axis="x" className="link-url mono">
+              {defaultItem.url}
+            </ScrollArea>
           </div>
         )}
 
@@ -92,7 +107,7 @@ export function SubscriptionLinksModal({
           <div className="link-templates-block">
             <div className="link-templates-bar">
               <div className="chip-group">
-                <span className="kpi-label">TEMPLATES</span>
+                <span className="kpi-label">{translate("TEMPLATES")}</span>
                 <Chip mono>
                   {q
                     ? `${filtered.length}/${templateItems.length}`
@@ -103,11 +118,14 @@ export function SubscriptionLinksModal({
                 <SearchInput
                   value={query}
                   onChange={setQuery}
-                  placeholder={`Filter ${templateItems.length} templates…`}
+                  placeholder={translate(
+                    "Filter {0} templates…",
+                    templateItems.length,
+                  )}
                 />
               )}
             </div>
-            <div className="link-compact-list">
+            <ScrollArea axis="y" className="link-compact-list">
               {filtered.length ? (
                 filtered.map((item) => {
                   const done = copiedId === item.id;
@@ -126,15 +144,15 @@ export function SubscriptionLinksModal({
                           onClick={() => copy(item.id, item.url)}
                         >
                           {done ? <Check size={13} /> : <Copy size={13} />}
-                          {done ? "Copied" : "Copy"}
+                          {done ? translate("Copied") : translate("Copy")}
                         </Button>
                         <a
                           href={item.url}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="icon-button link-open-btn"
-                          title="Open URL"
-                          aria-label={`Open ${item.label}`}
+                          title={translate("Open URL")}
+                          aria-label={translate("Open {0}", item.label)}
                         >
                           <ExternalLink size={14} />
                         </a>
@@ -144,20 +162,22 @@ export function SubscriptionLinksModal({
                 })
               ) : (
                 <div className="diff-empty muted">
-                  No templates matching “{query}”.
+                  {translate("No templates matching “{0}”.", query)}
                 </div>
               )}
-            </div>
+            </ScrollArea>
           </div>
         )}
-      </div>
+      </ScrollArea>
       <div className="modal-foot">
         <Button onClick={() => copy("__all__", allText)}>
           {copiedId === "__all__" ? <Check size={14} /> : <Copy size={14} />}
-          {copiedId === "__all__" ? "Copied all" : `Copy all (${items.length})`}
+          {copiedId === "__all__"
+            ? translate("Copied all")
+            : translate("Copy all ({0})", items.length)}
         </Button>
         <Button variant="primary" onClick={onClose}>
-          Done
+          {translate("Done")}
         </Button>
       </div>
     </Modal>
@@ -190,27 +210,31 @@ export function DriftModal({
   return (
     <Modal
       title={nodeName}
-      tag="Config Drift"
+      tag={translate("Config Drift")}
       subtitle={
         !observed
-          ? "No remote observation captured yet."
+          ? translate("No remote observation captured yet.")
           : diffCount === 0
-            ? "Remote configuration matches platform state."
-            : `${diffCount} line${diffCount > 1 ? "s" : ""} differ between platform and remote (credentials redacted).`
+            ? translate("Remote configuration matches platform state.")
+            : translate(
+                "{0} differing lines between platform and remote. Credentials are redacted.",
+                diffCount,
+              )
       }
       onClose={onClose}
       wide
     >
-      <div className="modal-body">
+      <ScrollArea axis="y" className="modal-body">
         <div className="diff-grid">
           <div className="diff-pane">
             <div className="diff-pane-head">
-              <Chip className="accent-chip">Platform · Desired</Chip>
+              <Chip className="accent-chip">
+                {translate("Platform · Desired")}
+              </Chip>
             </div>
-            <div className="diff-lines mono">
+            <ScrollArea axis="x" className="diff-lines mono">
               {desiredLines.map((line, i) => {
-                const changed =
-                  !!observed && (observedLines[i] ?? "") !== line;
+                const changed = !!observed && (observedLines[i] ?? "") !== line;
                 return (
                   <div
                     key={i}
@@ -221,14 +245,18 @@ export function DriftModal({
                   </div>
                 );
               })}
-            </div>
+            </ScrollArea>
           </div>
           <div className="diff-pane">
             <div className="diff-pane-head">
-              <Chip>{observed ? "Remote · Observed" : "Remote · None"}</Chip>
+              <Chip>
+                {observed
+                  ? translate("Remote · Observed")
+                  : translate("Remote · None")}
+              </Chip>
             </div>
             {observed ? (
-              <div className="diff-lines mono">
+              <ScrollArea axis="x" className="diff-lines mono">
                 {observedLines.map((line, i) => {
                   const changed = (desiredLines[i] ?? "") !== line;
                   return (
@@ -241,13 +269,15 @@ export function DriftModal({
                     </div>
                   );
                 })}
-              </div>
+              </ScrollArea>
             ) : (
-              <div className="diff-empty muted">No remote observation yet.</div>
+              <div className="diff-empty muted">
+                {translate("No remote observation yet.")}
+              </div>
             )}
           </div>
         </div>
-      </div>
+      </ScrollArea>
       <div className="modal-foot">
         <Button
           onClick={() =>
@@ -259,15 +289,18 @@ export function DriftModal({
           }
         >
           {copied ? <Check size={14} /> : <Copy size={14} />}
-          {copied ? "Copied" : "Copy diff"}
+          {copied ? translate("Copied") : translate("Copy diff")}
         </Button>
         {onReapply && diffCount > 0 && (
           <Button variant="primary" onClick={onReapply}>
-            Reapply config
+            {translate("Reapply config")}
           </Button>
         )}
-        <Button variant={onReapply && diffCount > 0 ? "default" : "primary"} onClick={onClose}>
-          Done
+        <Button
+          variant={onReapply && diffCount > 0 ? "default" : "primary"}
+          onClick={onClose}
+        >
+          {translate("Done")}
         </Button>
       </div>
     </Modal>
@@ -286,15 +319,22 @@ export function LogsModal({
   const [copied, setCopied] = useState(false);
   const raw =
     logs.map((l) => `${when(l.at)}  ${l.message}`).join("\n") ||
-    "No detailed log recorded.";
+    translate("No detailed log recorded.");
   return (
-    <Modal title={title} tag="Execution Log" onClose={onClose} wide>
-      <div className="modal-body">
+    <Modal
+      title={title}
+      tag={translate("Execution Log")}
+      onClose={onClose}
+      wide
+    >
+      <ScrollArea axis="y" className="modal-body">
         {logs.length ? (
           <div className="log-timeline mono">
             {logs.map((l, idx) => (
               <div className="log-entry" key={idx}>
-                <span className="log-idx">{String(idx + 1).padStart(2, "0")}</span>
+                <span className="log-idx">
+                  {String(idx + 1).padStart(2, "0")}
+                </span>
                 <span className="log-ts">{when(l.at)}</span>
                 <span className="log-msg">{l.message}</span>
               </div>
@@ -303,10 +343,10 @@ export function LogsModal({
         ) : (
           <div className="diff-empty muted">
             <Terminal size={18} />
-            <span>No detailed log recorded.</span>
+            <span>{translate("No detailed log recorded.")}</span>
           </div>
         )}
-      </div>
+      </ScrollArea>
       <div className="modal-foot">
         <Button
           onClick={() =>
@@ -314,10 +354,10 @@ export function LogsModal({
           }
         >
           {copied ? <Check size={14} /> : <Copy size={14} />}
-          {copied ? "Copied" : "Copy log"}
+          {copied ? translate("Copied") : translate("Copy log")}
         </Button>
         <Button variant="primary" onClick={onClose}>
-          Done
+          {translate("Done")}
         </Button>
       </div>
     </Modal>
@@ -340,40 +380,48 @@ export function PasswordLinkModal({
   return (
     <Modal
       title={userName}
-      tag="Portal Password Link"
-      subtitle="Single-use link for setting or replacing the subscriber's portal password."
+      tag={translate("Portal Password Link")}
+      subtitle={translate(
+        "Single-use link for setting or replacing the subscriber's portal password.",
+      )}
       onClose={onClose}
       wide
     >
-      <div className="modal-body">
+      <ScrollArea axis="y" className="modal-body">
         <div className="link-card default">
           <div className="link-card-head">
             <div className="chip-group">
               <KeyRound size={14} className="muted" />
               <strong>{username ? `@${username}` : userName}</strong>
-              <Badge tone="good">Single-use</Badge>
+              <Badge tone="good">{translate("Single-use")}</Badge>
             </div>
             <CopyButton
               text={url}
-              label="Copy link"
-              copiedLabel="Copied"
+              label={translate("Copy link")}
+              copiedLabel={translate("Copied")}
               variant="primary"
               className="link-action-btn"
             />
           </div>
-          <div className="link-url mono">{url}</div>
+          <ScrollArea axis="x" className="link-url mono">
+            {url}
+          </ScrollArea>
         </div>
         <div className="chip-group">
-          <Chip mono>Expires {when(expires)}</Chip>
+          <Chip mono>
+            {translate("Expires") + " "}
+            {when(expires)}
+          </Chip>
           <span className="muted">
-            Generating this link invalidated any prior unused link; existing
-            password and sessions stay active until replaced.
+            {translate(
+              "Generating this link invalidated any prior unused link; existing password and sessions stay active until replaced.",
+            )}
           </span>
         </div>
-      </div>
+      </ScrollArea>
       <div className="modal-foot">
         <Button variant="primary" onClick={onClose}>
-          Done
+          {translate("Done")}
         </Button>
       </div>
     </Modal>

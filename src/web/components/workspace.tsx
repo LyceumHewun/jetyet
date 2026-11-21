@@ -1,3 +1,10 @@
+import { ScrollArea } from "./Scrollbars";
+import {
+  asUiError,
+  type UiError,
+  localizeError,
+  t as translate,
+} from "../i18n";
 import {
   ArrowLeft,
   Check,
@@ -35,7 +42,7 @@ export function Table({
   children: ReactNode;
 }) {
   return (
-    <div className="table-scroll">
+    <ScrollArea className="table-scroll">
       <table>
         <thead>
           <tr>
@@ -46,7 +53,7 @@ export function Table({
         </thead>
         <tbody>{children}</tbody>
       </table>
-    </div>
+    </ScrollArea>
   );
 }
 
@@ -58,7 +65,7 @@ export function Actions({ items }: { items: [string, () => void][] }) {
       <button
         type="button"
         className="icon-button"
-        aria-label="Actions"
+        aria-label={translate("Actions")}
         popoverTarget={id}
         onClick={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
@@ -73,7 +80,13 @@ export function Actions({ items }: { items: [string, () => void][] }) {
       >
         <MoreHorizontal size={19} />
       </button>
-      <div popover="auto" id={id} className="action-popover" style={position}>
+      <ScrollArea
+        axis="y"
+        popover="auto"
+        id={id}
+        className="action-popover"
+        style={position}
+      >
         {items.map(([name, fn]) => (
           <button
             type="button"
@@ -88,7 +101,7 @@ export function Actions({ items }: { items: [string, () => void][] }) {
             {name}
           </button>
         ))}
-      </div>
+      </ScrollArea>
     </>
   );
 }
@@ -132,10 +145,10 @@ export function Stage({
             type="button"
             className="stage-back"
             onClick={onClose}
-            aria-label="Back"
+            aria-label={translate("Back")}
           >
             <ArrowLeft size={15} />
-            <span>Back</span>
+            <span>{translate("Back")}</span>
           </button>
           <div className="stage-heading">
             <div className="stage-title-row">
@@ -202,7 +215,7 @@ export function Modal({
               {tag && (
                 <span
                   className={
-                    "chip" + (tag === "Danger" ? " danger-chip" : "")
+                    "chip" + (tag === translate("Danger") ? " danger-chip" : "")
                   }
                 >
                   {tag}
@@ -215,7 +228,7 @@ export function Modal({
           <button
             type="button"
             className="icon-button"
-            aria-label="Close"
+            aria-label={translate("Close")}
             onClick={onClose}
           >
             <X size={17} />
@@ -243,16 +256,20 @@ export function Confirm({
   danger?: boolean;
 }) {
   const [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState<UiError>("");
   return (
-    <Modal title={title} tag={danger ? "Danger" : "Confirm"} onClose={onClose}>
-      <div className="modal-body">
+    <Modal
+      title={title}
+      tag={danger ? translate("Danger") : translate("Confirm")}
+      onClose={onClose}
+    >
+      <ScrollArea axis="y" className="modal-body">
         {children}
-        {error && <p className="form-error">{error}</p>}
-      </div>
+        {error && <p className="form-error">{localizeError(error)}</p>}
+      </ScrollArea>
       <div className="modal-foot">
         <button type="button" onClick={onClose}>
-          Cancel
+          {translate("Cancel")}
         </button>
         <button
           type="button"
@@ -261,12 +278,12 @@ export function Confirm({
           onClick={() => {
             setBusy(true);
             onConfirm().catch((e) => {
-              setError(e.message);
+              setError(asUiError(e));
               setBusy(false);
             });
           }}
         >
-          {busy ? "Working…" : action}
+          {busy ? translate("Working…") : action}
         </button>
       </div>
     </Modal>
@@ -286,14 +303,18 @@ export function Code({
   return (
     <Modal
       title={title}
-      tag="Inspector"
-      subtitle="Contains sensitive information. Share only with the intended recipient."
+      tag={translate("Inspector")}
+      subtitle={translate(
+        "Contains sensitive information. Share only with the intended recipient.",
+      )}
       onClose={onClose}
       wide
     >
-      <div className="modal-body">
-        <pre className="code-output">{text}</pre>
-      </div>
+      <ScrollArea axis="y" className="modal-body">
+        <ScrollArea className="code-output">
+          <pre>{text}</pre>
+        </ScrollArea>
+      </ScrollArea>
       <div className="modal-foot">
         <button
           type="button"
@@ -302,10 +323,10 @@ export function Code({
           }
         >
           {copied ? <Check size={15} /> : <Copy size={15} />}
-          {copied ? "Copied" : "Copy"}
+          {copied ? translate("Copied") : translate("Copy")}
         </button>
         <button type="button" className="primary" onClick={onClose}>
-          Done
+          {translate("Done")}
         </button>
       </div>
     </Modal>

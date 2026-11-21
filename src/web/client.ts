@@ -1,3 +1,4 @@
+import { formatDate, formatNumber, RequestError, t as translate } from "./i18n";
 import type { Row } from "./types";
 
 export async function api(
@@ -19,28 +20,41 @@ export async function api(
   } catch {}
   if (!r.ok) {
     if (r.status === 401) window.dispatchEvent(new Event("signedout"));
-    throw Error(data?.error || `Request failed (${r.status})`);
+    const summary =
+      data?.errorKind === "validation"
+        ? "Validation failed. {0}"
+        : /^hosts\/[^/]+\/(fingerprint|trust)$/.test(path)
+          ? "SSH connection failed. {0}"
+          : undefined;
+    throw new RequestError(
+      data?.error || `Request failed (${r.status})`,
+      summary,
+    );
   }
   return data;
 }
 
 export const fmt = (n = 0) => {
-  if (n >= 1024 ** 4) return (n / 1024 ** 4).toFixed(2) + " TiB";
-  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(2) + " GiB";
-  if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(1) + " MiB";
-  return Math.round(n / 1024) + " KiB";
+  if (n >= 1024 ** 4) return formatNumber(n / 1024 ** 4, 2) + " TiB";
+  if (n >= 1024 ** 3) return formatNumber(n / 1024 ** 3, 2) + " GiB";
+  if (n >= 1024 ** 2) return formatNumber(n / 1024 ** 2, 1) + " MiB";
+  return formatNumber(n / 1024) + " KiB";
 };
 
-export const when = (n: any) =>
-  n
-    ? new Date(n).toLocaleString("en-GB", {
+export function when(value?: string | number | null) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf())
+    ? "—"
+    : formatDate(date, {
         timeZone: "Asia/Hong_Kong",
         month: "short",
         day: "numeric",
         hour: "2-digit",
         minute: "2-digit",
-      })
-    : "—";
+        hourCycle: "h23",
+      });
+}
 
 export const amount = (r: Row) =>
   r.quota?.direction === "in"
@@ -53,15 +67,25 @@ export function formatUptime(seconds?: number | null): string {
   if (!seconds || seconds <= 0) return "—";
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
-  if (days > 0) return `${days}d ${hours}h`;
+  if (days > 0) return translate("{0}d {1}h", days, hours);
   const mins = Math.floor((seconds % 3600) / 60);
-  return hours > 0 ? `${hours}h ${mins}m` : `${Math.max(1, mins)}m`;
+  return hours > 0
+    ? translate("{0}h {1}m", hours, mins)
+    : translate("{0}m", Math.max(1, mins));
 }
 
 export function directionMeta(dir?: string): { short: string; label: string } {
-  if (dir === "out") return { short: "Out", label: "Outbound only (from VPS)" };
-  if (dir === "in") return { short: "In", label: "Inbound only (from VPS)" };
-  return { short: "Both", label: "Outbound + inbound" };
+  if (dir === "out")
+    return {
+      short: translate("Out"),
+      label: translate("Outbound only (from VPS)"),
+    };
+  if (dir === "in")
+    return {
+      short: translate("In"),
+      label: translate("Inbound only (from VPS)"),
+    };
+  return { short: translate("Both"), label: translate("Outbound + inbound") };
 }
 
 let supportsDisplayTransition: boolean | undefined;

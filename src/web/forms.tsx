@@ -1,18 +1,25 @@
+import { asUiError, type UiError, localizeError, t as translate } from "./i18n";
 import {
   ArrowLeft,
   ArrowUpRight,
   FileCode2,
   Moon,
-  Network,
   Radio,
   Server,
   Sun,
   Users,
 } from "lucide-react";
-import { useEffect, useState, type InputHTMLAttributes } from "react";
+import {
+  useEffect,
+  useState,
+  type InputHTMLAttributes,
+  type ReactNode,
+} from "react";
 import { api, fmt } from "./client";
 import {
   Badge,
+  BrandMark,
+  ScrollArea,
   Button,
   Checkbox,
   Chip,
@@ -28,6 +35,7 @@ import {
   SwitchPill,
   TextArea,
 } from "./components";
+import { operationLabel } from "./labels";
 import type { Row, Session, State } from "./types";
 
 function toDatetimeLocal(iso: string | null | undefined): string {
@@ -58,39 +66,50 @@ export function Login({
   onLogin,
   theme = "light",
   onToggleTheme,
+  languageControl,
 }: {
   onLogin: (session: Session) => void;
   theme?: "light" | "dark";
   onToggleTheme?: () => void;
+  languageControl: ReactNode;
 }) {
   const [step, setStep] = useState<"username" | "password">("username"),
     [name, setName] = useState(""),
     [password, setPassword] = useState(""),
-    [error, setError] = useState(""),
+    [error, setError] = useState<UiError>(""),
     [busy, setBusy] = useState(false);
 
   const trimmedName = name.trim();
 
   return (
     <div className="login-page">
-      {onToggleTheme && (
-        <button
-          aria-label={
-            theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
-          }
-          className="icon-button login-theme-toggle"
-          onClick={onToggleTheme}
-          title={theme === "dark" ? "Light mode" : "Dark mode"}
-          type="button"
-        >
-          {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-        </button>
-      )}
+      <div className="login-toolbar">
+        {languageControl}
+        {onToggleTheme && (
+          <button
+            aria-label={
+              theme === "dark"
+                ? translate("Switch to light mode")
+                : translate("Switch to dark mode")
+            }
+            className="icon-button login-theme-toggle"
+            onClick={onToggleTheme}
+            title={
+              theme === "dark"
+                ? translate("Light mode")
+                : translate("Dark mode")
+            }
+            type="button"
+          >
+            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+        )}
+      </div>
       <div className="login-wrap">
         <div className="login-brand">
           <span className="brand">
             <span className="brand-symbol">
-              <Network size={22} />
+              <BrandMark size={22} />
             </span>
             jetyet<span className="brand-period">.</span>
           </span>
@@ -109,9 +128,9 @@ export function Login({
                 setStep("password");
               }}
             >
-              <h2>Sign in</h2>
-              <p>Enter your username to continue.</p>
-              <Field label="Username" htmlFor="login-username">
+              <h2>{translate("Sign in")}</h2>
+              <p>{translate("Enter your username to continue.")}</p>
+              <Field label={translate("Username")} htmlFor="login-username">
                 <Input
                   id="login-username"
                   name="username"
@@ -133,11 +152,11 @@ export function Login({
               </Field>
               {error && (
                 <p id="login-step1-error" className="form-error" role="alert">
-                  {error}
+                  {localizeError(error)}
                 </p>
               )}
               <Button variant="primary" type="submit">
-                Continue
+                {translate("Continue")}
                 <ArrowUpRight size={16} />
               </Button>
             </form>
@@ -148,10 +167,8 @@ export function Login({
                 setBusy(true);
                 setError("");
                 api("login", "POST", { username: trimmedName, password })
-                  .then((x) =>
-                    onLogin({ username: x.username, role: x.role }),
-                  )
-                  .catch((err) => setError((err as Error).message))
+                  .then((x) => onLogin({ username: x.username, role: x.role }))
+                  .catch((err) => setError(asUiError(err)))
                   .finally(() => setBusy(false));
               }}
             >
@@ -166,12 +183,12 @@ export function Login({
                   }}
                 >
                   <ArrowLeft size={13} />
-                  Change user
+                  {translate("Change user")}
                 </button>
                 <Chip mono>{trimmedName}</Chip>
               </div>
-              <h2>Enter password</h2>
-              <p>Sign in with your password.</p>
+              <h2>{translate("Enter password")}</h2>
+              <p>{translate("Sign in with your password.")}</p>
               <input
                 type="text"
                 name="username"
@@ -182,7 +199,7 @@ export function Login({
                 tabIndex={-1}
                 aria-hidden="true"
               />
-              <Field label="Password" htmlFor="login-password">
+              <Field label={translate("Password")} htmlFor="login-password">
                 <Input
                   id="login-password"
                   name="password"
@@ -202,16 +219,17 @@ export function Login({
               </Field>
               {error && (
                 <p id="login-step2-error" className="form-error" role="alert">
-                  {error}
+                  {localizeError(error)}
                 </p>
               )}
               <Button variant="primary" type="submit" disabled={busy}>
-                {busy ? "Signing in…" : "Sign in"}
+                {busy ? translate("Signing in…") : translate("Sign in")}
                 <ArrowUpRight size={16} />
               </Button>
               <small className="login-guidance">
-                First time signing in or forgot your password? Ask your
-                administrator for a portal password link.
+                {translate(
+                  "First time signing in or forgot your password? Ask your administrator for a portal password link.",
+                )}
               </small>
             </form>
           )}
@@ -226,11 +244,13 @@ export function SetPassword({
   onBackToSignIn,
   theme = "light",
   onToggleTheme,
+  languageControl,
 }: {
   onSuccess: (session: Session) => void;
   onBackToSignIn: () => void;
   theme?: "light" | "dark";
   onToggleTheme?: () => void;
+  languageControl: ReactNode;
 }) {
   const [token] = useState(() => {
     const raw = window.location.hash;
@@ -243,10 +263,10 @@ export function SetPassword({
     }
   });
   const [verifying, setVerifying] = useState(true),
-    [verifyError, setVerifyError] = useState(""),
+    [verifyError, setVerifyError] = useState<UiError>(""),
     [username, setUsername] = useState(""),
     [password, setPassword] = useState(""),
-    [submitError, setSubmitError] = useState(""),
+    [submitError, setSubmitError] = useState<UiError>(""),
     [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -273,8 +293,9 @@ export function SetPassword({
       .catch((err) => {
         if (cancelled) return;
         setVerifyError(
-          (err as Error).message ||
-            "This link is invalid or has expired. Ask your administrator for a new link.",
+          err instanceof Error
+            ? err
+            : "This link is invalid or has expired. Ask your administrator for a new link.",
         );
       })
       .finally(() => {
@@ -287,24 +308,33 @@ export function SetPassword({
 
   return (
     <div className="login-page">
-      {onToggleTheme && (
-        <button
-          aria-label={
-            theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
-          }
-          className="icon-button login-theme-toggle"
-          onClick={onToggleTheme}
-          title={theme === "dark" ? "Light mode" : "Dark mode"}
-          type="button"
-        >
-          {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-        </button>
-      )}
+      <div className="login-toolbar">
+        {languageControl}
+        {onToggleTheme && (
+          <button
+            aria-label={
+              theme === "dark"
+                ? translate("Switch to light mode")
+                : translate("Switch to dark mode")
+            }
+            className="icon-button login-theme-toggle"
+            onClick={onToggleTheme}
+            title={
+              theme === "dark"
+                ? translate("Light mode")
+                : translate("Dark mode")
+            }
+            type="button"
+          >
+            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+        )}
+      </div>
       <div className="login-wrap">
         <div className="login-brand">
           <span className="brand">
             <span className="brand-symbol">
-              <Network size={22} />
+              <BrandMark size={22} />
             </span>
             jetyet<span className="brand-period">.</span>
           </span>
@@ -312,17 +342,19 @@ export function SetPassword({
         <div className="login-card">
           {verifying ? (
             <div className="set-password-state">
-              <h2>Verifying link</h2>
-              <p className="muted">Checking portal password link…</p>
+              <h2>{translate("Verifying link")}</h2>
+              <p className="muted">
+                {translate("Checking portal password link…")}
+              </p>
             </div>
           ) : verifyError ? (
             <div className="set-password-state">
-              <h2>Link unavailable</h2>
+              <h2>{translate("Link unavailable")}</h2>
               <p className="form-error" role="alert">
-                {verifyError}
+                {localizeError(verifyError)}
               </p>
               <Button variant="primary" onClick={onBackToSignIn}>
-                Back to sign in
+                {translate("Back to sign in")}
                 <ArrowUpRight size={16} />
               </Button>
             </div>
@@ -345,16 +377,20 @@ export function SetPassword({
                       role: res.role || "subscriber",
                     }),
                   )
-                  .catch((err) => setSubmitError((err as Error).message))
+                  .catch((err) => setSubmitError(asUiError(err)))
                   .finally(() => setBusy(false));
               }}
             >
               <div className="login-step-head">
-                <Chip>Portal Password</Chip>
+                <Chip>{translate("Portal Password")}</Chip>
                 <Chip mono>{username}</Chip>
               </div>
-              <h2>Set password</h2>
-              <p>Choose a password for your subscription portal account.</p>
+              <h2>{translate("Set password")}</h2>
+              <p>
+                {translate(
+                  "Choose a password for your subscription portal account.",
+                )}
+              </p>
               <input
                 type="text"
                 name="username"
@@ -366,9 +402,9 @@ export function SetPassword({
                 aria-hidden="true"
               />
               <Field
-                label="New password"
+                label={translate("New password")}
                 htmlFor="set-password-input"
-                hint="12–1000 characters."
+                hint={translate("12–1000 characters.")}
                 hintAbove
                 hintId="set-password-hint"
               >
@@ -397,11 +433,13 @@ export function SetPassword({
               </Field>
               {submitError && (
                 <p id="set-password-error" className="form-error" role="alert">
-                  {submitError}
+                  {localizeError(submitError)}
                 </p>
               )}
               <Button variant="primary" type="submit" disabled={busy}>
-                {busy ? "Saving password…" : "Set password & sign in"}
+                {busy
+                  ? translate("Saving password…")
+                  : translate("Set password & sign in")}
                 <ArrowUpRight size={16} />
               </Button>
               <div className="set-password-footer">
@@ -410,7 +448,7 @@ export function SetPassword({
                   className="text-button"
                   onClick={onBackToSignIn}
                 >
-                  Back to sign in
+                  {translate("Back to sign in")}
                 </button>
               </div>
             </form>
@@ -434,25 +472,28 @@ export function QuotaFields({
   return (
     <div className="studio-card">
       <div className="studio-card-head">
-        <h2>Traffic allowance</h2>
+        <h2>{translate("Traffic allowance")}</h2>
         <SegmentedControl
           value={value.direction}
           options={[
-            ["both", "Both"],
-            ["out", "Out"],
-            ["in", "In"],
+            ["both", translate("Both")],
+            ["out", translate("Out")],
+            ["in", translate("In")],
           ]}
           onChange={(direction) => onChange({ ...value, direction })}
         />
       </div>
       <div className="form-grid">
-        <Field label="Limit" hint="Empty = unlimited · 0 = block">
+        <Field
+          label={translate("Limit")}
+          hint={translate("Empty = unlimited · 0 = block")}
+        >
           <div className="input-combo">
             <Input
               type="number"
               min="0"
               step="any"
-              placeholder="Unlimited"
+              placeholder={translate("Unlimited")}
               value={value.limit === null ? "" : value.limit / factor}
               onChange={(e) =>
                 onChange({
@@ -476,13 +517,13 @@ export function QuotaFields({
             />
           </div>
         </Field>
-        <Field label="Reset cycle">
+        <Field label={translate("Reset cycle")}>
           <SegmentedControl
             fullWidth
             value={reset.kind}
             options={[
-              ["monthly", "Monthly"],
-              ["interval", "Every N days"],
+              ["monthly", translate("Monthly")],
+              ["interval", translate("Every N days")],
             ]}
             onChange={(k) =>
               onChange({
@@ -501,7 +542,7 @@ export function QuotaFields({
         </Field>
         {reset.kind === "monthly" ? (
           <>
-            <Field label="Day of month">
+            <Field label={translate("Day of month")}>
               <Input
                 type="number"
                 min="1"
@@ -516,7 +557,7 @@ export function QuotaFields({
                 }
               />
             </Field>
-            <Field label="Hour (HKT)">
+            <Field label={translate("Hour (HKT)")}>
               <Input
                 type="number"
                 min="0"
@@ -533,7 +574,7 @@ export function QuotaFields({
           </>
         ) : (
           <>
-            <Field label="Interval (days)">
+            <Field label={translate("Interval (days)")}>
               <Input
                 type="number"
                 min="1"
@@ -548,7 +589,7 @@ export function QuotaFields({
                 }
               />
             </Field>
-            <Field label="Anchor (UTC)">
+            <Field label={translate("Anchor (HKT)")}>
               <DateTimePicker
                 value={toDatetimeLocal(reset.anchor)}
                 allowClear={false}
@@ -638,7 +679,7 @@ export function EntityForm({
             ...row,
           },
   );
-  const [error, setError] = useState(""),
+  const [error, setError] = useState<UiError>(""),
     [busy, setBusy] = useState(false);
   const set = (k: string, v: any) => setData({ ...data, [k]: v });
   const input = (
@@ -663,25 +704,30 @@ export function EntityForm({
     </Field>
   );
   const entityTag =
-    kind === "hosts" ? "VPS" : kind === "nodes" ? "Node" : "User";
+    kind === "hosts"
+      ? "VPS"
+      : kind === "nodes"
+        ? translate("Node")
+        : translate("User");
   const formId = `entity-form-${kind}`;
   const selectedHost =
     kind === "nodes"
-      ? state.hosts.find((h) => h.id === data.hostId)?.name || "Unassigned"
+      ? state.hosts.find((h) => h.id === data.hostId)?.name ||
+        translate("Unassigned")
       : "";
   return (
     <Stage
-      title={
+      title={row ? data.name || row.name : translate("New {0}", entityTag)}
+      tag={
         row
-          ? data.name || row.name
-          : `New ${kind === "hosts" ? "VPS" : kind === "nodes" ? "node" : "user"}`
+          ? translate("Edit {0}", entityTag)
+          : translate("Create {0}", entityTag)
       }
-      tag={row ? `Edit ${entityTag}` : `Create ${entityTag}`}
       onClose={onClose}
       actions={
         <>
           <button type="button" onClick={onClose}>
-            Cancel
+            {translate("Cancel")}
           </button>
           <button
             className="primary"
@@ -689,7 +735,11 @@ export function EntityForm({
             form={formId}
             type="submit"
           >
-            {busy ? "Saving…" : row ? "Save changes" : `Create ${entityTag}`}
+            {busy
+              ? translate("Saving…")
+              : row
+                ? translate("Save changes")
+                : translate("Create {0}", entityTag)}
           </button>
         </>
       }
@@ -697,7 +747,7 @@ export function EntityForm({
       <div className="studio-grid">
         <aside className="studio-preview">
           <div className="studio-card preview-card">
-            <span className="kpi-label">LIVE PREVIEW</span>
+            <span className="kpi-label">{translate("LIVE PREVIEW")}</span>
             <div className="entity-card-head">
               <span className="host-icon">
                 {kind === "hosts" ? (
@@ -710,7 +760,7 @@ export function EntityForm({
               </span>
               <div className="entity-title">
                 <strong className="preview-name">
-                  {data.name || `Untitled ${entityTag}`}
+                  {data.name || translate("Untitled {0}", entityTag)}
                 </strong>
                 <small className="mono">
                   {kind === "users"
@@ -719,12 +769,12 @@ export function EntityForm({
                         data.note || null,
                       ]
                         .filter(Boolean)
-                        .join(" · ") || "No username"
+                        .join(" · ") || translate("No username")
                     : `${data.address || "0.0.0.0"}:${data.port || 22}`}
                 </small>
               </div>
               <Badge tone={data.enabled ? "good" : "neutral"}>
-                {data.enabled ? "Enabled" : "Disabled"}
+                {data.enabled ? translate("Enabled") : translate("Disabled")}
               </Badge>
             </div>
             <div className="preview-meta">
@@ -735,7 +785,7 @@ export function EntityForm({
                   </span>
                   <span className="chip mono">
                     {data.quota?.limit === null
-                      ? "∞ Unlimited"
+                      ? translate("∞ Unlimited")
                       : fmt(data.quota.limit)}
                   </span>
                 </>
@@ -751,14 +801,14 @@ export function EntityForm({
               {kind === "users" && (
                 <>
                   <span className="chip mono">
-                    {data.nodeIds?.length || 0} nodes
+                    {translate("{0} nodes", data.nodeIds?.length || 0)}
                   </span>
                   <span className="chip mono">
-                    {data.templateIds?.length || 0} templates
+                    {translate("{0} templates", data.templateIds?.length || 0)}
                   </span>
                   <span className="chip mono">
                     {data.quota?.limit === null
-                      ? "∞ Unlimited"
+                      ? translate("∞ Unlimited")
                       : fmt(data.quota.limit)}
                   </span>
                 </>
@@ -767,8 +817,9 @@ export function EntityForm({
           </div>
           {kind === "nodes" && (
             <div className="form-note">
-              Native Hysteria 2 · self-signed cert. Network changes require a
-              reapply operation.
+              {translate(
+                "Native Hysteria 2 · self-signed cert. Network changes require a reapply operation.",
+              )}
             </div>
           )}
         </aside>
@@ -791,7 +842,7 @@ export function EntityForm({
               data.quota?.reset?.kind === "interval" &&
               !Number.isFinite(Date.parse(data.quota.reset.anchor || ""))
             ) {
-              setError("Anchor (UTC) must be a valid date and time.");
+              setError("Anchor (HKT) must be a valid date and time.");
               return;
             }
             setBusy(true);
@@ -801,32 +852,36 @@ export function EntityForm({
                 ? { ...data, username: (data.username || "").trim() }
                 : data;
             onSave(payload)
-              .catch((e) => setError(e.message))
+              .catch((e) => setError(asUiError(e)))
               .finally(() => setBusy(false));
           }}
         >
           <div className="studio-card">
             <div className="studio-card-head">
-              <h2>{kind === "users" ? "Profile" : "Connection"}</h2>
+              <h2>
+                {kind === "users"
+                  ? translate("Profile")
+                  : translate("Connection")}
+              </h2>
               <SwitchPill
                 checked={data.enabled}
                 onChange={(next) => set("enabled", next)}
               />
             </div>
             <div className="form-grid">
-              {input("name", "Display name")}
+              {input("name", translate("Display name"))}
               {kind === "hosts" && (
                 <>
-                  {input("address", "SSH address")}
-                  {input("port", "SSH port", "number")}
-                  {input("username", "SSH username")}
-                  <Field label="Authentication">
+                  {input("address", translate("SSH address"))}
+                  {input("port", translate("SSH port"), "number")}
+                  {input("username", translate("SSH username"))}
+                  <Field label={translate("Authentication")}>
                     <SegmentedControl
                       fullWidth
                       value={data.authType}
                       options={[
-                        ["key", "Private key"],
-                        ["password", "Password"],
+                        ["key", translate("Private key")],
+                        ["password", translate("Password")],
                       ]}
                       onChange={(t) => set("authType", t)}
                     />
@@ -834,11 +889,15 @@ export function EntityForm({
                   <div className="full">
                     <Field
                       label={
-                        data.authType === "key" ? "Private key" : "SSH password"
+                        data.authType === "key"
+                          ? translate("Private key")
+                          : translate("SSH password")
                       }
                       hint={
                         row
-                          ? "Leave empty to retain current credential."
+                          ? translate(
+                              "Leave empty to retain current credential.",
+                            )
                           : undefined
                       }
                     >
@@ -862,13 +921,25 @@ export function EntityForm({
                   </div>
                   {data.authType === "key" && (
                     <div className="full">
-                      {input("passphrase", "Key passphrase", "password")}
+                      {input(
+                        "passphrase",
+                        translate("Key passphrase"),
+                        "password",
+                      )}
                     </div>
                   )}
                   {!row && (
                     <>
-                      {input("initialIn", "Initial inbound bytes", "number")}
-                      {input("initialOut", "Initial outbound bytes", "number")}
+                      {input(
+                        "initialIn",
+                        translate("Initial inbound bytes"),
+                        "number",
+                      )}
+                      {input(
+                        "initialOut",
+                        translate("Initial outbound bytes"),
+                        "number",
+                      )}
                     </>
                   )}
                 </>
@@ -879,7 +950,7 @@ export function EntityForm({
                     <Select
                       value={data.hostId}
                       disabled={!!row}
-                      placeholder="Select trusted VPS"
+                      placeholder={translate("Select trusted VPS")}
                       options={state.hosts
                         .filter(
                           (h) =>
@@ -891,32 +962,44 @@ export function EntityForm({
                       onChange={(v) => set("hostId", v)}
                     />
                   </Field>
-                  {input("address", "Advertised IP / domain")}
-                  {input("port", "UDP listen port", "number", undefined, {
-                    min: 1,
-                    max: 65535,
-                    step: 1,
-                  })}
+                  {input("address", translate("Advertised IP / domain"))}
+                  {input(
+                    "port",
+                    translate("UDP listen port"),
+                    "number",
+                    undefined,
+                    {
+                      min: 1,
+                      max: 65535,
+                      step: 1,
+                    },
+                  )}
                   {input(
                     "hopping",
-                    "Hopping range",
+                    translate("Hopping range"),
                     "text",
                     "e.g. 20000-50000",
                   )}
                   {input(
                     "hopInterval",
-                    "Hop interval (sec)",
+                    translate("Hop interval (sec)"),
                     "number",
                     undefined,
                     { min: 5, step: 1 },
                   )}
-                  {input("upMbps", "Upload hint (Mbps)", "number", undefined, {
-                    min: 0,
-                    step: 1,
-                  })}
+                  {input(
+                    "upMbps",
+                    translate("Upload hint (Mbps)"),
+                    "number",
+                    undefined,
+                    {
+                      min: 0,
+                      step: 1,
+                    },
+                  )}
                   {input(
                     "downMbps",
-                    "Download hint (Mbps)",
+                    translate("Download hint (Mbps)"),
                     "number",
                     undefined,
                     { min: 0, step: 1 },
@@ -927,9 +1010,9 @@ export function EntityForm({
                 <>
                   {input(
                     "username",
-                    "Sign-in username",
+                    translate("Sign-in username"),
                     "text",
-                    "ASCII letters, digits, . _ - (max 100)",
+                    translate("ASCII letters, digits, . _ - (max 100)"),
                     {
                       autoComplete: "off",
                       spellCheck: false,
@@ -939,11 +1022,14 @@ export function EntityForm({
                       pattern: "[A-Za-z0-9._-]{1,100}",
                     },
                   )}
-                  {input("note", "Note")}
-                  <Field label="Expires (UTC)" hint="Empty = never">
+                  {input("note", translate("Note"))}
+                  <Field
+                    label={translate("Expires (HKT)")}
+                    hint={translate("Empty = never")}
+                  >
                     <DateTimePicker
                       value={toDatetimeLocal(data.expires)}
-                      placeholder="Never expires"
+                      placeholder={translate("Never expires")}
                       onChange={(val) => set("expires", fromDatetimeLocal(val))}
                     />
                   </Field>
@@ -957,7 +1043,7 @@ export function EntityForm({
           {kind === "users" && (
             <div className="studio-card">
               <div className="studio-card-head">
-                <h2>Access Matrix</h2>
+                <h2>{translate("Access Matrix")}</h2>
                 <Button
                   variant="text"
                   onClick={() =>
@@ -967,17 +1053,19 @@ export function EntityForm({
                     )
                   }
                 >
-                  Select all nodes
+                  {translate("Select all nodes")}
                 </Button>
               </div>
               <div className="matrix-section">
-                <span className="kpi-label">AUTHORIZED NODES</span>
+                <span className="kpi-label">
+                  {translate("AUTHORIZED NODES")}
+                </span>
                 <ChipPicker
                   options={state.nodes
                     .filter((n) => !n.deleting)
                     .map((n) => ({ id: n.id, label: n.name }))}
                   selected={data.nodeIds}
-                  emptyText="No nodes yet."
+                  emptyText={translate("No nodes yet.")}
                   onToggle={(id) =>
                     set(
                       "nodeIds",
@@ -989,13 +1077,13 @@ export function EntityForm({
                 />
               </div>
               <div className="matrix-section">
-                <span className="kpi-label">TEMPLATES</span>
+                <span className="kpi-label">{translate("TEMPLATES")}</span>
                 <ChipPicker
                   options={state.templates
                     .filter((t) => t.published)
                     .map((t) => ({ id: t.id, label: t.name }))}
                   selected={data.templateIds}
-                  emptyText="No published templates."
+                  emptyText={translate("No published templates.")}
                   onToggle={(id) => {
                     setData((prev) => {
                       const active = prev.templateIds.includes(id);
@@ -1016,10 +1104,10 @@ export function EntityForm({
                   }}
                 />
               </div>
-              <Field label="Default template">
+              <Field label={translate("Default template")}>
                 <Select
                   value={data.defaultTemplate}
-                  placeholder="Choose template"
+                  placeholder={translate("Choose template")}
                   options={state.templates
                     .filter((t) => data.templateIds.includes(t.id))
                     .map((t) => ({ value: t.id, label: t.name }))}
@@ -1028,7 +1116,7 @@ export function EntityForm({
               </Field>
             </div>
           )}
-          {error && <p className="form-error">{error}</p>}
+          {error && <p className="form-error">{localizeError(error)}</p>}
         </form>
       </div>
     </Stage>
@@ -1048,11 +1136,13 @@ export function OperationForm({
 }) {
   const [version, setVersion] = useState(node.version || ""),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState<UiError>("");
   return (
     <Modal
       title={node.name}
-      tag={kind === "command" ? "Deploy command" : kind}
+      tag={
+        kind === "command" ? translate("Deploy command") : operationLabel(kind)
+      }
       onClose={onClose}
     >
       <form
@@ -1060,15 +1150,17 @@ export function OperationForm({
           e.preventDefault();
           setBusy(true);
           onSubmit(version)
-            .catch((e) => setError(e.message))
+            .catch((e) => setError(asUiError(e)))
             .finally(() => setBusy(false));
         }}
       >
-        <div className="modal-body">
+        <ScrollArea axis="y" className="modal-body">
           <p className="muted">
-            Service changes may interrupt active connections on this node.
+            {translate(
+              "Service changes may interrupt active connections on this node.",
+            )}
           </p>
-          <Field label="Target Hysteria 2 version">
+          <Field label={translate("Target Hysteria 2 version")}>
             <Input
               value={version}
               required
@@ -1079,20 +1171,21 @@ export function OperationForm({
           </Field>
           {kind === "reapply" && (
             <p className="form-note">
-              Replaces remote configuration with platform settings, including
-              manual edits.
+              {translate(
+                "Replaces remote configuration with platform settings, including manual edits.",
+              )}
             </p>
           )}
-          {error && <p className="form-error">{error}</p>}
-        </div>
+          {error && <p className="form-error">{localizeError(error)}</p>}
+        </ScrollArea>
         <div className="modal-foot">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{translate("Cancel")}</Button>
           <Button variant="primary" type="submit" disabled={busy}>
             {busy
-              ? "Working…"
+              ? translate("Working…")
               : kind === "command"
-                ? "Generate command"
-                : "Queue operation"}
+                ? translate("Generate command")
+                : translate("Queue operation")}
           </Button>
         </div>
       </form>
@@ -1114,23 +1207,33 @@ export function Correction({
       outbound: host.usage.outbound,
       reason: "",
     }),
-    [error, setError] = useState(""),
+    [error, setError] = useState<UiError>(""),
     [busy, setBusy] = useState(false);
   return (
-    <Modal title={host.name} tag="Usage correction" onClose={onClose}>
+    <Modal
+      title={host.name}
+      tag={translate("Usage correction")}
+      onClose={onClose}
+    >
       <form
         onSubmit={(e) => {
           e.preventDefault();
           setBusy(true);
           onSave(v)
-            .catch((e) => setError(e.message))
+            .catch((e) => setError(asUiError(e)))
             .finally(() => setBusy(false));
         }}
       >
-        <div className="modal-body">
+        <ScrollArea axis="y" className="modal-body">
           <div className="form-grid">
             {(["inbound", "outbound"] as const).map((k) => (
-              <Field key={k} label={`${k} bytes`}>
+              <Field
+                key={k}
+                label={translate(
+                  "{0} bytes",
+                  translate(k === "inbound" ? "Inbound" : "Outbound"),
+                )}
+              >
                 <Input
                   type="number"
                   min="0"
@@ -1141,19 +1244,19 @@ export function Correction({
               </Field>
             ))}
           </div>
-          <Field label="Reason">
+          <Field label={translate("Reason")}>
             <Input
               required
               value={v.reason}
               onChange={(e) => setV({ ...v, reason: e.target.value })}
             />
           </Field>
-          {error && <p className="form-error">{error}</p>}
-        </div>
+          {error && <p className="form-error">{localizeError(error)}</p>}
+        </ScrollArea>
         <div className="modal-foot">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{translate("Cancel")}</Button>
           <Button variant="primary" type="submit" disabled={busy}>
-            Apply correction
+            {translate("Apply correction")}
           </Button>
         </div>
       </form>
@@ -1173,9 +1276,9 @@ export function ForceRemove({
   const [checked, setChecked] = useState(false);
   return (
     <Confirm
-      title={`Force remove ${host.name}?`}
+      title={translate("Force remove {0}?", host.name)}
       danger
-      action="Force remove"
+      action={translate("Force remove")}
       onClose={onClose}
       onConfirm={async () => {
         if (!checked) throw Error("Confirm independent remote cleanup first.");
@@ -1183,11 +1286,14 @@ export function ForceRemove({
       }}
     >
       <p>
-        Remote cleanup will be recorded as unverified. Running services may
-        remain on the server.
+        {translate(
+          "Remote cleanup will be recorded as unverified. Running services may remain on the server.",
+        )}
       </p>
       <Checkbox checked={checked} onChange={setChecked}>
-        The host is destroyed, or I will handle remote services independently.
+        {translate(
+          "The host is destroyed, or I will handle remote services independently.",
+        )}
       </Checkbox>
     </Confirm>
   );
@@ -1209,7 +1315,7 @@ export function TemplateEditor({
     [body, setBody] = useState(template?.draft ?? template?.body ?? ""),
     [userId, setUserId] = useState(state.users[0]?.id || ""),
     [preview, setPreview] = useState(""),
-    [error, setError] = useState(""),
+    [error, setError] = useState<UiError>(""),
     [busy, setBusy] = useState(false),
     [confirmDelete, setConfirmDelete] = useState(false);
   const save = async () => {
@@ -1239,15 +1345,18 @@ export function TemplateEditor({
       }
       await refresh();
     } catch (e) {
-      setError((e as Error).message);
+      setError(asUiError(e));
     } finally {
       setBusy(false);
     }
   };
   return (
     <Stage
-      title={name || (template ? "Edit template" : "New template")}
-      tag="Template Studio"
+      title={
+        name ||
+        (template ? translate("Edit template") : translate("New template"))
+      }
+      tag={translate("Template Studio")}
       onClose={onClose}
       actions={
         <>
@@ -1257,32 +1366,32 @@ export function TemplateEditor({
               disabled={busy}
               onClick={() => setConfirmDelete(true)}
             >
-              Delete
+              {translate("Delete")}
             </Button>
           )}
           <Button disabled={busy || !name} onClick={() => void action("save")}>
-            Save draft
+            {translate("Save draft")}
           </Button>
           <Button
             disabled={busy || !userId || !name}
             onClick={() => void action("preview")}
           >
-            Validate & preview
+            {translate("Validate & preview")}
           </Button>
           <Button
             variant="primary"
             disabled={busy || !userId || !name || !preview}
             onClick={() => void action("publish")}
           >
-            {busy ? "Working…" : "Publish"}
+            {busy ? translate("Working…") : translate("Publish")}
           </Button>
         </>
       }
     >
       {confirmDelete && (
         <Confirm
-          title={`Delete ${name || "template"}?`}
-          action="Delete"
+          title={translate("Delete {0}?", name || translate("Template"))}
+          action={translate("Delete")}
           danger
           onClose={() => setConfirmDelete(false)}
           onConfirm={async () => {
@@ -1292,16 +1401,16 @@ export function TemplateEditor({
             onClose();
           }}
         >
-          <p>Only unassigned templates can be deleted.</p>
+          <p>{translate("Only unassigned templates can be deleted.")}</p>
         </Confirm>
       )}
-      {error && <p className="form-error">{error}</p>}
+      {error && <p className="form-error">{localizeError(error)}</p>}
       <div className="ide-grid">
         <div className="studio-card ide-pane">
           <div className="studio-card-head">
             <Input
               className="ide-name-input"
-              placeholder="Template name…"
+              placeholder={translate("Template name…")}
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
@@ -1324,7 +1433,7 @@ export function TemplateEditor({
               <FileCode2 size={15} className="muted" />
               <Select
                 value={userId}
-                placeholder="Preview as user…"
+                placeholder={translate("Preview as user…")}
                 options={state.users.map((u) => ({
                   value: u.id,
                   label: u.name,
@@ -1335,15 +1444,18 @@ export function TemplateEditor({
                 }}
               />
             </div>
-            {preview && <Badge tone="good">Validated</Badge>}
+            {preview && <Badge tone="good">{translate("Validated")}</Badge>}
           </div>
           {preview ? (
-            <pre className="code-output ide-output">{preview}</pre>
+            <ScrollArea className="code-output ide-output">
+              <pre>{preview}</pre>
+            </ScrollArea>
           ) : (
             <div className="ide-empty">
               <p className="muted">
-                Click <strong>Validate & preview</strong> to render output for
-                the selected user.
+                {translate(
+                  "Select Validate & preview to render output for the selected user.",
+                )}
               </p>
             </div>
           )}

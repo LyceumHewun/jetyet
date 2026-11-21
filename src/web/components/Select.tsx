@@ -1,3 +1,5 @@
+import { ScrollArea } from "./Scrollbars";
+import { t as translate } from "../i18n";
 import { Check, ChevronDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -10,7 +12,7 @@ export function Select({
   value,
   options,
   onChange,
-  placeholder = "Select…",
+  placeholder = translate("Select…"),
   disabled = false,
   compact = false,
 }: {
@@ -77,7 +79,7 @@ export function Select({
         <ChevronDown size={14} className="ui-select-chevron" />
       </button>
       {open && (
-        <div className="ui-select-menu" role="listbox">
+        <ScrollArea axis="y" className="ui-select-menu" role="listbox">
           {options.length ? (
             options.map((opt) => {
               const active = opt.value === value;
@@ -99,9 +101,9 @@ export function Select({
               );
             })
           ) : (
-            <div className="ui-select-empty">No options</div>
+            <div className="ui-select-empty">{translate("No options")}</div>
           )}
-        </div>
+        </ScrollArea>
       )}
     </div>
   );
