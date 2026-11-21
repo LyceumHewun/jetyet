@@ -1316,17 +1316,17 @@ export function SubscriptionPortal({
             {pendingDiscard.type === "switch"
               ? translate(
                   "You have unsaved edits to “{0}”. Switching to “{1}” will discard them.",
-                  activeDetail?.name || "this template",
+                  activeDetail?.name || translate("this template"),
                   pendingDiscard.targetName,
                 )
               : pendingDiscard.type === "refresh"
                 ? translate(
                     "You have unsaved edits to “{0}”. Refreshing will discard them.",
-                    activeDetail?.name || "this template",
+                    activeDetail?.name || translate("this template"),
                   )
                 : translate(
                     "You have unsaved edits to “{0}”. Creating a new personal template will discard them.",
-                    activeDetail?.name || "this template",
+                    activeDetail?.name || translate("this template"),
                   )}
           </p>
         </Confirm>

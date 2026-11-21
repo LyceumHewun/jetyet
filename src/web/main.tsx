@@ -656,19 +656,17 @@ function App() {
         !state.hosts.find((h) => h.id === n.hostId)?.exhausted,
     ).length;
 
-  const nodeLabel = (n: Row) => {
-    const h = state.hosts.find((h) => h.id === n.hostId);
-    return n.deleting || h?.deleting
-      ? translate("Pending deletion")
-      : !n.enabled || !h?.enabled
-        ? translate("Disabled")
-        : h?.exhausted
-          ? translate("Quota exhausted")
-          : n.status === "draft"
-            ? translate("Planned")
-            : n.service
-              ? translate("Running")
-              : translate("Stopped");
+  const nodeTone = (node: Row, host: Row) => {
+    if (
+      node.deleting ||
+      host.deleting ||
+      !node.enabled ||
+      !host.enabled ||
+      host.exhausted
+    )
+      return "warning";
+    if (node.status === "draft") return "neutral";
+    return node.service ? "good" : "warning";
   };
 
   const worker = (name: string) => {
@@ -747,8 +745,7 @@ function App() {
                 <span
                   key={name}
                   className={
-                    "worker-pill " +
-                    (worker(name) ? translate("online") : "offline")
+                    "worker-pill " + (worker(name) ? "online" : "offline")
                   }
                   title={`${translate(name)}: ${worker(name) ? translate("Running") : translate("No heartbeat")}`}
                 >
@@ -930,7 +927,7 @@ function App() {
                             ) as number)
                           : 0;
                         const isExpanded = expandedHost === h.id;
-                        const nLabel = node ? nodeLabel(node) : "";
+                        const nTone = node ? nodeTone(node, h) : "neutral";
                         const hostActions: [string, () => void][] = [
                           [translate("Edit VPS"), () => save("hosts", h)],
                           [translate("Full telemetry"), () => history(h)],
@@ -1067,18 +1064,9 @@ function App() {
                                     </Badge>
                                   )}
                                   {node && (
-                                    <Badge
-                                      tone={
-                                        nLabel === "Running"
-                                          ? "good"
-                                          : nLabel === "Planned"
-                                            ? "neutral"
-                                            : "warning"
-                                      }
-                                    >
+                                    <Badge tone={nTone}>
                                       {node.name} {node.version || ""} ·{" "}
-                                      {clients}
-                                      {" " + translate("online")}
+                                      {translate("{0} online", clients)}
                                     </Badge>
                                   )}
                                 </div>
@@ -1256,17 +1244,7 @@ function App() {
                             <QuotaBar row={h} />
                             <div className="compact-foot">
                               {node ? (
-                                <Badge
-                                  tone={
-                                    node.drift
-                                      ? "warning"
-                                      : nLabel === "Running"
-                                        ? "good"
-                                        : nLabel === "Planned"
-                                          ? "neutral"
-                                          : "warning"
-                                  }
-                                >
+                                <Badge tone={node.drift ? "warning" : nTone}>
                                   {node.name}
                                   {node.drift
                                     ? ` · ${translate("Drift")}`
@@ -1827,7 +1805,10 @@ function App() {
                                 </div>
                                 {t.error && (
                                   <p className="op-error">
-                                    {localizeError(t.error)}
+                                    {translate(
+                                      "Operation failed. {0}",
+                                      t.error,
+                                    )}
                                   </p>
                                 )}
                               </div>

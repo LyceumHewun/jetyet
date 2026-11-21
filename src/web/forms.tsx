@@ -781,7 +781,10 @@ export function EntityForm({
               {kind === "hosts" && (
                 <>
                   <span className="chip mono">
-                    {data.username || "root"} · {data.authType}
+                    {data.username || "root"} ·{" "}
+                    {translate(
+                      data.authType === "key" ? "Private key" : "Password",
+                    )}
                   </span>
                   <span className="chip mono">
                     {data.quota?.limit === null

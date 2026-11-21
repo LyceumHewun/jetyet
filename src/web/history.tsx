@@ -14,7 +14,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, when } from "./client";
+import { api, formatUptime, when } from "./client";
 import {
   DateTimePicker,
   Empty,
@@ -235,12 +235,7 @@ export function History({
               <div>
                 <span className="kpi-label">{translate("HOST UPTIME")}</span>
                 <strong className="telemetry-big mono">
-                  {entity.uptime
-                    ? Math.floor(entity.uptime / 86400) +
-                      "d " +
-                      Math.floor((entity.uptime % 86400) / 3600) +
-                      "h"
-                    : "—"}
+                  {formatUptime(entity.uptime)}
                 </strong>
               </div>
             </div>

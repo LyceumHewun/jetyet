@@ -196,7 +196,6 @@ export const zhHans = {
   "Quota exhausted": "配额已用尽",
   Planned: "待部署",
   Running: "运行中",
-  Stopped: "已停止",
   "Background workers": "后台进程",
   "No heartbeat": "暂无心跳",
   "Primary navigation": "主导航",
@@ -225,7 +224,6 @@ export const zhHans = {
   "SSH Trusted": "SSH 已受信",
   "Verify SSH": "验证 SSH",
   "Stale data": "数据已过时",
-  online: "在线",
   Edit: "编辑",
   Collapse: "收起",
   "HYSTERIA 2 NODE": "HYSTERIA 2 节点",
@@ -421,6 +419,7 @@ export const zhHans = {
   "Internal server error": "服务器内部错误",
   "Request origin mismatch": "请求来源不匹配",
   "Operation failed": "操作失败",
+  "Operation failed. {0}": "操作失败。{0}",
   "This password link is invalid or expired": "此密码设置链接无效或已过期",
   "Too many attempts. Retry in 15 minutes.":
     "尝试次数过多。请在 15 分钟后重试。",

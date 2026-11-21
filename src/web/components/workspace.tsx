@@ -1,4 +1,4 @@
-import { ScrollArea } from "./Scrollbars";
+import { lockDocumentScroll, ScrollArea } from "./Scrollbars";
 import {
   asUiError,
   type UiError,
@@ -125,6 +125,8 @@ export function Stage({
 }) {
   useEffect(() => {
     window.scrollTo({ top: 0 });
+  }, []);
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (
         e.key === "Escape" &&
@@ -180,6 +182,7 @@ export function Modal({
   onClose: () => void;
   wide?: boolean;
 }) {
+  useEffect(lockDocumentScroll, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (
@@ -189,12 +192,7 @@ export function Modal({
         onClose();
     };
     window.addEventListener("keydown", onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prev;
-    };
+    return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
     <div
