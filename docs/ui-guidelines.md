@@ -63,6 +63,25 @@ Always reference CSS custom properties defined in `src/web/styles.css` and suppo
 - **Unified Component Library (`src/web/components/`)**: All reusable UI primitives, form controls, meters, and workspace containers live in `src/web/components/` and are imported through the barrel `src/web/components/index.ts` (`Button`, `Input`, `TextArea`, `SearchInput`, `Select`, `DateTimePicker`, `Checkbox`, `SwitchPill`, `SegmentedControl`, `Chip`, `ChipPicker`, `Badge`, `Field`, `RingMeter`, `MiniBar`, `QuotaBar`, `Stage`, `Confirm`, `Code`, `Empty`, `Table`, `Actions`).
 - **No Native OS Controls**: Never use raw browser `<select>`, `<input type="checkbox">`, `<input type="datetime-local">`, or native browser dialogs (`window.confirm`, `alert`, `prompt`) in feature views. Always use the custom styled components from `src/web/components/`.
 
+## Interface Languages
+
+- The initial release supports English and Simplified Chinese (`zh-Hans`).
+- Both languages cover the full web interface: the management console, Subscription Portal, shared sign-in, and portal password setup.
+- On first visit, use the highest-priority supported browser language and default to English if none matches. Store an explicit language choice in the current browser and honor it across pages and sign-out.
+- Localize product copy, statuses, validation, and common errors. Format dates and numbers for the selected language. Display dates in the Asia/Hong_Kong timezone.
+- Preserve names entered by users, subscription configuration, commands, and third-party diagnostic details. Pair third-party errors with a localized summary when shown in the interface.
+
+## Brand
+
+- The Jetyet brand mark is the approved Lucide rocket outline, drawn in the brand accent (`#b074d1`). The rocket represents liftoff.
+- Use the same rocket mark in the management console, Subscription Portal, shared sign-in, password setup, and favicon.
+- Localize browser tab titles as `Page name · Jetyet`. Update the title when switching primary views. Dialogs and editor stages retain the parent view's title.
+
+## Scrolling
+
+- Use custom overlay scrollbars on both axes in every scrollable area. Scrollbars do not reserve layout space.
+- Reveal the scrollbar on pointer hover, keyboard focus within the region, or active scrolling. Fade it when idle. Support dragging with a desktop pointer and preserve keyboard, wheel, and touch scrolling.
+
 ## Typography, Spacing & Interactions
 
 - **Fonts**: Keep `Space Grotesk Variable` (`--font`) for UI text and `--mono` for metrics, timestamps, addresses, and code.
