@@ -31,6 +31,7 @@ export {
 } from "./primitives";
 export {
   initDocumentScrollbars,
+  lockDocumentScroll,
   OVERLAY_SCROLLBAR_OPTIONS,
   OVERLAY_SCROLLBAR_THEME,
   ScrollArea,

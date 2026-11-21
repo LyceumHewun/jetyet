@@ -2302,6 +2302,9 @@ legend {
   max-height: 50vh;
   white-space: pre;
 }
+.code-output pre {
+  margin: 0;
+}
 .template-source {
   font-family: var(--mono);
   font-size: var(--text-sm);
@@ -3125,7 +3128,7 @@ legend {
     visibility 0.18s ease;
 }
 body > .os-scrollbar.os-theme-jetyet {
-  z-index: 250;
+  z-index: 50;
 }
 .os-scrollbar.os-theme-jetyet.os-scrollbar-horizontal {
   height: var(--os-size);

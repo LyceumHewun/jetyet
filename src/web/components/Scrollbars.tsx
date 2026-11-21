@@ -80,8 +80,28 @@ function mergeScrollbarOptions(
   };
 }
 
+type OverflowAxisBehavior = NonNullable<
+  NonNullable<PartialOptions["overflow"]>["y"]
+>;
+
 let docRefCount = 0;
 let docInstance: OverlayScrollbars | null = null;
+let docLockCount = 0;
+let priorDocOverflowY: OverflowAxisBehavior | null = null;
+
+function getConfiguredOverflowY(options?: PartialOptions): OverflowAxisBehavior {
+  return options?.overflow?.y ?? OVERLAY_SCROLLBAR_OPTIONS.overflow?.y ?? "scroll";
+}
+
+function withLockedOverflowY(options: PartialOptions): PartialOptions {
+  return {
+    ...options,
+    overflow: {
+      ...options.overflow,
+      y: "hidden",
+    },
+  };
+}
 
 /**
  * Initializes the document-level non-gutter overlay scrollbar on `document.body`.
@@ -98,6 +118,9 @@ export function initDocumentScrollbars(options?: PartialOptions): () => void {
   const merged = mergeScrollbarOptions(OVERLAY_SCROLLBAR_OPTIONS, options);
 
   if (!OverlayScrollbars.valid(docInstance)) {
+    if (docLockCount > 0) {
+      priorDocOverflowY = getConfiguredOverflowY(merged);
+    }
     docInstance = OverlayScrollbars(
       {
         target: document.body,
@@ -106,17 +129,69 @@ export function initDocumentScrollbars(options?: PartialOptions): () => void {
           body: false,
         },
       },
-      merged,
+      docLockCount > 0 ? withLockedOverflowY(merged) : merged,
     );
   } else if (options) {
-    docInstance.options(merged, true);
+    if (docLockCount > 0) {
+      priorDocOverflowY = getConfiguredOverflowY(merged);
+      docInstance.options(withLockedOverflowY(merged), true);
+    } else {
+      docInstance.options(merged, true);
+    }
   }
 
+  let cleaned = false;
   return () => {
+    if (cleaned) return;
+    cleaned = true;
     docRefCount = Math.max(0, docRefCount - 1);
-    if (docRefCount === 0 && OverlayScrollbars.valid(docInstance)) {
-      docInstance.destroy();
+    if (docRefCount === 0) {
+      if (OverlayScrollbars.valid(docInstance)) {
+        docInstance.destroy();
+      }
       docInstance = null;
+      priorDocOverflowY = null;
+    }
+  };
+}
+
+/**
+ * Locks vertical document scrolling on the document OverlayScrollbars instance
+ * while at least one lock is active, preserving configured horizontal overflow
+ * and restoring prior vertical overflow on the final cleanup.
+ */
+export function lockDocumentScroll(): () => void {
+  if (typeof document === "undefined") return () => {};
+
+  docLockCount += 1;
+  if (docLockCount === 1 && OverlayScrollbars.valid(docInstance)) {
+    const currentOverflow = docInstance.options().overflow;
+    priorDocOverflowY = currentOverflow.y;
+    docInstance.options({
+      overflow: {
+        x: currentOverflow.x,
+        y: "hidden",
+      },
+    });
+  }
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    docLockCount = Math.max(0, docLockCount - 1);
+    if (docLockCount === 0) {
+      const restoreY = priorDocOverflowY;
+      priorDocOverflowY = null;
+      if (restoreY !== null && OverlayScrollbars.valid(docInstance)) {
+        const currentOverflow = docInstance.options().overflow;
+        docInstance.options({
+          overflow: {
+            x: currentOverflow.x,
+            y: restoreY,
+          },
+        });
+      }
     }
   };
 }
