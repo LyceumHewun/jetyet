@@ -15,12 +15,13 @@ import {
   Sun,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, copyToClipboard } from "./client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api } from "./client";
 import {
   Badge,
   Button,
   Chip,
+  Confirm,
   CopyButton,
   Empty,
   Field,
@@ -35,6 +36,20 @@ import type {
   PortalTemplateSummary,
   Session,
 } from "./types";
+
+type PendingDiscard =
+  | { type: "switch"; targetId: string; targetName: string }
+  | { type: "refresh" }
+  | { type: "create"; sourceId: string };
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException
+    ? err.name === "AbortError"
+    : typeof err === "object" &&
+        err !== null &&
+        "name" in err &&
+        (err as { name?: unknown }).name === "AbortError";
+}
 
 function CreatePersonalTemplateModal({
   sources,
@@ -60,10 +75,12 @@ function CreatePersonalTemplateModal({
       title="New personal template"
       tag="Personal Template"
       subtitle="Copy an available published template into an independent personal draft."
-      onClose={onClose}
+      onClose={() => {
+        if (!busy) onClose();
+      }}
     >
       <form
-        onSubmit={(e) => {
+        onSubmit={async (e) => {
           e.preventDefault();
           const trimmed = name.trim();
           if (!sourceId) {
@@ -76,15 +93,19 @@ function CreatePersonalTemplateModal({
           }
           setBusy(true);
           setError("");
-          onCreate(sourceId, trimmed)
-            .catch((err) => setError((err as Error).message))
-            .finally(() => setBusy(false));
+          try {
+            await onCreate(sourceId, trimmed);
+          } catch (err) {
+            setError((err as Error).message);
+            setBusy(false);
+          }
         }}
       >
         <div className="modal-body">
           <Field label="Copy from published template">
             <Select
               value={sourceId}
+              disabled={busy}
               placeholder="Select source template"
               options={sources.map((s) => ({
                 value: s.id,
@@ -97,6 +118,7 @@ function CreatePersonalTemplateModal({
             <Input
               id="personal-tpl-name"
               required
+              disabled={busy}
               maxLength={100}
               placeholder="e.g. Custom rules"
               value={name}
@@ -113,7 +135,9 @@ function CreatePersonalTemplateModal({
           )}
         </div>
         <div className="modal-foot">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
           <Button
             variant="primary"
             type="submit"
@@ -147,7 +171,6 @@ export function SubscriptionPortal({
   const [selectedId, setSelectedId] = useState<string>("");
   const [detail, setDetail] = useState<PortalTemplateDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [linkMap, setLinkMap] = useState<Record<string, string | null>>({});
 
   // Personal template editor state
   const [draftName, setDraftName] = useState("");
@@ -161,64 +184,114 @@ export function SubscriptionPortal({
   const [createModalSource, setCreateModalSource] = useState<string | null>(
     null,
   );
-  const [copiedAll, setCopiedAll] = useState(false);
+  const [pendingDiscard, setPendingDiscard] = useState<PendingDiscard | null>(
+    null,
+  );
+
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const loadedDetailIdRef = useRef("");
+  const portalAbortRef = useRef<AbortController | null>(null);
+  const portalReqRef = useRef(0);
+  const detailAbortRef = useRef<AbortController | null>(null);
+  const detailReqRef = useRef(0);
+  const opAbortRef = useRef<AbortController | null>(null);
 
   const loadPortal = useCallback(async (keepSelection = true) => {
+    portalAbortRef.current?.abort();
+    const controller = new AbortController();
+    portalAbortRef.current = controller;
+    const reqId = ++portalReqRef.current;
+
     setRefreshing(true);
     try {
-      const data = (await api("portal")) as PortalData;
+      const data = (await api(
+        "portal",
+        "GET",
+        undefined,
+        controller.signal,
+      )) as PortalData;
+      if (controller.signal.aborted || reqId !== portalReqRef.current) {
+        return null;
+      }
       setPortal(data);
       setError("");
 
       const ids = new Set(data.templates.map((t) => t.id));
-      setSelectedId((prev) => {
-        if (keepSelection && prev && ids.has(prev)) return prev;
-        if (data.defaultTemplate && ids.has(data.defaultTemplate)) {
-          return data.defaultTemplate;
-        }
-        return data.templates[0]?.id || "";
-      });
-
-      if (data.expired) {
-        setLinkMap({});
-      } else {
-        const published = data.templates.filter((t) => t.published);
-        const entries = await Promise.all(
-          published.map(async (t) => {
-            try {
-              const d = (await api(
-                `portal/templates/${t.id}`,
-              )) as PortalTemplateDetail;
-              return [t.id, d.link] as const;
-            } catch {
-              return [t.id, null] as const;
-            }
-          }),
-        );
-        setLinkMap(Object.fromEntries(entries));
+      const nextSelectedId =
+        keepSelection && selectedIdRef.current && ids.has(selectedIdRef.current)
+          ? selectedIdRef.current
+          : data.defaultTemplate && ids.has(data.defaultTemplate)
+            ? data.defaultTemplate
+            : data.templates[0]?.id || "";
+      if (nextSelectedId !== selectedIdRef.current) {
+        setSelectedId(nextSelectedId);
       }
-      return data;
+      return { data, nextSelectedId };
     } catch (err) {
+      if (
+        isAbortError(err) ||
+        controller.signal.aborted ||
+        reqId !== portalReqRef.current
+      ) {
+        return null;
+      }
       setError((err as Error).message);
       return null;
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (reqId === portalReqRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
   const loadDetail = useCallback(async (id: string) => {
+    detailAbortRef.current?.abort();
+    const reqId = ++detailReqRef.current;
+
     if (!id) {
+      detailAbortRef.current = null;
+      loadedDetailIdRef.current = "";
+      setDetailLoading(false);
       setDetail(null);
+      setDraftName("");
+      setDraftBody("");
+      setSavedSnapshot({ name: "", body: "" });
+      setPreviewText("");
+      setPreviewedSaved(false);
       return null;
     }
+
+    const controller = new AbortController();
+    detailAbortRef.current = controller;
     setDetailLoading(true);
+    setPreviewText("");
+    setPreviewedSaved(false);
+    if (loadedDetailIdRef.current !== id) {
+      loadedDetailIdRef.current = "";
+      setDetail(null);
+      setDraftName("");
+      setDraftBody("");
+      setSavedSnapshot({ name: "", body: "" });
+    }
+
     try {
       const d = (await api(
         `portal/templates/${id}`,
+        "GET",
+        undefined,
+        controller.signal,
       )) as PortalTemplateDetail;
+      if (
+        controller.signal.aborted ||
+        reqId !== detailReqRef.current ||
+        selectedIdRef.current !== d.id
+      ) {
+        return null;
+      }
+      loadedDetailIdRef.current = d.id;
       setDetail(d);
-      setLinkMap((prev) => ({ ...prev, [d.id]: d.link }));
       if (d.personal) {
         const initialBody = d.body ?? "";
         setDraftName(d.name);
@@ -233,12 +306,30 @@ export function SubscriptionPortal({
       setPreviewedSaved(false);
       return d;
     } catch (err) {
+      if (
+        isAbortError(err) ||
+        controller.signal.aborted ||
+        reqId !== detailReqRef.current
+      ) {
+        return null;
+      }
       setError((err as Error).message);
       return null;
     } finally {
-      setDetailLoading(false);
+      if (reqId === detailReqRef.current) {
+        setDetailLoading(false);
+      }
     }
   }, []);
+
+  const refreshAll = useCallback(async () => {
+    const prevId = selectedIdRef.current;
+    const result = await loadPortal(true);
+    if (!result) return;
+    if (result.nextSelectedId && result.nextSelectedId === prevId) {
+      await loadDetail(result.nextSelectedId);
+    }
+  }, [loadPortal, loadDetail]);
 
   useEffect(() => {
     void loadPortal(false);
@@ -248,9 +339,29 @@ export function SubscriptionPortal({
     if (selectedId) {
       void loadDetail(selectedId);
     } else {
+      detailAbortRef.current?.abort();
+      detailReqRef.current += 1;
+      loadedDetailIdRef.current = "";
+      setDetailLoading(false);
       setDetail(null);
+      setDraftName("");
+      setDraftBody("");
+      setSavedSnapshot({ name: "", body: "" });
+      setPreviewText("");
+      setPreviewedSaved(false);
     }
+    return () => {
+      detailAbortRef.current?.abort();
+    };
   }, [selectedId, loadDetail]);
+
+  useEffect(() => {
+    return () => {
+      portalAbortRef.current?.abort();
+      detailAbortRef.current?.abort();
+      opAbortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -271,137 +382,215 @@ export function SubscriptionPortal({
     () => templates.filter((t) => t.published),
     [templates],
   );
+  const defaultTemplateSummary = useMemo(
+    () => templates.find((t) => t.id === portal?.defaultTemplate) ?? null,
+    [templates, portal?.defaultTemplate],
+  );
+  const selectedSummary = useMemo(
+    () => templates.find((t) => t.id === selectedId) ?? null,
+    [templates, selectedId],
+  );
 
-  const publishedLinks = useMemo(() => {
-    if (!portal || portal.expired) return [];
-    const items = templates
-      .filter((t) => t.published && linkMap[t.id])
-      .map((t) => ({
-        id: t.id,
-        name: t.name,
-        personal: t.personal,
-        isDefault: t.id === portal.defaultTemplate,
-        url: linkMap[t.id] as string,
-      }));
-    items.sort((a, b) => (a.isDefault ? -1 : b.isDefault ? 1 : 0));
-    return items;
-  }, [portal, templates, linkMap]);
+  const activeDetail = detail && detail.id === selectedId ? detail : null;
+  const controlsDisabled = !!busyAction || detailLoading || refreshing;
+  const switchDisabled = !!busyAction || refreshing;
 
   const dirty =
-    !!detail?.personal &&
+    !!activeDetail?.personal &&
     (draftName !== savedSnapshot.name || draftBody !== savedSnapshot.body);
 
-  const saveDraft = async (): Promise<boolean> => {
-    if (!detail?.personal) return false;
-    const trimmed = draftName.trim();
+  const persistDraft = async (
+    targetId: string,
+    rawName: string,
+    body: string,
+  ): Promise<PortalTemplateSummary | null> => {
+    const trimmed = rawName.trim();
     if (!trimmed) {
       setError("Template name is required.");
-      return false;
+      return null;
     }
+    opAbortRef.current?.abort();
+    const controller = new AbortController();
+    opAbortRef.current = controller;
     setBusyAction("save");
     setError("");
     try {
-      await api(`portal/templates/${detail.id}`, "PUT", {
-        name: trimmed,
-        body: draftBody,
-      });
-      setDraftName(trimmed);
-      setSavedSnapshot({ name: trimmed, body: draftBody });
+      const saved = (await api(
+        `portal/templates/${targetId}`,
+        "PUT",
+        {
+          name: trimmed,
+          body,
+        },
+        controller.signal,
+      )) as PortalTemplateSummary;
+      if (controller.signal.aborted || selectedIdRef.current !== targetId) {
+        return null;
+      }
+      setDraftName(saved.name);
+      setSavedSnapshot({ name: saved.name, body });
       setPreviewedSaved(false);
       setPreviewText("");
       setDetail((prev) =>
-        prev ? { ...prev, name: trimmed, draft: true } : prev,
+        prev && prev.id === targetId
+          ? {
+              ...prev,
+              name: saved.name,
+              published: saved.published,
+              draft: saved.draft,
+              body,
+            }
+          : prev,
       );
-      await loadPortal(true);
-      setToast("Draft saved");
-      return true;
+      setPortal((prev) =>
+        prev
+          ? {
+              ...prev,
+              templates: prev.templates.map((t) =>
+                t.id === saved.id ? saved : t,
+              ),
+            }
+          : prev,
+      );
+      return saved;
     } catch (err) {
-      setError((err as Error).message);
-      return false;
+      if (!isAbortError(err)) {
+        setError((err as Error).message);
+      }
+      return null;
+    }
+  };
+
+  const saveDraft = async (): Promise<boolean> => {
+    if (!activeDetail?.personal || controlsDisabled) return false;
+    const targetId = activeDetail.id;
+    try {
+      const saved = await persistDraft(targetId, draftName, draftBody);
+      if (!saved) return false;
+      await loadPortal(true);
+      if (selectedIdRef.current === targetId) {
+        setToast("Draft saved");
+      }
+      return true;
     } finally {
       setBusyAction("");
     }
   };
 
   const runPreview = async () => {
-    if (!detail) return;
+    if (!activeDetail || controlsDisabled) return;
+    const targetId = activeDetail.id;
     setError("");
-    if (detail.personal && dirty) {
-      const trimmed = draftName.trim();
-      if (!trimmed) {
-        setError("Template name is required.");
-        return;
-      }
-      setBusyAction("save");
-      try {
-        await api(`portal/templates/${detail.id}`, "PUT", {
-          name: trimmed,
-          body: draftBody,
-        });
-        setDraftName(trimmed);
-        setSavedSnapshot({ name: trimmed, body: draftBody });
-        setDetail((prev) =>
-          prev ? { ...prev, name: trimmed, draft: true } : prev,
-        );
-      } catch (err) {
-        setError((err as Error).message);
+    if (activeDetail.personal && dirty) {
+      const saved = await persistDraft(targetId, draftName, draftBody);
+      if (!saved) {
         setBusyAction("");
         return;
       }
     }
 
+    opAbortRef.current?.abort();
+    const controller = new AbortController();
+    opAbortRef.current = controller;
     setBusyAction("preview");
     try {
       const res = (await api(
-        `portal/templates/${detail.id}/preview`,
+        `portal/templates/${targetId}/preview`,
         "POST",
+        undefined,
+        controller.signal,
       )) as { text: string };
+      if (controller.signal.aborted || selectedIdRef.current !== targetId) {
+        return;
+      }
       setPreviewText(res.text || "");
       setPreviewedSaved(true);
-      if (detail.personal) {
+      if (activeDetail.personal) {
         await loadPortal(true);
       }
     } catch (err) {
-      setPreviewedSaved(false);
-      setError((err as Error).message);
+      if (!isAbortError(err)) {
+        setPreviewedSaved(false);
+        setError((err as Error).message);
+      }
     } finally {
       setBusyAction("");
-    }
-  };
-
-  const runPublish = async () => {
-    if (!detail?.personal || dirty || !previewedSaved) return;
-    setBusyAction("publish");
-    setError("");
-    try {
-      await api(`portal/templates/${detail.id}/publish`, "POST");
-      await Promise.all([loadPortal(true), loadDetail(detail.id)]);
-      setToast("Personal template published");
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusyAction("");
-    }
-  };
-
-  const handleCopyAll = async () => {
-    if (!publishedLinks.length) return;
-    const text = publishedLinks
-      .map((item) => `${item.name}${item.isDefault ? " (Default)" : ""}\n${item.url}`)
-      .join("\n\n");
-    const ok = await copyToClipboard(text);
-    if (ok) {
-      setCopiedAll(true);
-      window.setTimeout(() => setCopiedAll(false), 2000);
     }
   };
 
   const canPublish =
-    !!detail?.personal &&
-    !busyAction &&
+    !!activeDetail?.personal &&
+    !controlsDisabled &&
     !dirty &&
     previewedSaved &&
-    (detail.draft || !detail.published);
+    activeDetail.draft;
+
+  const runPublish = async () => {
+    if (!canPublish || !activeDetail) return;
+    const targetId = activeDetail.id;
+    opAbortRef.current?.abort();
+    const controller = new AbortController();
+    opAbortRef.current = controller;
+    setBusyAction("publish");
+    setError("");
+    try {
+      await api(
+        `portal/templates/${targetId}/publish`,
+        "POST",
+        undefined,
+        controller.signal,
+      );
+      if (controller.signal.aborted || selectedIdRef.current !== targetId) {
+        return;
+      }
+      const res = await loadPortal(true);
+      if (
+        res &&
+        res.nextSelectedId === targetId &&
+        selectedIdRef.current === targetId
+      ) {
+        await loadDetail(targetId);
+      }
+      setToast("Personal template published");
+    } catch (err) {
+      if (!isAbortError(err)) {
+        setError((err as Error).message);
+      }
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const requestSelectTemplate = (t: PortalTemplateSummary) => {
+    if (switchDisabled || t.id === selectedId) return;
+    if (dirty) {
+      setPendingDiscard({
+        type: "switch",
+        targetId: t.id,
+        targetName: t.name,
+      });
+      return;
+    }
+    setSelectedId(t.id);
+  };
+
+  const requestRefresh = () => {
+    if (controlsDisabled) return;
+    if (dirty) {
+      setPendingDiscard({ type: "refresh" });
+      return;
+    }
+    void refreshAll();
+  };
+
+  const requestCreateModal = (sourceId: string) => {
+    if (controlsDisabled) return;
+    if (dirty) {
+      setPendingDiscard({ type: "create", sourceId });
+      return;
+    }
+    setCreateModalSource(sourceId);
+  };
 
   return (
     <div className="shell">
@@ -437,11 +626,8 @@ export function SubscriptionPortal({
               variant="icon"
               aria-label="Refresh portal"
               className={refreshing ? "spinning" : ""}
-              disabled={refreshing}
-              onClick={() => {
-                void loadPortal(true);
-                if (selectedId) void loadDetail(selectedId);
-              }}
+              disabled={controlsDisabled}
+              onClick={requestRefresh}
               title="Refresh"
             >
               <RefreshCw size={15} />
@@ -496,8 +682,9 @@ export function SubscriptionPortal({
                 {publishedSources.length > 0 && (
                   <Button
                     variant="primary"
+                    disabled={controlsDisabled}
                     onClick={() =>
-                      setCreateModalSource(
+                      requestCreateModal(
                         portal.defaultTemplate || publishedSources[0].id,
                       )
                     }
@@ -525,64 +712,107 @@ export function SubscriptionPortal({
                     <div className="chip-group">
                       <Link2 size={15} className="muted" />
                       <h2>Subscription links</h2>
-                      <span className="count">{publishedLinks.length}</span>
                     </div>
-                    {publishedLinks.length > 1 && (
-                      <Button
-                        variant="subtle"
-                        onClick={() => void handleCopyAll()}
-                      >
-                        {copiedAll ? <Check size={13} /> : <Copy size={13} />}
-                        {copiedAll ? "Copied all" : "Copy all"}
-                      </Button>
-                    )}
                   </div>
-                  {publishedLinks.length ? (
+                  {portal.defaultLink || selectedSummary ? (
                     <div className="portal-links-list">
-                      {publishedLinks.map((item) => (
-                        <div
-                          key={item.id}
-                          className={
-                            "portal-link-row" +
-                            (item.isDefault ? " is-default" : "")
-                          }
-                        >
+                      {portal.defaultLink && (
+                        <div className="portal-link-row is-default">
                           <div className="portal-link-meta">
-                            <strong>{item.name}</strong>
+                            <strong>Default subscription</strong>
                             <div className="chip-group">
-                              {item.isDefault && (
-                                <Badge tone="good">Default</Badge>
+                              <Badge tone="good">Default</Badge>
+                              {defaultTemplateSummary && (
+                                <Chip>
+                                  Choice: {defaultTemplateSummary.name}
+                                </Chip>
                               )}
-                              <Chip>
-                                {item.personal ? "Personal" : "Assigned"}
-                              </Chip>
                             </div>
                           </div>
-                          <div className="portal-link-url mono" title={item.url}>
-                            {item.url}
+                          <div
+                            className="portal-link-url mono"
+                            title={portal.defaultLink}
+                          >
+                            {portal.defaultLink}
                           </div>
                           <div className="link-card-actions">
                             <CopyButton
-                              text={item.url}
+                              text={portal.defaultLink}
                               label="Copy"
                               copiedLabel="Copied"
-                              ariaLabel={`Copy link for ${item.name}`}
-                              variant={item.isDefault ? "primary" : "subtle"}
+                              ariaLabel="Copy default subscription link"
+                              variant="primary"
                               className="link-action-btn"
                             />
                             <a
-                              href={item.url}
+                              href={portal.defaultLink}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="icon-button link-open-btn"
-                              title={`Open ${item.name}`}
-                              aria-label={`Open ${item.name}`}
+                              title="Open default subscription"
+                              aria-label="Open default subscription"
                             >
                               <ExternalLink size={14} />
                             </a>
                           </div>
                         </div>
-                      ))}
+                      )}
+                      {selectedSummary &&
+                        (detailLoading && !activeDetail ? (
+                          <div className="portal-link-status muted">
+                            Loading pinned link for {selectedSummary.name}…
+                          </div>
+                        ) : activeDetail?.link ? (
+                          <div className="portal-link-row">
+                            <div className="portal-link-meta">
+                              <strong>{activeDetail.name}</strong>
+                              <div className="chip-group">
+                                <Chip>Pinned</Chip>
+                                <Chip>
+                                  {activeDetail.personal
+                                    ? "Personal"
+                                    : "Assigned"}
+                                </Chip>
+                                {activeDetail.id === portal.defaultTemplate && (
+                                  <Badge tone="good">Default choice</Badge>
+                                )}
+                              </div>
+                            </div>
+                            <div
+                              className="portal-link-url mono"
+                              title={activeDetail.link}
+                            >
+                              {activeDetail.link}
+                            </div>
+                            <div className="link-card-actions">
+                              <CopyButton
+                                text={activeDetail.link}
+                                label="Copy"
+                                copiedLabel="Copied"
+                                ariaLabel={`Copy pinned link for ${activeDetail.name}`}
+                                variant={
+                                  portal.defaultLink ? "subtle" : "primary"
+                                }
+                                className="link-action-btn"
+                              />
+                              <a
+                                href={activeDetail.link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="icon-button link-open-btn"
+                                title={`Open ${activeDetail.name}`}
+                                aria-label={`Open ${activeDetail.name}`}
+                              >
+                                <ExternalLink size={14} />
+                              </a>
+                            </div>
+                          </div>
+                        ) : activeDetail ? (
+                          <div className="portal-link-status muted">
+                            Publish “{activeDetail.name}” to get its pinned
+                            template link.
+                          </div>
+                        ) : null)}
                     </div>
                   ) : (
                     <div className="portal-links-empty muted">
@@ -615,10 +845,11 @@ export function SubscriptionPortal({
                               <button
                                 key={t.id}
                                 type="button"
+                                disabled={switchDisabled}
                                 className={
                                   "portal-tpl-item" + (active ? " active" : "")
                                 }
-                                onClick={() => setSelectedId(t.id)}
+                                onClick={() => requestSelectTemplate(t)}
                               >
                                 <span className="portal-tpl-name">{t.name}</span>
                                 <span className="chip-group">
@@ -649,17 +880,22 @@ export function SubscriptionPortal({
                         <div className="portal-tpl-list">
                           {personalTemplates.map((t) => {
                             const active = selectedId === t.id;
+                            const isDefault = t.id === portal.defaultTemplate;
                             return (
                               <button
                                 key={t.id}
                                 type="button"
+                                disabled={switchDisabled}
                                 className={
                                   "portal-tpl-item" + (active ? " active" : "")
                                 }
-                                onClick={() => setSelectedId(t.id)}
+                                onClick={() => requestSelectTemplate(t)}
                               >
                                 <span className="portal-tpl-name">{t.name}</span>
                                 <span className="chip-group">
+                                  {isDefault && (
+                                    <Badge tone="good">Default</Badge>
+                                  )}
                                   {t.published && t.draft && (
                                     <Badge tone="warning">Draft edits</Badge>
                                   )}
@@ -681,44 +917,47 @@ export function SubscriptionPortal({
                   </aside>
 
                   <div className="portal-main">
-                    {detailLoading && !detail ? (
+                    {detailLoading && !activeDetail ? (
                       <div className="panel portal-loading muted">
                         Loading template…
                       </div>
-                    ) : !detail ? (
+                    ) : !activeDetail ? (
                       <div className="panel">
                         <Empty title="Select a template">
                           Choose an assigned or personal template to inspect or
                           edit.
                         </Empty>
                       </div>
-                    ) : !detail.personal ? (
+                    ) : !activeDetail.personal ? (
                       <div className="studio-card portal-assigned-view">
                         <div className="portal-detail-head">
                           <div className="portal-detail-title">
                             <FileCode2 size={17} className="muted" />
-                            <h2>{detail.name}</h2>
+                            <h2>{activeDetail.name}</h2>
                             <Chip>Assigned</Chip>
-                            {detail.id === portal.defaultTemplate && (
-                              <Badge tone="good">Default</Badge>
+                            {activeDetail.id === portal.defaultTemplate && (
+                              <Badge tone="good">Default choice</Badge>
                             )}
                             <Badge
-                              tone={detail.published ? "good" : "neutral"}
+                              tone={activeDetail.published ? "good" : "neutral"}
                             >
-                              {detail.published ? "Published" : "Draft"}
+                              {activeDetail.published ? "Published" : "Draft"}
                             </Badge>
                           </div>
                           <div className="portal-detail-actions">
-                            {!portal.expired && detail.link && (
+                            {!portal.expired && activeDetail.link && (
                               <CopyButton
-                                text={detail.link}
+                                text={activeDetail.link}
                                 label="Copy link"
                                 copiedLabel="Copied"
                               />
                             )}
-                            {detail.published && (
+                            {activeDetail.published && (
                               <Button
-                                onClick={() => setCreateModalSource(detail.id)}
+                                disabled={controlsDisabled}
+                                onClick={() =>
+                                  requestCreateModal(activeDetail.id)
+                                }
                               >
                                 <Copy size={14} />
                                 Copy as personal
@@ -726,7 +965,7 @@ export function SubscriptionPortal({
                             )}
                             <Button
                               variant="primary"
-                              disabled={!!busyAction}
+                              disabled={controlsDisabled}
                               onClick={() => void runPreview()}
                             >
                               <Eye size={14} />
@@ -737,10 +976,14 @@ export function SubscriptionPortal({
                           </div>
                         </div>
 
-                        {!portal.expired && detail.link && (
+                        {!portal.expired && activeDetail.link && (
                           <div className="portal-inline-link">
-                            <span className="kpi-label">TEMPLATE LINK</span>
-                            <div className="link-url mono">{detail.link}</div>
+                            <span className="kpi-label">
+                              PINNED TEMPLATE LINK
+                            </span>
+                            <div className="link-url mono">
+                              {activeDetail.link}
+                            </div>
                           </div>
                         )}
 
@@ -780,6 +1023,7 @@ export function SubscriptionPortal({
                                 aria-label="Personal template name"
                                 placeholder="Template name…"
                                 maxLength={100}
+                                disabled={controlsDisabled}
                                 value={draftName}
                                 onChange={(e) => {
                                   setDraftName(e.target.value);
@@ -789,13 +1033,21 @@ export function SubscriptionPortal({
                               />
                               <div className="chip-group">
                                 <Chip>Personal</Chip>
-                                {detail.published && detail.draft && (
-                                  <Badge tone="warning">Draft edits</Badge>
+                                {activeDetail.id === portal.defaultTemplate && (
+                                  <Badge tone="good">Default choice</Badge>
                                 )}
+                                {activeDetail.published &&
+                                  activeDetail.draft && (
+                                    <Badge tone="warning">Draft edits</Badge>
+                                  )}
                                 <Badge
-                                  tone={detail.published ? "good" : "neutral"}
+                                  tone={
+                                    activeDetail.published ? "good" : "neutral"
+                                  }
                                 >
-                                  {detail.published ? "Published" : "Draft"}
+                                  {activeDetail.published
+                                    ? "Published"
+                                    : "Draft"}
                                 </Badge>
                                 {dirty && (
                                   <Badge tone="warning">Unsaved</Badge>
@@ -805,7 +1057,9 @@ export function SubscriptionPortal({
                             <div className="portal-detail-actions">
                               <Button
                                 disabled={
-                                  !!busyAction || !dirty || !draftName.trim()
+                                  controlsDisabled ||
+                                  !dirty ||
+                                  !draftName.trim()
                                 }
                                 onClick={() => void saveDraft()}
                               >
@@ -814,7 +1068,7 @@ export function SubscriptionPortal({
                                   : "Save draft"}
                               </Button>
                               <Button
-                                disabled={!!busyAction || !draftName.trim()}
+                                disabled={controlsDisabled || !draftName.trim()}
                                 onClick={() => void runPreview()}
                               >
                                 <Eye size={14} />
@@ -836,15 +1090,17 @@ export function SubscriptionPortal({
                               </Button>
                             </div>
                           </div>
-                          {!portal.expired && detail.link && (
+                          {!portal.expired && activeDetail.link && (
                             <div className="portal-inline-link">
-                              <span className="kpi-label">PERSONAL LINK</span>
+                              <span className="kpi-label">
+                                PINNED PERSONAL LINK
+                              </span>
                               <div className="portal-inline-link-row">
                                 <div className="link-url mono">
-                                  {detail.link}
+                                  {activeDetail.link}
                                 </div>
                                 <CopyButton
-                                  text={detail.link}
+                                  text={activeDetail.link}
                                   label="Copy"
                                   copiedLabel="Copied"
                                 />
@@ -866,6 +1122,7 @@ export function SubscriptionPortal({
                               aria-label="Personal template body"
                               spellCheck={false}
                               rows={22}
+                              disabled={controlsDisabled}
                               value={draftBody}
                               onChange={(e) => {
                                 setDraftBody(e.target.value);
@@ -929,11 +1186,40 @@ export function SubscriptionPortal({
               name,
             })) as { id: string };
             setCreateModalSource(null);
-            await loadPortal(false);
+            selectedIdRef.current = created.id;
             setSelectedId(created.id);
+            await loadPortal(true);
             setToast("Personal draft created");
           }}
         />
+      )}
+
+      {pendingDiscard && (
+        <Confirm
+          title="Discard unsaved changes?"
+          action="Discard changes"
+          danger
+          onClose={() => setPendingDiscard(null)}
+          onConfirm={async () => {
+            const action = pendingDiscard;
+            setPendingDiscard(null);
+            if (action.type === "switch") {
+              setSelectedId(action.targetId);
+            } else if (action.type === "refresh") {
+              void refreshAll();
+            } else {
+              setCreateModalSource(action.sourceId);
+            }
+          }}
+        >
+          <p className="muted">
+            {pendingDiscard.type === "switch"
+              ? `You have unsaved edits to “${activeDetail?.name || "this template"}”. Switching to “${pendingDiscard.targetName}” will discard them.`
+              : pendingDiscard.type === "refresh"
+                ? `You have unsaved edits to “${activeDetail?.name || "this template"}”. Refreshing will discard them.`
+                : `You have unsaved edits to “${activeDetail?.name || "this template"}”. Creating a new personal template will discard them.`}
+          </p>
+        </Confirm>
       )}
 
       {toast && (

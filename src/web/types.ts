@@ -20,6 +20,7 @@ export type PortalData = {
   expired: boolean;
   templates: PortalTemplateSummary[];
   defaultTemplate: string | null;
+  defaultLink: string | null;
 };
 
 export type PortalTemplateDetail = PortalTemplateSummary & {

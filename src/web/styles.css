@@ -2724,6 +2724,14 @@ legend {
   padding: var(--space-5);
   font-size: 12px;
 }
+.portal-link-status {
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.portal-link-status:last-child {
+  border-bottom: 0;
+}
 .portal-workbench {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
