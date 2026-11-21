@@ -36,6 +36,7 @@ export function createApp(s: Store) {
           error: err.issues
             .map((i) => `${i.path.join(".")}: ${i.message}`)
             .join("; "),
+          errorKind: "validation",
         },
         400,
       );

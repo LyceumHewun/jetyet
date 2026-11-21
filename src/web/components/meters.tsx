@@ -1,3 +1,4 @@
+import { formatNumber, t as translate } from "../i18n";
 import { amount, fmt } from "../client";
 import type { Row } from "../types";
 
@@ -131,9 +132,11 @@ export function QuotaBar({ row }: { row: Row }) {
           {fmt(used)} <small>/ {limit === null ? "∞" : fmt(limit)}</small>
         </span>
         <span className="quota-meta">
-          {row.usageStale && <span className="stale-tag">Stale</span>}
+          {row.usageStale && (
+            <span className="stale-tag">{translate("Stale")}</span>
+          )}
           <small className="mono">
-            {limit === null ? "∞" : `${Math.round(pct)}%`}
+            {limit === null ? "∞" : `${formatNumber(pct)}%`}
           </small>
         </span>
       </div>

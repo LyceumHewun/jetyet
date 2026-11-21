@@ -1,3 +1,5 @@
+import { ScrollTextArea } from "./Scrollbars";
+import { t as translate } from "../i18n";
 import { Check, Copy, Eye, EyeOff, Search, X } from "lucide-react";
 import {
   useEffect,
@@ -11,13 +13,7 @@ import {
 import { copyToClipboard } from "../client";
 
 export type ButtonVariant =
-  | "default"
-  | "primary"
-  | "subtle"
-  | "text"
-  | "icon"
-  | "danger"
-  | "danger-text";
+  "default" | "primary" | "subtle" | "text" | "icon" | "danger" | "danger-text";
 
 export function Button({
   variant = "default",
@@ -62,7 +58,9 @@ export function Input({
         <button
           type="button"
           className="ui-input-action"
-          aria-label={visible ? "Hide password" : "Show password"}
+          aria-label={
+            visible ? translate("Hide password") : translate("Show password")
+          }
           onClick={() => setVisible((v) => !v)}
           tabIndex={-1}
         >
@@ -84,12 +82,7 @@ export function TextArea({
   className = "",
   ...props
 }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return (
-    <textarea
-      className={["ui-textarea", className].filter(Boolean).join(" ")}
-      {...props}
-    />
-  );
+  return <ScrollTextArea className={className} {...props} />;
 }
 
 export function SearchInput({
@@ -114,7 +107,7 @@ export function SearchInput({
         <button
           type="button"
           className="ui-clear-btn"
-          aria-label="Clear search"
+          aria-label={translate("Clear search")}
           onClick={() => onChange("")}
         >
           <X size={13} />
@@ -167,8 +160,8 @@ let lastCopyAnnouncement = "";
 
 export function CopyButton({
   text,
-  label = "Copy",
-  copiedLabel = "Copied",
+  label = translate("Copy"),
+  copiedLabel = translate("Copied"),
   ariaLabel,
   variant = "subtle",
   className = "",
@@ -194,7 +187,7 @@ export function CopyButton({
     const ok = await copyToClipboard(text);
     const nextStatus = ok ? "copied" : "failed";
     setStatus(nextStatus);
-    let msg = ok ? copiedLabel : "Copy failed";
+    let msg = ok ? copiedLabel : translate("Copy failed");
     if (msg === lastCopyAnnouncement) msg += "\u00A0";
     lastCopyAnnouncement = msg;
     setAnnouncement(msg);
@@ -222,7 +215,7 @@ export function CopyButton({
           {status === "copied"
             ? copiedLabel
             : status === "failed"
-              ? "Failed"
+              ? translate("Failed")
               : label}
         </span>
       </Button>
@@ -303,8 +296,8 @@ export function SegmentedControl<T extends string>({
 export function SwitchPill({
   checked,
   onChange,
-  onLabel = "Enabled",
-  offLabel = "Disabled",
+  onLabel = translate("Enabled"),
+  offLabel = translate("Disabled"),
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
@@ -354,7 +347,7 @@ export function ChipPicker({
   options,
   selected,
   onToggle,
-  emptyText = "None available.",
+  emptyText = translate("None available."),
 }: {
   options: { id: string; label: string }[];
   selected: string[];

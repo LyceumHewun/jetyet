@@ -1,3 +1,4 @@
+import { formatNumber, t as translate } from "../i18n";
 import { useEffect, useState } from "react";
 import {
   Area,
@@ -67,15 +68,24 @@ export function InlineTelemetry({
   const hasResources =
     entity.kind === "host" && samples.some((p) => p.cpu !== null);
   const unitSuffix =
-    resolution === "day" ? "/day" : resolution === "hour" ? "/hr" : "/min";
+    resolution === "day"
+      ? translate("/day")
+      : resolution === "hour"
+        ? translate("/hr")
+        : translate("/min");
   const uptimeText = entity.uptime
-    ? `${Math.floor(entity.uptime / 86400)}d ${Math.floor((entity.uptime % 86400) / 3600)}h`
+    ? translate(
+        "{0}d {1}h",
+        Math.floor(entity.uptime / 86400),
+        Math.floor((entity.uptime % 86400) / 3600),
+      )
     : "—";
 
   const inbound = entity.usage?.inbound || 0;
   const outbound = entity.usage?.outbound || 0;
   const totalTraffic = inbound + outbound;
-  const outShare = totalTraffic > 0 ? Math.round((outbound / totalTraffic) * 100) : 50;
+  const outShare =
+    totalTraffic > 0 ? Math.round((outbound / totalTraffic) * 100) : 50;
   const quotaPct = entity.quota?.limit
     ? Math.min(100, (totalTraffic / Math.max(entity.quota.limit, 1)) * 100)
     : 0;
@@ -95,13 +105,17 @@ export function InlineTelemetry({
                     ? "warning"
                     : "danger"
               }
-              label="Availability"
+              label={translate("Availability")}
             />
             <div>
-              <span className="kpi-label">UPTIME · {availability.toFixed(1)}%</span>
+              <span className="kpi-label">
+                {translate("UPTIME · {0}%", formatNumber(availability, 1))}
+              </span>
               <strong className="metric-big mono">{uptimeText}</strong>
               <small className="mono">
-                {entity.lastSeen ? `Seen ${when(entity.lastSeen)}` : "No heartbeat"}
+                {entity.lastSeen
+                  ? translate("Seen {0}", when(entity.lastSeen))
+                  : translate("No heartbeat")}
               </small>
             </div>
           </div>
@@ -111,14 +125,17 @@ export function InlineTelemetry({
               percent={quotaPct}
               size={58}
               tone={entity.exhausted ? "warning" : "accent"}
-              label="Quota"
+              label={translate("Quota")}
             />
             <div>
-              <span className="kpi-label">PERIOD USAGE</span>
+              <span className="kpi-label">{translate("PERIOD USAGE")}</span>
               <strong className="metric-big mono">{fmt(totalTraffic)}</strong>
               <small className="mono">
-                of {entity.quota?.limit === null ? "∞" : fmt(entity.quota.limit)} · Reset{" "}
-                {when(entity.usage?.next)}
+                {translate(
+                  "Limit {0} · Reset {1}",
+                  entity.quota?.limit === null ? "∞" : fmt(entity.quota.limit),
+                  when(entity.usage?.next),
+                )}
               </small>
             </div>
           </div>
@@ -128,7 +145,7 @@ export function InlineTelemetry({
             <>
               <MiniBar label="CPU" percent={entity.cpu} />
               <MiniBar label="RAM" percent={entity.memory} />
-              <MiniBar label="DISK" percent={entity.disk} />
+              <MiniBar label={translate("Disk")} percent={entity.disk} />
               <QuotaBar row={entity} />
             </>
           ) : (
@@ -137,10 +154,14 @@ export function InlineTelemetry({
               <div className="io-split">
                 <div className="io-split-head">
                   <span className="io-legend">
-                    <i className="dot-accent" />↑ Out <b className="mono">{fmt(outbound)}</b>
+                    <i className="dot-accent" />
+                    {translate("↑ Out") + " "}
+                    <b className="mono">{fmt(outbound)}</b>
                   </span>
                   <span className="io-legend">
-                    <i className="dot-good" />↓ In <b className="mono">{fmt(inbound)}</b>
+                    <i className="dot-good" />
+                    {translate("↓ In") + " "}
+                    <b className="mono">{fmt(inbound)}</b>
                   </span>
                 </div>
                 <div className="io-split-track">
@@ -157,29 +178,34 @@ export function InlineTelemetry({
           <div className="chart-title-group">
             <strong>
               {metric === "resources" && hasResources
-                ? "Resources (%)"
-                : `Traffic (MiB${unitSuffix})`}
+                ? translate("Resources (%)")
+                : translate("Traffic (MiB{0})", unitSuffix)}
             </strong>
             <div className="chart-legends">
               {metric === "resources" && hasResources ? (
                 <>
                   <span className="io-legend">
-                    <i className="dot-accent" />CPU
+                    <i className="dot-accent" />
+                    CPU
                   </span>
                   <span className="io-legend">
-                    <i className="dot-good" />RAM
+                    <i className="dot-good" />
+                    RAM
                   </span>
                   <span className="io-legend">
-                    <i className="dot-muted" />Disk
+                    <i className="dot-muted" />
+                    {translate("Disk")}
                   </span>
                 </>
               ) : (
                 <>
                   <span className="io-legend">
-                    <i className="dot-accent" />Outbound
+                    <i className="dot-accent" />
+                    {translate("Outbound")}
                   </span>
                   <span className="io-legend">
-                    <i className="dot-good" />Inbound
+                    <i className="dot-good" />
+                    {translate("Inbound")}
                   </span>
                 </>
               )}
@@ -189,18 +215,20 @@ export function InlineTelemetry({
             <SegmentedControl
               value={metric}
               options={[
-                ["traffic", "Traffic"],
-                ["resources", "Resources"],
+                ["traffic", translate("Traffic")],
+                ["resources", translate("Resources")],
               ]}
               onChange={setMetric}
             />
           )}
         </div>
         {loading ? (
-          <div className="chart-placeholder muted">Loading telemetry…</div>
+          <div className="chart-placeholder muted">
+            {translate("Loading telemetry…")}
+          </div>
         ) : !samples.length ? (
           <div className="chart-placeholder muted">
-            No observations in this range
+            {translate("No observations in this range")}
           </div>
         ) : (
           <div className="chart">
@@ -253,7 +281,7 @@ export function InlineTelemetry({
                   />
                   <Area
                     dataKey="disk"
-                    name="Disk %"
+                    name={translate("Disk %")}
                     stroke="var(--muted)"
                     fill="none"
                     isAnimationActive={false}
@@ -297,14 +325,14 @@ export function InlineTelemetry({
                   />
                   <Area
                     dataKey="outMiB"
-                    name={`Outbound MiB${unitSuffix}`}
+                    name={translate("Outbound MiB{0}", unitSuffix)}
                     stroke="var(--accent)"
                     fill="var(--accent-soft)"
                     isAnimationActive={false}
                   />
                   <Area
                     dataKey="inMiB"
-                    name={`Inbound MiB${unitSuffix}`}
+                    name={translate("Inbound MiB{0}", unitSuffix)}
                     stroke="var(--good)"
                     fill="var(--good-soft)"
                     isAnimationActive={false}

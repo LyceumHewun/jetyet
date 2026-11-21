@@ -1,4 +1,12 @@
 import {
+  asUiError,
+  type UiError,
+  formatNumber,
+  localizeError,
+  localizeMessage,
+  t as translate,
+} from "./i18n";
+import {
   AlertTriangle,
   Check,
   Copy,
@@ -8,17 +16,25 @@ import {
   Link2,
   LogOut,
   Moon,
-  Network,
   Plus,
   RefreshCw,
   Send,
   Sun,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { api } from "./client";
 import {
   Badge,
+  BrandMark,
+  ScrollArea,
   Button,
   Chip,
   Confirm,
@@ -68,13 +84,15 @@ function CreatePersonalTemplateModal({
   );
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiError>("");
 
   return (
     <Modal
-      title="New personal template"
-      tag="Personal Template"
-      subtitle="Copy an available published template into an independent personal draft."
+      title={translate("New personal template")}
+      tag={translate("Personal Template")}
+      subtitle={translate(
+        "Copy an available published template into an independent personal draft.",
+      )}
       onClose={() => {
         if (!busy) onClose();
       }}
@@ -96,31 +114,33 @@ function CreatePersonalTemplateModal({
           try {
             await onCreate(sourceId, trimmed);
           } catch (err) {
-            setError((err as Error).message);
+            setError(asUiError(err));
             setBusy(false);
           }
         }}
       >
-        <div className="modal-body">
-          <Field label="Copy from published template">
+        <ScrollArea axis="y" className="modal-body">
+          <Field label={translate("Copy from published template")}>
             <Select
               value={sourceId}
               disabled={busy}
-              placeholder="Select source template"
+              placeholder={translate("Select source template")}
               options={sources.map((s) => ({
                 value: s.id,
-                label: s.personal ? `${s.name} (Personal)` : s.name,
+                label: s.personal
+                  ? translate("{0} (Personal)", s.name)
+                  : s.name,
               }))}
               onChange={setSourceId}
             />
           </Field>
-          <Field label="Template name" htmlFor="personal-tpl-name">
+          <Field label={translate("Template name")} htmlFor="personal-tpl-name">
             <Input
               id="personal-tpl-name"
               required
               disabled={busy}
               maxLength={100}
-              placeholder="e.g. Custom rules"
+              placeholder={translate("e.g. Custom rules")}
               value={name}
               onChange={(e) => {
                 setName(e.target.value);
@@ -130,20 +150,20 @@ function CreatePersonalTemplateModal({
           </Field>
           {error && (
             <p className="form-error" role="alert">
-              {error}
+              {localizeError(error)}
             </p>
           )}
-        </div>
+        </ScrollArea>
         <div className="modal-foot">
           <Button onClick={onClose} disabled={busy}>
-            Cancel
+            {translate("Cancel")}
           </Button>
           <Button
             variant="primary"
             type="submit"
             disabled={busy || !sourceId || !name.trim()}
           >
-            {busy ? "Creating…" : "Create draft"}
+            {busy ? translate("Creating…") : translate("Create draft")}
           </Button>
         </div>
       </form>
@@ -155,17 +175,19 @@ export function SubscriptionPortal({
   session,
   theme,
   onToggleTheme,
+  languageControl,
   onLogout,
 }: {
   session: Session;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  languageControl: ReactNode;
   onLogout: () => void;
 }) {
   const [portal, setPortal] = useState<PortalData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiError>("");
   const [toast, setToast] = useState("");
 
   const [selectedId, setSelectedId] = useState<string>("");
@@ -236,7 +258,7 @@ export function SubscriptionPortal({
       ) {
         return null;
       }
-      setError((err as Error).message);
+      setError(asUiError(err));
       return null;
     } finally {
       if (reqId === portalReqRef.current) {
@@ -313,7 +335,7 @@ export function SubscriptionPortal({
       ) {
         return null;
       }
-      setError((err as Error).message);
+      setError(asUiError(err));
       return null;
     } finally {
       if (reqId === detailReqRef.current) {
@@ -455,7 +477,7 @@ export function SubscriptionPortal({
       return saved;
     } catch (err) {
       if (!isAbortError(err)) {
-        setError((err as Error).message);
+        setError(asUiError(err));
       }
       return null;
     }
@@ -511,7 +533,7 @@ export function SubscriptionPortal({
     } catch (err) {
       if (!isAbortError(err)) {
         setPreviewedSaved(false);
-        setError((err as Error).message);
+        setError(asUiError(err));
       }
     } finally {
       setBusyAction("");
@@ -554,7 +576,7 @@ export function SubscriptionPortal({
       setToast("Personal template published");
     } catch (err) {
       if (!isAbortError(err)) {
-        setError((err as Error).message);
+        setError(asUiError(err));
       }
     } finally {
       setBusyAction("");
@@ -603,32 +625,37 @@ export function SubscriptionPortal({
               onClick={(e) => e.preventDefault()}
             >
               <span className="brand-symbol">
-                <Network size={19} />
+                <BrandMark size={19} />
               </span>
               jetyet<span className="brand-period">.</span>
             </a>
-            <Chip>Portal</Chip>
+            <Chip>{translate("Portal")}</Chip>
           </div>
           <div className="command-right">
+            {languageControl}
             <Button
               variant="icon"
               aria-label={
                 theme === "dark"
-                  ? "Switch to light mode"
-                  : "Switch to dark mode"
+                  ? translate("Switch to light mode")
+                  : translate("Switch to dark mode")
               }
               onClick={onToggleTheme}
-              title={theme === "dark" ? "Light mode" : "Dark mode"}
+              title={
+                theme === "dark"
+                  ? translate("Light mode")
+                  : translate("Dark mode")
+              }
             >
               {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             </Button>
             <Button
               variant="icon"
-              aria-label="Refresh portal"
+              aria-label={translate("Refresh portal")}
               className={refreshing ? "spinning" : ""}
               disabled={controlsDisabled}
               onClick={requestRefresh}
-              title="Refresh"
+              title={translate("Refresh")}
             >
               <RefreshCw size={15} />
             </Button>
@@ -636,7 +663,8 @@ export function SubscriptionPortal({
               type="button"
               className="account-chip"
               onClick={onLogout}
-              title={`Sign out (${session.username})`}
+              aria-label={translate("Sign out ({0})", session.username)}
+              title={translate("Sign out ({0})", session.username)}
             >
               <span className="avatar">
                 {(portal?.name || session.username)[0]?.toUpperCase()}
@@ -652,11 +680,11 @@ export function SubscriptionPortal({
         <div className="content portal-content">
           {error && (
             <div className="error-banner" role="alert">
-              <span>{error}</span>
+              <span>{localizeError(error)}</span>
               <button
                 type="button"
                 onClick={() => setError("")}
-                aria-label="Dismiss error"
+                aria-label={translate("Dismiss error")}
               >
                 <X size={16} />
               </button>
@@ -665,7 +693,7 @@ export function SubscriptionPortal({
 
           {loading ? (
             <div className="panel portal-loading muted">
-              Loading subscription portal…
+              {translate("Loading subscription portal…")}
             </div>
           ) : portal ? (
             <>
@@ -675,7 +703,9 @@ export function SubscriptionPortal({
                   <div className="chip-group">
                     <Chip mono>{session.username}</Chip>
                     <Badge tone={portal.expired ? "warning" : "good"}>
-                      {portal.expired ? "Expired" : "Active"}
+                      {portal.expired
+                        ? translate("Expired")
+                        : translate("Active")}
                     </Badge>
                   </div>
                 </div>
@@ -690,7 +720,7 @@ export function SubscriptionPortal({
                     }
                   >
                     <Plus size={15} />
-                    New personal template
+                    {translate("New personal template")}
                   </Button>
                 )}
               </section>
@@ -699,10 +729,11 @@ export function SubscriptionPortal({
                 <section className="portal-expired-banner" role="status">
                   <AlertTriangle size={16} aria-hidden="true" />
                   <div>
-                    <strong>Subscription expired</strong>
+                    <strong>{translate("Subscription expired")}</strong>
                     <p>
-                      Subscription links are unavailable while expired. You can
-                      still create, edit, and preview personal templates.
+                      {translate(
+                        "Subscription links are unavailable while expired. You can still create, edit, and preview personal templates.",
+                      )}
                     </p>
                   </div>
                 </section>
@@ -711,7 +742,7 @@ export function SubscriptionPortal({
                   <div className="panel-heading compact">
                     <div className="chip-group">
                       <Link2 size={15} className="muted" />
-                      <h2>Subscription links</h2>
+                      <h2>{translate("Subscription links")}</h2>
                     </div>
                   </div>
                   {portal.defaultLink || selectedSummary ? (
@@ -719,28 +750,32 @@ export function SubscriptionPortal({
                       {portal.defaultLink && (
                         <div className="portal-link-row is-default">
                           <div className="portal-link-meta">
-                            <strong>Default subscription</strong>
+                            <strong>{translate("Default subscription")}</strong>
                             <div className="chip-group">
-                              <Badge tone="good">Default</Badge>
+                              <Badge tone="good">{translate("Default")}</Badge>
                               {defaultTemplateSummary && (
                                 <Chip>
-                                  Choice: {defaultTemplateSummary.name}
+                                  {translate("Choice:") + " "}
+                                  {defaultTemplateSummary.name}
                                 </Chip>
                               )}
                             </div>
                           </div>
-                          <div
+                          <ScrollArea
+                            axis="x"
                             className="portal-link-url mono"
                             title={portal.defaultLink}
                           >
                             {portal.defaultLink}
-                          </div>
+                          </ScrollArea>
                           <div className="link-card-actions">
                             <CopyButton
                               text={portal.defaultLink}
-                              label="Copy"
-                              copiedLabel="Copied"
-                              ariaLabel="Copy default subscription link"
+                              label={translate("Copy")}
+                              copiedLabel={translate("Copied")}
+                              ariaLabel={translate(
+                                "Copy default subscription link",
+                              )}
                               variant="primary"
                               className="link-action-btn"
                             />
@@ -749,8 +784,10 @@ export function SubscriptionPortal({
                               target="_blank"
                               rel="noopener noreferrer"
                               className="icon-button link-open-btn"
-                              title="Open default subscription"
-                              aria-label="Open default subscription"
+                              title={translate("Open default subscription")}
+                              aria-label={translate(
+                                "Open default subscription",
+                              )}
                             >
                               <ExternalLink size={14} />
                             </a>
@@ -760,36 +797,45 @@ export function SubscriptionPortal({
                       {selectedSummary &&
                         (detailLoading && !activeDetail ? (
                           <div className="portal-link-status muted">
-                            Loading pinned link for {selectedSummary.name}…
+                            {translate(
+                              "Loading pinned link for {0}…",
+                              selectedSummary.name,
+                            )}
                           </div>
                         ) : activeDetail?.link ? (
                           <div className="portal-link-row">
                             <div className="portal-link-meta">
                               <strong>{activeDetail.name}</strong>
                               <div className="chip-group">
-                                <Chip>Pinned</Chip>
+                                <Chip>{translate("Pinned")}</Chip>
                                 <Chip>
                                   {activeDetail.personal
-                                    ? "Personal"
-                                    : "Assigned"}
+                                    ? translate("Personal")
+                                    : translate("Assigned")}
                                 </Chip>
                                 {activeDetail.id === portal.defaultTemplate && (
-                                  <Badge tone="good">Default choice</Badge>
+                                  <Badge tone="good">
+                                    {translate("Default choice")}
+                                  </Badge>
                                 )}
                               </div>
                             </div>
-                            <div
+                            <ScrollArea
+                              axis="x"
                               className="portal-link-url mono"
                               title={activeDetail.link}
                             >
                               {activeDetail.link}
-                            </div>
+                            </ScrollArea>
                             <div className="link-card-actions">
                               <CopyButton
                                 text={activeDetail.link}
-                                label="Copy"
-                                copiedLabel="Copied"
-                                ariaLabel={`Copy pinned link for ${activeDetail.name}`}
+                                label={translate("Copy")}
+                                copiedLabel={translate("Copied")}
+                                ariaLabel={translate(
+                                  "Copy pinned link for {0}",
+                                  activeDetail.name,
+                                )}
                                 variant={
                                   portal.defaultLink ? "subtle" : "primary"
                                 }
@@ -800,8 +846,11 @@ export function SubscriptionPortal({
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="icon-button link-open-btn"
-                                title={`Open ${activeDetail.name}`}
-                                aria-label={`Open ${activeDetail.name}`}
+                                title={translate("Open {0}", activeDetail.name)}
+                                aria-label={translate(
+                                  "Open {0}",
+                                  activeDetail.name,
+                                )}
                               >
                                 <ExternalLink size={14} />
                               </a>
@@ -809,14 +858,18 @@ export function SubscriptionPortal({
                           </div>
                         ) : activeDetail ? (
                           <div className="portal-link-status muted">
-                            Publish “{activeDetail.name}” to get its pinned
-                            template link.
+                            {translate(
+                              "Publish “{0}” to get its pinned template link.",
+                              activeDetail.name,
+                            )}
                           </div>
                         ) : null)}
                     </div>
                   ) : (
                     <div className="portal-links-empty muted">
-                      No published subscription links are available yet.
+                      {translate(
+                        "No published subscription links are available yet.",
+                      )}
                     </div>
                   )}
                 </section>
@@ -824,17 +877,26 @@ export function SubscriptionPortal({
 
               {templates.length === 0 ? (
                 <section className="panel">
-                  <Empty title="No templates available">
-                    Ask your administrator to assign a subscription template.
+                  <Empty title={translate("No templates available")}>
+                    {translate(
+                      "Ask your administrator to assign a subscription template.",
+                    )}
                   </Empty>
                 </section>
               ) : (
                 <section className="portal-workbench">
-                  <aside className="panel portal-sidebar" aria-label="Templates">
+                  <aside
+                    className="panel portal-sidebar"
+                    aria-label={translate("Templates")}
+                  >
                     <div className="portal-side-section">
                       <div className="portal-side-head">
-                        <span className="kpi-label">ASSIGNED TEMPLATES</span>
-                        <span className="count">{assignedTemplates.length}</span>
+                        <span className="kpi-label">
+                          {translate("ASSIGNED TEMPLATES")}
+                        </span>
+                        <span className="count">
+                          {formatNumber(assignedTemplates.length)}
+                        </span>
                       </div>
                       {assignedTemplates.length ? (
                         <div className="portal-tpl-list">
@@ -851,13 +913,19 @@ export function SubscriptionPortal({
                                 }
                                 onClick={() => requestSelectTemplate(t)}
                               >
-                                <span className="portal-tpl-name">{t.name}</span>
+                                <span className="portal-tpl-name">
+                                  {t.name}
+                                </span>
                                 <span className="chip-group">
                                   {isDefault && (
-                                    <Badge tone="good">Default</Badge>
+                                    <Badge tone="good">
+                                      {translate("Default")}
+                                    </Badge>
                                   )}
                                   {!t.published && (
-                                    <Badge tone="neutral">Draft</Badge>
+                                    <Badge tone="neutral">
+                                      {translate("Draft")}
+                                    </Badge>
                                   )}
                                 </span>
                               </button>
@@ -866,15 +934,19 @@ export function SubscriptionPortal({
                         </div>
                       ) : (
                         <p className="portal-side-empty muted">
-                          None assigned.
+                          {translate("None assigned.")}
                         </p>
                       )}
                     </div>
 
                     <div className="portal-side-section">
                       <div className="portal-side-head">
-                        <span className="kpi-label">PERSONAL TEMPLATES</span>
-                        <span className="count">{personalTemplates.length}</span>
+                        <span className="kpi-label">
+                          {translate("PERSONAL TEMPLATES")}
+                        </span>
+                        <span className="count">
+                          {formatNumber(personalTemplates.length)}
+                        </span>
                       </div>
                       {personalTemplates.length ? (
                         <div className="portal-tpl-list">
@@ -891,16 +963,26 @@ export function SubscriptionPortal({
                                 }
                                 onClick={() => requestSelectTemplate(t)}
                               >
-                                <span className="portal-tpl-name">{t.name}</span>
+                                <span className="portal-tpl-name">
+                                  {t.name}
+                                </span>
                                 <span className="chip-group">
                                   {isDefault && (
-                                    <Badge tone="good">Default</Badge>
+                                    <Badge tone="good">
+                                      {translate("Default")}
+                                    </Badge>
                                   )}
                                   {t.published && t.draft && (
-                                    <Badge tone="warning">Draft edits</Badge>
+                                    <Badge tone="warning">
+                                      {translate("Draft edits")}
+                                    </Badge>
                                   )}
-                                  <Badge tone={t.published ? "good" : "neutral"}>
-                                    {t.published ? "Published" : "Draft"}
+                                  <Badge
+                                    tone={t.published ? "good" : "neutral"}
+                                  >
+                                    {t.published
+                                      ? translate("Published")
+                                      : translate("Draft")}
                                   </Badge>
                                 </span>
                               </button>
@@ -909,8 +991,9 @@ export function SubscriptionPortal({
                         </div>
                       ) : (
                         <p className="portal-side-empty muted">
-                          Copy any published template to customize rules and
-                          groups.
+                          {translate(
+                            "Copy any published template to customize rules and groups.",
+                          )}
                         </p>
                       )}
                     </div>
@@ -919,13 +1002,14 @@ export function SubscriptionPortal({
                   <div className="portal-main">
                     {detailLoading && !activeDetail ? (
                       <div className="panel portal-loading muted">
-                        Loading template…
+                        {translate("Loading template…")}
                       </div>
                     ) : !activeDetail ? (
                       <div className="panel">
-                        <Empty title="Select a template">
-                          Choose an assigned or personal template to inspect or
-                          edit.
+                        <Empty title={translate("Select a template")}>
+                          {translate(
+                            "Choose an assigned or personal template to inspect or edit.",
+                          )}
                         </Empty>
                       </div>
                     ) : !activeDetail.personal ? (
@@ -934,22 +1018,26 @@ export function SubscriptionPortal({
                           <div className="portal-detail-title">
                             <FileCode2 size={17} className="muted" />
                             <h2>{activeDetail.name}</h2>
-                            <Chip>Assigned</Chip>
+                            <Chip>{translate("Assigned")}</Chip>
                             {activeDetail.id === portal.defaultTemplate && (
-                              <Badge tone="good">Default choice</Badge>
+                              <Badge tone="good">
+                                {translate("Default choice")}
+                              </Badge>
                             )}
                             <Badge
                               tone={activeDetail.published ? "good" : "neutral"}
                             >
-                              {activeDetail.published ? "Published" : "Draft"}
+                              {activeDetail.published
+                                ? translate("Published")
+                                : translate("Draft")}
                             </Badge>
                           </div>
                           <div className="portal-detail-actions">
                             {!portal.expired && activeDetail.link && (
                               <CopyButton
                                 text={activeDetail.link}
-                                label="Copy link"
-                                copiedLabel="Copied"
+                                label={translate("Copy link")}
+                                copiedLabel={translate("Copied")}
                               />
                             )}
                             {activeDetail.published && (
@@ -960,7 +1048,7 @@ export function SubscriptionPortal({
                                 }
                               >
                                 <Copy size={14} />
-                                Copy as personal
+                                {translate("Copy as personal")}
                               </Button>
                             )}
                             <Button
@@ -970,8 +1058,8 @@ export function SubscriptionPortal({
                             >
                               <Eye size={14} />
                               {busyAction === "preview"
-                                ? "Rendering…"
-                                : "Preview"}
+                                ? translate("Rendering…")
+                                : translate("Preview")}
                             </Button>
                           </div>
                         </div>
@@ -979,11 +1067,11 @@ export function SubscriptionPortal({
                         {!portal.expired && activeDetail.link && (
                           <div className="portal-inline-link">
                             <span className="kpi-label">
-                              PINNED TEMPLATE LINK
+                              {translate("PINNED TEMPLATE LINK")}
                             </span>
-                            <div className="link-url mono">
+                            <ScrollArea axis="x" className="link-url mono">
                               {activeDetail.link}
-                            </div>
+                            </ScrollArea>
                           </div>
                         )}
 
@@ -991,24 +1079,24 @@ export function SubscriptionPortal({
                           <div className="portal-preview-wrap">
                             <div className="portal-preview-head">
                               <span className="kpi-label">
-                                REDACTED PREVIEW
+                                {translate("REDACTED PREVIEW")}
                               </span>
                               <CopyButton
                                 text={previewText}
-                                label="Copy preview"
-                                copiedLabel="Copied"
+                                label={translate("Copy preview")}
+                                copiedLabel={translate("Copied")}
                               />
                             </div>
-                            <pre className="code-output ide-output">
-                              {previewText}
-                            </pre>
+                            <ScrollArea className="code-output ide-output">
+                              <pre>{previewText}</pre>
+                            </ScrollArea>
                           </div>
                         ) : (
                           <div className="ide-empty">
                             <p className="muted">
-                              Click <strong>Preview</strong> to render a
-                              redacted client configuration with placeholder
-                              node details.
+                              {translate(
+                                "Select Preview to render a redacted client configuration with placeholder node details.",
+                              )}
                             </p>
                           </div>
                         )}
@@ -1020,8 +1108,8 @@ export function SubscriptionPortal({
                             <div className="portal-editor-name-row">
                               <Input
                                 className="ide-name-input"
-                                aria-label="Personal template name"
-                                placeholder="Template name…"
+                                aria-label={translate("Personal template name")}
+                                placeholder={translate("Template name…")}
                                 maxLength={100}
                                 disabled={controlsDisabled}
                                 value={draftName}
@@ -1032,13 +1120,17 @@ export function SubscriptionPortal({
                                 }}
                               />
                               <div className="chip-group">
-                                <Chip>Personal</Chip>
+                                <Chip>{translate("Personal")}</Chip>
                                 {activeDetail.id === portal.defaultTemplate && (
-                                  <Badge tone="good">Default choice</Badge>
+                                  <Badge tone="good">
+                                    {translate("Default choice")}
+                                  </Badge>
                                 )}
                                 {activeDetail.published &&
                                   activeDetail.draft && (
-                                    <Badge tone="warning">Draft edits</Badge>
+                                    <Badge tone="warning">
+                                      {translate("Draft edits")}
+                                    </Badge>
                                   )}
                                 <Badge
                                   tone={
@@ -1046,11 +1138,13 @@ export function SubscriptionPortal({
                                   }
                                 >
                                   {activeDetail.published
-                                    ? "Published"
-                                    : "Draft"}
+                                    ? translate("Published")
+                                    : translate("Draft")}
                                 </Badge>
                                 {dirty && (
-                                  <Badge tone="warning">Unsaved</Badge>
+                                  <Badge tone="warning">
+                                    {translate("Unsaved")}
+                                  </Badge>
                                 )}
                               </div>
                             </div>
@@ -1064,8 +1158,8 @@ export function SubscriptionPortal({
                                 onClick={() => void saveDraft()}
                               >
                                 {busyAction === "save"
-                                  ? "Saving…"
-                                  : "Save draft"}
+                                  ? translate("Saving…")
+                                  : translate("Save draft")}
                               </Button>
                               <Button
                                 disabled={controlsDisabled || !draftName.trim()}
@@ -1073,10 +1167,10 @@ export function SubscriptionPortal({
                               >
                                 <Eye size={14} />
                                 {busyAction === "preview"
-                                  ? "Previewing…"
+                                  ? translate("Previewing…")
                                   : dirty
-                                    ? "Save & preview"
-                                    : "Preview"}
+                                    ? translate("Save & preview")
+                                    : translate("Preview")}
                               </Button>
                               <Button
                                 variant="primary"
@@ -1085,24 +1179,24 @@ export function SubscriptionPortal({
                               >
                                 <Send size={14} />
                                 {busyAction === "publish"
-                                  ? "Publishing…"
-                                  : "Publish"}
+                                  ? translate("Publishing…")
+                                  : translate("Publish")}
                               </Button>
                             </div>
                           </div>
                           {!portal.expired && activeDetail.link && (
                             <div className="portal-inline-link">
                               <span className="kpi-label">
-                                PINNED PERSONAL LINK
+                                {translate("PINNED PERSONAL LINK")}
                               </span>
                               <div className="portal-inline-link-row">
-                                <div className="link-url mono">
+                                <ScrollArea axis="x" className="link-url mono">
                                   {activeDetail.link}
-                                </div>
+                                </ScrollArea>
                                 <CopyButton
                                   text={activeDetail.link}
-                                  label="Copy"
-                                  copiedLabel="Copied"
+                                  label={translate("Copy")}
+                                  copiedLabel={translate("Copied")}
                                 />
                               </div>
                             </div>
@@ -1113,13 +1207,13 @@ export function SubscriptionPortal({
                           <div className="studio-card ide-pane">
                             <div className="studio-card-head">
                               <span className="kpi-label">
-                                TEMPLATE SOURCE
+                                {translate("TEMPLATE SOURCE")}
                               </span>
                               <Chip mono>Liquid · YAML</Chip>
                             </div>
                             <TextArea
                               className="template-source ide-editor"
-                              aria-label="Personal template body"
+                              aria-label={translate("Personal template body")}
                               spellCheck={false}
                               rows={22}
                               disabled={controlsDisabled}
@@ -1135,31 +1229,37 @@ export function SubscriptionPortal({
                           <div className="studio-card ide-pane">
                             <div className="studio-card-head">
                               <span className="kpi-label">
-                                REDACTED PREVIEW
+                                {translate("REDACTED PREVIEW")}
                               </span>
                               <div className="chip-group">
                                 {previewedSaved && !dirty && (
-                                  <Badge tone="good">Validated</Badge>
+                                  <Badge tone="good">
+                                    {translate("Validated")}
+                                  </Badge>
                                 )}
                                 {previewText && (
                                   <CopyButton
                                     text={previewText}
-                                    label="Copy"
-                                    copiedLabel="Copied"
+                                    label={translate("Copy")}
+                                    copiedLabel={translate("Copied")}
                                   />
                                 )}
                               </div>
                             </div>
                             {previewText ? (
-                              <pre className="code-output ide-output">
-                                {previewText}
-                              </pre>
+                              <ScrollArea className="code-output ide-output">
+                                <pre>{previewText}</pre>
+                              </ScrollArea>
                             ) : (
                               <div className="ide-empty">
                                 <p className="muted">
                                   {dirty
-                                    ? "Save and preview your edits before publishing."
-                                    : "Click Preview to validate your saved draft and inspect redacted output."}
+                                    ? translate(
+                                        "Save and preview your edits before publishing.",
+                                      )
+                                    : translate(
+                                        "Click Preview to validate your saved draft and inspect redacted output.",
+                                      )}
                                 </p>
                               </div>
                             )}
@@ -1196,8 +1296,8 @@ export function SubscriptionPortal({
 
       {pendingDiscard && (
         <Confirm
-          title="Discard unsaved changes?"
-          action="Discard changes"
+          title={translate("Discard unsaved changes?")}
+          action={translate("Discard changes")}
           danger
           onClose={() => setPendingDiscard(null)}
           onConfirm={async () => {
@@ -1214,10 +1314,20 @@ export function SubscriptionPortal({
         >
           <p className="muted">
             {pendingDiscard.type === "switch"
-              ? `You have unsaved edits to “${activeDetail?.name || "this template"}”. Switching to “${pendingDiscard.targetName}” will discard them.`
+              ? translate(
+                  "You have unsaved edits to “{0}”. Switching to “{1}” will discard them.",
+                  activeDetail?.name || translate("this template"),
+                  pendingDiscard.targetName,
+                )
               : pendingDiscard.type === "refresh"
-                ? `You have unsaved edits to “${activeDetail?.name || "this template"}”. Refreshing will discard them.`
-                : `You have unsaved edits to “${activeDetail?.name || "this template"}”. Creating a new personal template will discard them.`}
+                ? translate(
+                    "You have unsaved edits to “{0}”. Refreshing will discard them.",
+                    activeDetail?.name || translate("this template"),
+                  )
+                : translate(
+                    "You have unsaved edits to “{0}”. Creating a new personal template will discard them.",
+                    activeDetail?.name || translate("this template"),
+                  )}
           </p>
         </Confirm>
       )}
@@ -1225,7 +1335,7 @@ export function SubscriptionPortal({
       {toast && (
         <div className="toast" role="status">
           <Check size={17} />
-          {toast}
+          {localizeMessage(toast)}
         </div>
       )}
     </div>

@@ -1,3 +1,14 @@
+import {
+  asUiError,
+  type UiError,
+  type Locale,
+  formatNumber,
+  setLocale,
+  localizeError,
+  localizeMessage,
+  t as translate,
+  useLocale,
+} from "./i18n";
 import "@fontsource-variable/space-grotesk";
 import {
   Activity,
@@ -13,7 +24,6 @@ import {
   Link2,
   LogOut,
   Moon,
-  Network,
   Plus,
   Radio,
   RefreshCw,
@@ -27,12 +37,13 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { api, when } from "./client";
 import {
   Actions,
   Badge,
+  BrandMark,
   Button,
   Chip,
   Code,
@@ -40,11 +51,14 @@ import {
   DriftModal,
   Empty,
   InlineTelemetry,
+  initDocumentScrollbars,
+  LanguageControl,
   LogsModal,
   MiniBar,
   PasswordLinkModal,
   QuotaBar,
   SearchInput,
+  ScrollArea,
   SegmentedControl,
   Sparkline,
   Stage,
@@ -63,6 +77,7 @@ import {
 import { History } from "./history";
 import { SubscriptionPortal } from "./portal";
 import "./styles.css";
+import { alertLabel, operationLabel, probeLabel, taskLabel } from "./labels";
 import type { Row, Session, State } from "./types";
 
 type AppRoute = "/" | "/portal" | "/set-password";
@@ -98,6 +113,26 @@ const tabs = [
   ["Activity", Activity],
 ] as const;
 
+const credentialRotation = {
+  subscription: {
+    label: "Rotate subscription link",
+    title: "Rotate subscription link?",
+    description: "The old subscription link will stop working.",
+  },
+  vpn: {
+    label: "Rotate VPN credentials",
+    title: "Rotate VPN credentials?",
+    description:
+      "Old VPN credentials will be revoked and active connections will be disconnected.",
+  },
+  both: {
+    label: "Rotate both credentials",
+    title: "Rotate subscription link and VPN credentials?",
+    description:
+      "The old subscription link and VPN credentials will stop working. Active connections will be disconnected.",
+  },
+} as const;
+
 function hostSparkPoints(h: Row): number[] {
   const base = typeof h.cpu === "number" ? h.cpu : 24;
   const mem = typeof h.memory === "number" ? h.memory : 38;
@@ -124,7 +159,7 @@ function ArchiveView({
   const [kind, setKind] = useState<"hosts" | "nodes" | "users">(initialKind);
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiError>("");
 
   useEffect(() => {
     let cancelled = false;
@@ -139,7 +174,7 @@ function ArchiveView({
       })
       .catch((e) => {
         if (!cancelled) {
-          setError((e as Error).message);
+          setError(asUiError(e));
           setLoading(false);
         }
       });
@@ -150,40 +185,50 @@ function ArchiveView({
 
   return (
     <Stage
-      title="Archived records"
-      tag="Archive"
+      title={translate("Archived records")}
+      tag={translate("Archive")}
       onClose={onClose}
       actions={
         <SegmentedControl
           value={kind}
           options={[
             ["hosts", "VPS"],
-            ["nodes", "Nodes"],
-            ["users", "Users"],
+            ["nodes", translate("Nodes")],
+            ["users", translate("Users")],
           ]}
           onChange={setKind}
         />
       }
     >
-      {error && <p className="form-error">{error}</p>}
+      {error && <p className="form-error">{localizeError(error)}</p>}
       <section className="panel">
         {loading ? (
-          <div className="chart-placeholder muted">Loading archive…</div>
+          <div className="chart-placeholder muted">
+            {translate("Loading archive…")}
+          </div>
         ) : rows.length ? (
-          <Table headings={["Name", "Created", "History"]}>
+          <Table
+            headings={[
+              translate("Name"),
+              translate("Created"),
+              translate("History"),
+            ]}
+          >
             {rows.map((r: Row) => (
               <tr key={r.id}>
                 <td>{r.name}</td>
                 <td className="mono">{when(r.created)}</td>
                 <td>
-                  <Button onClick={() => onHistory(r)}>View history</Button>
+                  <Button onClick={() => onHistory(r)}>
+                    {translate("View history")}
+                  </Button>
                 </td>
               </tr>
             ))}
           </Table>
         ) : (
-          <Empty title="No archived records">
-            Deleted records retain their historical usage here.
+          <Empty title={translate("No archived records")}>
+            {translate("Deleted records retain their historical usage here.")}
           </Empty>
         )}
       </section>
@@ -191,16 +236,35 @@ function ArchiveView({
   );
 }
 
+function useAppView(locale: Locale) {
+  const [renderView, setRenderView] = useState<(() => ReactNode) | null>(null);
+  const view = useMemo(() => renderView?.(), [renderView, locale]);
+  return [
+    view,
+    (render: (() => ReactNode) | null) => setRenderView(() => render),
+  ] as const;
+}
+
 function App() {
+  const locale = useLocale();
+  const languageControl = (
+    <LanguageControl
+      locale={locale}
+      onChange={setLocale}
+      label={translate("Language")}
+      compact
+    />
+  );
+  useEffect(() => initDocumentScrollbars({ overflow: { x: "hidden" } }), []);
+  const [stage, setStage] = useAppView(locale);
+  const [modal, setModal] = useAppView(locale);
   const [route, setRoute] = useState<AppRoute>(readRoute),
     [session, setSession] = useState<Session | null>(null),
     [checking, setChecking] = useState(() => readRoute() !== "/set-password"),
     [state, setState] = useState<State>(initial),
-    [tab, setTab] = useState("Infra"),
-    [stage, setStage] = useState<ReactNode>(null),
-    [modal, setModal] = useState<ReactNode>(null),
+    [tab, setTab] = useState<(typeof tabs)[number][0]>("Infra"),
     [toast, setToast] = useState(""),
-    [error, setError] = useState(""),
+    [error, setError] = useState<UiError>(""),
     [loading, setLoading] = useState(false),
     [search, setSearch] = useState(""),
     [expandedHost, setExpandedHost] = useState<string | null | undefined>(
@@ -212,6 +276,18 @@ function App() {
     [theme, setTheme] = useState<"light" | "dark">(() =>
       document.documentElement.dataset.theme === "dark" ? "dark" : "light",
     );
+
+  useEffect(() => {
+    const title =
+      route === "/set-password"
+        ? "Set password"
+        : session?.role === "subscriber"
+          ? "Subscription Portal"
+          : session?.role === "admin"
+            ? tab
+            : "Sign in";
+    document.title = `${translate(title)} · Jetyet`;
+  }, [locale, route, session?.role, tab]);
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -234,7 +310,7 @@ function App() {
       );
       setError("");
     } catch (e) {
-      setError((e as Error).message);
+      setError(asUiError(e));
     }
   };
 
@@ -299,7 +375,7 @@ function App() {
       setToast(message);
       return result;
     } catch (e) {
-      setError((e as Error).message);
+      setError(asUiError(e));
       throw e;
     } finally {
       setLoading(false);
@@ -314,7 +390,7 @@ function App() {
   ) => void run(() => api(path, method, body), message).catch(() => {});
 
   const save = (kind: string, row?: Row) =>
-    setStage(
+    setStage(() => (
       <EntityForm
         key={row?.id || "new"}
         kind={kind}
@@ -327,15 +403,15 @@ function App() {
           );
           setStage(null);
         }}
-      />,
-    );
+      />
+    ));
 
   const operation = (n: Row, kind: string) => {
     if (kind === "detect") {
       act(`nodes/${n.id}/operation`, { kind });
       return;
     }
-    setModal(
+    setModal(() => (
       <OperationForm
         node={n}
         kind={kind}
@@ -345,13 +421,13 @@ function App() {
             const result = await api(`nodes/${n.id}/command`, "POST", {
               version,
             });
-            setModal(
+            setModal(() => (
               <Code
-                title="Run on this VPS as root"
+                title={translate("Run on this VPS as root")}
                 text={result.script}
                 onClose={() => setModal(null)}
-              />,
-            );
+              />
+            ));
           } else {
             await run(() =>
               api(`nodes/${n.id}/operation`, "POST", { kind, version }),
@@ -359,35 +435,34 @@ function App() {
             setModal(null);
           }
         }}
-      />,
-    );
+      />
+    ));
   };
 
   const links = async (u: Row) => {
     try {
       const data = await api(`users/${u.id}/links`);
-      setModal(
+      setModal(() => (
         <SubscriptionLinksModal
           userName={u.name}
           items={[
             {
               id: "default",
-              label: "Default subscription",
+              label: translate("Default subscription"),
               url: data.default,
               isDefault: true,
             },
             ...(data.templates || []).map((t: Row) => ({
               id: t.id,
-              label:
-                state.templates.find((x) => x.id === t.id)?.name || t.id,
+              label: state.templates.find((x) => x.id === t.id)?.name || t.id,
               url: t.url,
             })),
           ]}
           onClose={() => setModal(null)}
-        />,
-      );
+        />
+      ));
     } catch (e) {
-      setError((e as Error).message);
+      setError(asUiError(e));
     }
   };
 
@@ -397,27 +472,27 @@ function App() {
         url: string;
         expires: number;
       };
-      setModal(
+      setModal(() => (
         <PasswordLinkModal
           userName={u.name}
           username={u.username}
           url={data.url}
           expires={data.expires}
           onClose={() => setModal(null)}
-        />,
-      );
+        />
+      ));
     } catch (e) {
-      setError((e as Error).message);
+      setError(asUiError(e));
     }
   };
 
   const trust = async (h: Row) => {
     try {
       const result = await api(`hosts/${h.id}/fingerprint`, "POST");
-      setModal(
+      setModal(() => (
         <Confirm
-          title={`Trust ${h.name}'s SSH identity?`}
-          action="Trust host key"
+          title={translate("Trust {0}'s SSH identity?", h.name)}
+          action={translate("Trust host key")}
           onClose={() => setModal(null)}
           onConfirm={async () => {
             await run(
@@ -431,22 +506,25 @@ function App() {
           }}
         >
           <p>
-            Compare this fingerprint with your provider console before trusting
-            the host:
+            {translate(
+              "Compare this fingerprint with your provider console before trusting the host:",
+            )}
           </p>
-          <pre className="code-output">{result.fingerprint}</pre>
-        </Confirm>,
-      );
+          <ScrollArea className="code-output">
+            <pre>{result.fingerprint}</pre>
+          </ScrollArea>
+        </Confirm>
+      ));
     } catch (e) {
-      setError((e as Error).message);
+      setError(asUiError(e));
     }
   };
 
   const remove = (kind: string, r: Row) =>
-    setModal(
+    setModal(() => (
       <Confirm
-        title={`Delete ${r.name}?`}
-        action="Delete"
+        title={translate("Delete {0}?", r.name)}
+        action={translate("Delete")}
         danger
         onClose={() => setModal(null)}
         onConfirm={async () => {
@@ -456,21 +534,25 @@ function App() {
       >
         <p>
           {kind === "users"
-            ? "Subscription access is revoked immediately. Existing connections are queued for disconnection."
-            : "Nodes leave subscriptions immediately. Remote cleanup must succeed before deletion completes. The cloud server itself will not be destroyed."}{" "}
-          Historical traffic is retained.
+            ? translate(
+                "Subscription access is revoked immediately. Existing connections are queued for disconnection.",
+              )
+            : translate(
+                "Nodes leave subscriptions immediately. Remote cleanup must succeed before deletion completes. The cloud server itself will not be destroyed.",
+              )}{" "}
+          {translate("Historical traffic is retained.")}
         </p>
-      </Confirm>,
-    );
+      </Confirm>
+    ));
 
   const history = (r: Row) =>
-    setStage(<History entity={r} onClose={() => setStage(null)} />);
+    setStage(() => <History entity={r} onClose={() => setStage(null)} />);
 
   const reset = (r: Row) =>
-    setModal(
+    setModal(() => (
       <Confirm
-        title={`Reset ${r.name}'s traffic?`}
-        action="Reset usage"
+        title={translate("Reset {0}'s traffic?", r.name)}
+        action={translate("Reset usage")}
         onClose={() => setModal(null)}
         onConfirm={async () => {
           await run(() => api(`usage/${r.id}/reset`, "POST"));
@@ -478,32 +560,34 @@ function App() {
         }}
       >
         <p>
-          Start a new accounting period. History and scheduled reset times
-          remain unchanged.
+          {translate(
+            "Start a new accounting period. History and scheduled reset times remain unchanged.",
+          )}
         </p>
-      </Confirm>,
-    );
+      </Confirm>
+    ));
 
   const inspectDrift = (n: Row) =>
     void api(`nodes/${n.id}/drift`)
       .then((diff) =>
-        setModal(
+        setModal(() => (
           <DriftModal
             nodeName={n.name}
             desired={diff.desired || ""}
             observed={diff.observed || null}
             onReapply={() => operation(n, "reapply")}
             onClose={() => setModal(null)}
-          />,
-        ),
+          />
+        )),
       )
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(asUiError(e)));
 
   if (route === "/set-password") {
     return (
       <SetPassword
         theme={theme}
         onToggleTheme={toggleTheme}
+        languageControl={languageControl}
         onSuccess={(s) => {
           setSession(s);
           replaceRoute("/portal");
@@ -516,7 +600,8 @@ function App() {
       />
     );
   }
-  if (checking) return <div className="loading">Loading Jetyet…</div>;
+  if (checking)
+    return <div className="loading">{translate("Loading Jetyet…")}</div>;
   if (!session)
     return (
       <Login
@@ -528,6 +613,7 @@ function App() {
         }}
         theme={theme}
         onToggleTheme={toggleTheme}
+        languageControl={languageControl}
       />
     );
   if (session.role === "subscriber") {
@@ -536,6 +622,7 @@ function App() {
         session={session}
         theme={theme}
         onToggleTheme={toggleTheme}
+        languageControl={languageControl}
         onLogout={() =>
           void api("logout", "POST").then(() => {
             setSession(null);
@@ -569,19 +656,17 @@ function App() {
         !state.hosts.find((h) => h.id === n.hostId)?.exhausted,
     ).length;
 
-  const nodeLabel = (n: Row) => {
-    const h = state.hosts.find((h) => h.id === n.hostId);
-    return n.deleting || h?.deleting
-      ? "Pending deletion"
-      : !n.enabled || !h?.enabled
-        ? "Disabled"
-        : h?.exhausted
-          ? "Quota exhausted"
-          : n.status === "draft"
-            ? "Planned"
-            : n.service
-              ? "Running"
-              : "Stopped";
+  const nodeTone = (node: Row, host: Row) => {
+    if (
+      node.deleting ||
+      host.deleting ||
+      !node.enabled ||
+      !host.enabled ||
+      host.exhausted
+    )
+      return "warning";
+    if (node.status === "draft") return "neutral";
+    return node.service ? "good" : "warning";
   };
 
   const worker = (name: string) => {
@@ -611,13 +696,13 @@ function App() {
   };
 
   const openArchive = (kind: "hosts" | "nodes" | "users") =>
-    setStage(
+    setStage(() => (
       <ArchiveView
         initialKind={kind}
         onHistory={(r) => history(r)}
         onClose={() => setStage(null)}
-      />,
-    );
+      />
+    ));
 
   const visibleHosts = visible(state.hosts);
   const orderedHosts = [...visibleHosts].sort((a, b) =>
@@ -643,11 +728,14 @@ function App() {
               }}
             >
               <span className="brand-symbol">
-                <Network size={19} />
+                <BrandMark size={19} />
               </span>
               jetyet<span className="brand-period">.</span>
             </a>
-            <div className="worker-pills" aria-label="Background workers">
+            <div
+              className="worker-pills"
+              aria-label={translate("Background workers")}
+            >
               {(
                 [
                   ["monitor", "MON"],
@@ -659,7 +747,7 @@ function App() {
                   className={
                     "worker-pill " + (worker(name) ? "online" : "offline")
                   }
-                  title={`${name}: ${worker(name) ? "Running" : "No heartbeat"}`}
+                  title={`${translate(name)}: ${worker(name) ? translate("Running") : translate("No heartbeat")}`}
                 >
                   <i />
                   {short}
@@ -667,7 +755,12 @@ function App() {
               ))}
             </div>
           </div>
-          <nav className="dock" aria-label="Primary navigation">
+          <ScrollArea
+            as="nav"
+            axis="x"
+            className="dock"
+            aria-label={translate("Primary navigation")}
+          >
             {tabs.map(([name, Icon]) => {
               const count = tabCount[name] || 0;
               const isAlert = name === "Activity" && activeAlerts.length > 0;
@@ -675,7 +768,7 @@ function App() {
                 <button
                   key={name}
                   type="button"
-                  aria-label={name}
+                  aria-label={translate(name)}
                   className={
                     !stage && tab === name ? "dock-item active" : "dock-item"
                   }
@@ -686,34 +779,41 @@ function App() {
                   }}
                 >
                   <Icon size={15} />
-                  <span>{name}</span>
+                  <span>{translate(name)}</span>
                   {count > 0 && (
-                    <b className={isAlert ? "alert-count" : ""}>{count}</b>
+                    <b className={isAlert ? "alert-count" : ""}>
+                      {formatNumber(count)}
+                    </b>
                   )}
                 </button>
               );
             })}
-          </nav>
+          </ScrollArea>
           <div className="command-right">
+            {languageControl}
             <Button
               variant="icon"
               aria-label={
                 theme === "dark"
-                  ? "Switch to light mode"
-                  : "Switch to dark mode"
+                  ? translate("Switch to light mode")
+                  : translate("Switch to dark mode")
               }
               onClick={toggleTheme}
-              title={theme === "dark" ? "Light mode" : "Dark mode"}
+              title={
+                theme === "dark"
+                  ? translate("Light mode")
+                  : translate("Dark mode")
+              }
             >
               {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             </Button>
             <Button
               variant="icon"
-              aria-label="Refresh"
+              aria-label={translate("Refresh")}
               className={loading ? "spinning" : ""}
               disabled={loading}
               onClick={() => void refresh()}
-              title="Refresh"
+              title={translate("Refresh")}
             >
               <RefreshCw size={15} />
             </Button>
@@ -726,7 +826,8 @@ function App() {
                   setState(initial);
                 })
               }
-              title={`Sign out (${session.username})`}
+              aria-label={translate("Sign out ({0})", session.username)}
+              title={translate("Sign out ({0})", session.username)}
             >
               <span className="avatar">
                 {session.username[0]?.toUpperCase()}
@@ -740,8 +841,11 @@ function App() {
         <div className="content">
           {error && (
             <div className="error-banner" role="alert">
-              {error}
-              <button onClick={() => setError("")} aria-label="Dismiss">
+              {localizeError(error)}
+              <button
+                onClick={() => setError("")}
+                aria-label={translate("Dismiss")}
+              >
                 <X size={16} />
               </button>
             </div>
@@ -755,34 +859,39 @@ function App() {
                   <div className="action-strip">
                     <div className="strip-left">
                       <SearchInput
-                        placeholder="Filter VPS or nodes…"
+                        placeholder={translate("Filter VPS or nodes…")}
                         value={search}
                         onChange={setSearch}
                       />
                       <div className="pulse-chips">
                         <Chip mono>
                           <i className="status-dot good" />
-                          {hostsReachable}/{state.hosts.length} VPS
+                          {formatNumber(hostsReachable)}/
+                          {formatNumber(state.hosts.length)} VPS
                         </Chip>
                         <Chip mono>
                           <Radio size={11} />
-                          {nodeHealthy}/{state.nodes.length} Nodes
+                          {nodeHealthy}/{formatNumber(state.nodes.length)}
+                          {" " + translate("Nodes")}
                         </Chip>
-                        <Chip mono>{totalOnline} Online</Chip>
+                        <Chip mono>
+                          {formatNumber(totalOnline)}
+                          {" " + translate("Online")}
+                        </Chip>
                       </div>
                     </div>
                     <div className="action-strip-right">
                       <Button
                         variant="subtle"
                         onClick={() => openArchive("hosts")}
-                        title="Archived hosts, nodes & users"
+                        title={translate("Archived hosts, nodes & users")}
                       >
                         <Archive size={14} />
-                        <span>Archive</span>
+                        <span>{translate("Archive")}</span>
                       </Button>
                       <Button onClick={() => save("nodes")}>
                         <Plus size={14} />
-                        <span>Node</span>
+                        <span>{translate("Node")}</span>
                       </Button>
                       <Button variant="primary" onClick={() => save("hosts")}>
                         <Plus size={15} />
@@ -793,18 +902,18 @@ function App() {
                   {!state.hosts.length ? (
                     <section className="panel">
                       <Empty
-                        title="No hosts connected"
+                        title={translate("No hosts connected")}
                         action={
                           <Button
                             variant="primary"
                             onClick={() => save("hosts")}
                           >
                             <Plus size={15} />
-                            Add VPS
+                            {translate("Add VPS")}
                           </Button>
                         }
                       >
-                        Add a VPS to start managing your network.
+                        {translate("Add a VPS to start managing your network.")}
                       </Empty>
                     </section>
                   ) : (
@@ -818,15 +927,15 @@ function App() {
                             ) as number)
                           : 0;
                         const isExpanded = expandedHost === h.id;
-                        const nLabel = node ? nodeLabel(node) : "";
+                        const nTone = node ? nodeTone(node, h) : "neutral";
                         const hostActions: [string, () => void][] = [
-                          ["Edit VPS", () => save("hosts", h)],
-                          ["Full telemetry", () => history(h)],
-                          ["Reset usage", () => reset(h)],
+                          [translate("Edit VPS"), () => save("hosts", h)],
+                          [translate("Full telemetry"), () => history(h)],
+                          [translate("Reset usage"), () => reset(h)],
                           [
-                            "Correct usage",
+                            translate("Correct usage"),
                             () =>
-                              setModal(
+                              setModal(() => (
                                 <Correction
                                   host={h}
                                   onClose={() => setModal(null)}
@@ -836,14 +945,14 @@ function App() {
                                     );
                                     setModal(null);
                                   }}
-                                />,
-                              ),
+                                />
+                              )),
                           ],
-                          ["Delete VPS", () => remove("hosts", h)],
+                          [translate("Delete VPS"), () => remove("hosts", h)],
                           [
-                            "Force remove",
+                            translate("Force remove"),
                             () =>
-                              setModal(
+                              setModal(() => (
                                 <ForceRemove
                                   host={h}
                                   onClose={() => setModal(null)}
@@ -860,30 +969,45 @@ function App() {
                                     );
                                     setModal(null);
                                   }}
-                                />,
-                              ),
+                                />
+                              )),
                           ],
                         ];
                         const nodeActions: [string, () => void][] = node
                           ? [
-                              ["Edit node", () => save("nodes", node)],
-                              ["Deploy", () => operation(node, "deploy")],
                               [
-                                "Show deploy command",
+                                translate("Edit node"),
+                                () => save("nodes", node),
+                              ],
+                              [
+                                translate("Deploy"),
+                                () => operation(node, "deploy"),
+                              ],
+                              [
+                                translate("Show deploy command"),
                                 () => operation(node, "command"),
                               ],
                               [
-                                "Detect installation",
+                                translate("Detect installation"),
                                 () => operation(node, "detect"),
                               ],
-                              ["Upgrade", () => operation(node, "upgrade")],
                               [
-                                "Inspect drift",
+                                translate("Upgrade"),
+                                () => operation(node, "upgrade"),
+                              ],
+                              [
+                                translate("Inspect drift"),
                                 () => inspectDrift(node),
                               ],
-                              ["Reapply config", () => operation(node, "reapply")],
-                              ["Node history", () => history(node)],
-                              ["Delete node", () => remove("nodes", node)],
+                              [
+                                translate("Reapply config"),
+                                () => operation(node, "reapply"),
+                              ],
+                              [translate("Node history"), () => history(node)],
+                              [
+                                translate("Delete node"),
+                                () => remove("nodes", node),
+                              ],
                             ]
                           : [];
 
@@ -920,35 +1044,29 @@ function App() {
                                     {h.fingerprint ? (
                                       <>
                                         <ShieldCheck size={13} />
-                                        SSH Trusted
+                                        {translate("SSH Trusted")}
                                       </>
                                     ) : (
                                       <>
                                         <ShieldAlert size={13} />
-                                        Verify SSH
+                                        {translate("Verify SSH")}
                                       </>
                                     )}
                                   </button>
                                   {h.deleting && (
                                     <Badge tone="warning">
-                                      Pending deletion
+                                      {translate("Pending deletion")}
                                     </Badge>
                                   )}
                                   {h.usageStale && (
-                                    <Badge tone="warning">Stale data</Badge>
+                                    <Badge tone="warning">
+                                      {translate("Stale data")}
+                                    </Badge>
                                   )}
                                   {node && (
-                                    <Badge
-                                      tone={
-                                        nLabel === "Running"
-                                          ? "good"
-                                          : nLabel === "Planned"
-                                            ? "neutral"
-                                            : "warning"
-                                      }
-                                    >
+                                    <Badge tone={nTone}>
                                       {node.name} {node.version || ""} ·{" "}
-                                      {clients} online
+                                      {translate("{0} online", clients)}
                                     </Badge>
                                   )}
                                 </div>
@@ -956,20 +1074,20 @@ function App() {
                                   <SegmentedControl
                                     value={inlineRange}
                                     options={[
-                                      ["24", "24h"],
-                                      ["168", "7d"],
-                                      ["720", "30d"],
+                                      ["24", translate("24h")],
+                                      ["168", translate("7d")],
+                                      ["720", translate("30d")],
                                     ]}
                                     onChange={setInlineRange}
                                   />
                                   <Button onClick={() => save("hosts", h)}>
-                                    Edit
+                                    {translate("Edit")}
                                   </Button>
                                   <Actions items={hostActions} />
                                   <Button
                                     variant="subtle"
                                     onClick={() => setExpandedHost(null)}
-                                    title="Collapse"
+                                    title={translate("Collapse")}
                                   >
                                     <ChevronUp size={15} />
                                   </Button>
@@ -984,8 +1102,8 @@ function App() {
                                   <div className="expanded-actions-head">
                                     <span className="kpi-label">
                                       {node
-                                        ? "HYSTERIA 2 NODE"
-                                        : "QUICK ACTIONS"}
+                                        ? translate("HYSTERIA 2 NODE")
+                                        : translate("QUICK ACTIONS")}
                                     </span>
                                     {node && <Actions items={nodeActions} />}
                                   </div>
@@ -1000,8 +1118,8 @@ function App() {
                                           <Chip>
                                             {node.probed &&
                                             Date.now() - node.probed > 600000
-                                              ? "Probe stale"
-                                              : node.probe || "Pending"}
+                                              ? translate("Probe stale")
+                                              : probeLabel(node.probe)}
                                           </Chip>
                                           {node.hopping && (
                                             <Chip mono>UDP {node.hopping}</Chip>
@@ -1024,7 +1142,9 @@ function App() {
                                         }
                                       >
                                         <span>
-                                          {node.version ? "Upgrade" : "Deploy"}
+                                          {node.version
+                                            ? translate("Upgrade")
+                                            : translate("Deploy")}
                                         </span>
                                         <span className="mono muted">
                                           {node.version || "v2"}
@@ -1034,11 +1154,13 @@ function App() {
                                         className="quick-row-btn"
                                         onClick={() => inspectDrift(node)}
                                       >
-                                        <span>Config drift</span>
+                                        <span>{translate("Config drift")}</span>
                                         <Badge
                                           tone={node.drift ? "warning" : "good"}
                                         >
-                                          {node.drift ? "Drift" : "Clean"}
+                                          {node.drift
+                                            ? translate("Drift")
+                                            : translate("Clean")}
                                         </Badge>
                                       </Button>
                                     </>
@@ -1048,14 +1170,14 @@ function App() {
                                       onClick={() => save("nodes")}
                                     >
                                       <Plus size={14} />
-                                      Attach Node
+                                      {translate("Attach Node")}
                                     </Button>
                                   )}
                                   <Button
                                     className="quick-row-btn"
                                     onClick={() => reset(h)}
                                   >
-                                    <span>Reset usage</span>
+                                    <span>{translate("Reset usage")}</span>
                                     <span className="mono muted">
                                       {when(h.usage.next)}
                                     </span>
@@ -1064,7 +1186,7 @@ function App() {
                                     className="quick-row-btn"
                                     onClick={() => history(h)}
                                   >
-                                    <span>Full telemetry</span>
+                                    <span>{translate("Full telemetry")}</span>
                                     <ArrowUpRight size={14} className="muted" />
                                   </Button>
                                 </div>
@@ -1122,24 +1244,14 @@ function App() {
                             <QuotaBar row={h} />
                             <div className="compact-foot">
                               {node ? (
-                                <Badge
-                                  tone={
-                                    node.drift
-                                      ? "warning"
-                                      : nLabel === "Running"
-                                        ? "good"
-                                        : nLabel === "Planned"
-                                          ? "neutral"
-                                          : "warning"
-                                  }
-                                >
+                                <Badge tone={node.drift ? "warning" : nTone}>
                                   {node.name}
                                   {node.drift
-                                    ? " · Drift"
-                                    : ` · ${clients} on`}
+                                    ? ` · ${translate("Drift")}`
+                                    : ` · ${translate("{0} online", clients)}`}
                                 </Badge>
                               ) : (
-                                <Chip>No node</Chip>
+                                <Chip>{translate("No node")}</Chip>
                               )}
                               <span className="expand-cue">
                                 <ChevronDown size={14} />
@@ -1157,7 +1269,7 @@ function App() {
                 <>
                   <div className="action-strip">
                     <SearchInput
-                      placeholder="Filter users…"
+                      placeholder={translate("Filter users…")}
                       value={search}
                       onChange={setSearch}
                     />
@@ -1167,29 +1279,31 @@ function App() {
                         onClick={() => openArchive("users")}
                       >
                         <Archive size={14} />
-                        <span>Archive</span>
+                        <span>{translate("Archive")}</span>
                       </Button>
                       <Button variant="primary" onClick={() => save("users")}>
                         <Plus size={15} />
-                        <span>User</span>
+                        <span>{translate("User")}</span>
                       </Button>
                     </div>
                   </div>
                   {!state.users.length ? (
                     <section className="panel">
                       <Empty
-                        title="No users yet"
+                        title={translate("No users yet")}
                         action={
                           <Button
                             variant="primary"
                             onClick={() => save("users")}
                           >
                             <Plus size={15} />
-                            Add User
+                            {translate("Add User")}
                           </Button>
                         }
                       >
-                        Issue independent links, tokens and quotas.
+                        {translate(
+                          "Issue independent links, tokens and quotas.",
+                        )}
                       </Empty>
                     </section>
                   ) : (
@@ -1203,20 +1317,28 @@ function App() {
                         );
                         const isExpanded = expandedUser === u.id;
                         const userActions: [string, () => void][] = [
-                          ["Edit", () => save("users", u)],
-                          ["Subscription links", () => void links(u)],
-                          ["Portal password link", () => void passwordLink(u)],
-                          ["Full telemetry", () => history(u)],
-                          ["Reset usage", () => reset(u)],
+                          [translate("Edit"), () => save("users", u)],
+                          [
+                            translate("Subscription links"),
+                            () => void links(u),
+                          ],
+                          [
+                            translate("Portal password link"),
+                            () => void passwordLink(u),
+                          ],
+                          [translate("Full telemetry"), () => history(u)],
+                          [translate("Reset usage"), () => reset(u)],
                           ...(["subscription", "vpn", "both"] as const).map(
                             (target) =>
                               [
-                                `Rotate ${target}`,
+                                translate(credentialRotation[target].label),
                                 () =>
-                                  setModal(
+                                  setModal(() => (
                                     <Confirm
-                                      title={`Rotate ${target} credentials?`}
-                                      action="Rotate"
+                                      title={translate(
+                                        credentialRotation[target].title,
+                                      )}
+                                      action={translate("Rotate")}
                                       onClose={() => setModal(null)}
                                       onConfirm={async () => {
                                         await run(() =>
@@ -1228,29 +1350,28 @@ function App() {
                                       }}
                                     >
                                       <p>
-                                        Old{" "}
-                                        {target === "subscription"
-                                          ? "subscription links"
-                                          : "VPN credentials and active connections"}{" "}
-                                        will be revoked.
+                                        {translate(
+                                          credentialRotation[target]
+                                            .description,
+                                        )}
                                       </p>
-                                    </Confirm>,
-                                  ),
+                                    </Confirm>
+                                  )),
                               ] as [string, () => void],
                           ),
-                          ["Delete", () => remove("users", u)],
+                          [translate("Delete"), () => remove("users", u)],
                         ];
                         const statusTone =
                           !u.enabled || u.exhausted || expired
                             ? "warning"
                             : "good";
                         const statusLabel = !u.enabled
-                          ? "Disabled"
+                          ? translate("Disabled")
                           : expired
-                            ? "Expired"
+                            ? translate("Expired")
                             : u.exhausted
-                              ? "Exhausted"
-                              : "Active";
+                              ? translate("Exhausted")
+                              : translate("Active");
 
                         if (isExpanded) {
                           return (
@@ -1271,21 +1392,27 @@ function App() {
                                     <span className="muted">{u.note}</span>
                                   )}
                                   <Badge tone={statusTone}>{statusLabel}</Badge>
-                                  <Chip mono>{onlineCount} online</Chip>
+                                  <Chip mono>
+                                    {translate("{0} online", onlineCount)}
+                                  </Chip>
                                   {u.expires && (
-                                    <Chip mono>Exp {when(u.expires)}</Chip>
+                                    <Chip mono>
+                                      {translate("Exp {0}", when(u.expires))}
+                                    </Chip>
                                   )}
                                   {u.usageStale && (
-                                    <Badge tone="warning">Stale</Badge>
+                                    <Badge tone="warning">
+                                      {translate("Stale")}
+                                    </Badge>
                                   )}
                                 </div>
                                 <div className="expanded-head-right">
                                   <SegmentedControl
                                     value={inlineRange}
                                     options={[
-                                      ["24", "24h"],
-                                      ["168", "7d"],
-                                      ["720", "30d"],
+                                      ["24", translate("24h")],
+                                      ["168", translate("7d")],
+                                      ["720", translate("30d")],
                                     ]}
                                     onChange={setInlineRange}
                                   />
@@ -1294,20 +1421,20 @@ function App() {
                                     onClick={() => void links(u)}
                                   >
                                     <Link2 size={14} />
-                                    Links
+                                    {translate("Links")}
                                   </Button>
                                   <Button onClick={() => void passwordLink(u)}>
                                     <KeyRound size={14} />
-                                    Password link
+                                    {translate("Password link")}
                                   </Button>
                                   <Button onClick={() => save("users", u)}>
-                                    Edit
+                                    {translate("Edit")}
                                   </Button>
                                   <Actions items={userActions} />
                                   <Button
                                     variant="subtle"
                                     onClick={() => setExpandedUser(null)}
-                                    title="Collapse"
+                                    title={translate("Collapse")}
                                   >
                                     <ChevronUp size={15} />
                                   </Button>
@@ -1320,7 +1447,10 @@ function App() {
                                 />
                                 <div className="expanded-actions-col">
                                   <span className="kpi-label">
-                                    AUTHORIZED NODES ({u.nodeIds.length})
+                                    {translate(
+                                      "AUTHORIZED NODES ({0})",
+                                      u.nodeIds.length,
+                                    )}
                                   </span>
                                   <div className="chip-group">
                                     {u.nodeIds.map((nid: string) => {
@@ -1363,7 +1493,7 @@ function App() {
                                     className="quick-row-btn"
                                     onClick={() => reset(u)}
                                   >
-                                    <span>Reset usage</span>
+                                    <span>{translate("Reset usage")}</span>
                                     <span className="mono muted">
                                       {when(u.usage.next)}
                                     </span>
@@ -1372,7 +1502,7 @@ function App() {
                                     className="quick-row-btn"
                                     onClick={() => history(u)}
                                   >
-                                    <span>Full telemetry</span>
+                                    <span>{translate("Full telemetry")}</span>
                                     <ArrowUpRight size={14} className="muted" />
                                   </Button>
                                 </div>
@@ -1412,8 +1542,8 @@ function App() {
                               <Badge tone={statusTone}>{statusLabel}</Badge>
                               <Button
                                 variant="icon"
-                                aria-label="Subscription links"
-                                title="Subscription links"
+                                aria-label={translate("Subscription links")}
+                                title={translate("Subscription links")}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   void links(u);
@@ -1425,8 +1555,12 @@ function App() {
                             <QuotaBar row={u} />
                             <div className="compact-foot">
                               <div className="chip-group">
-                                <Chip mono>{u.nodeIds.length} nodes</Chip>
-                                <Chip mono>{onlineCount} on</Chip>
+                                <Chip mono>
+                                  {translate("{0} nodes", u.nodeIds.length)}
+                                </Chip>
+                                <Chip mono>
+                                  {translate("{0} online", onlineCount)}
+                                </Chip>
                               </div>
                               <span className="expand-cue">
                                 <ChevronDown size={14} />
@@ -1444,7 +1578,7 @@ function App() {
                 <>
                   <div className="action-strip">
                     <SearchInput
-                      placeholder="Filter templates…"
+                      placeholder={translate("Filter templates…")}
                       value={search}
                       onChange={setSearch}
                     />
@@ -1452,17 +1586,17 @@ function App() {
                       <Button
                         variant="primary"
                         onClick={() =>
-                          setStage(
+                          setStage(() => (
                             <TemplateEditor
                               state={state}
                               onClose={() => setStage(null)}
                               refresh={refresh}
-                            />,
-                          )
+                            />
+                          ))
                         }
                       >
                         <Plus size={15} />
-                        <span>Template</span>
+                        <span>{translate("Template")}</span>
                       </Button>
                     </div>
                   </div>
@@ -1479,14 +1613,14 @@ function App() {
                           className="template-card"
                           key={t.id}
                           onClick={() =>
-                            setStage(
+                            setStage(() => (
                               <TemplateEditor
                                 template={t}
                                 state={state}
                                 onClose={() => setStage(null)}
                                 refresh={refresh}
-                              />,
-                            )
+                              />
+                            ))
                           }
                         >
                           <div className="template-card-head">
@@ -1496,21 +1630,30 @@ function App() {
                             <h2>{t.name}</h2>
                             <div className="chip-group template-badges">
                               {t.published && t.draft && t.draft !== t.body && (
-                                <Badge tone="warning">Draft edits</Badge>
+                                <Badge tone="warning">
+                                  {translate("Draft edits")}
+                                </Badge>
                               )}
                               <Badge tone={t.published ? "good" : "neutral"}>
-                                {t.published ? "Published" : "Draft"}
+                                {t.published
+                                  ? translate("Published")
+                                  : translate("Draft")}
                               </Badge>
                             </div>
                           </div>
                           <pre>{lines.slice(0, 8).join("\n")}</pre>
                           <div className="template-card-foot">
                             <div className="chip-group">
-                              <Chip mono>{lines.length} lines</Chip>
-                              <Chip mono>{usersUsing} users</Chip>
+                              <Chip mono>
+                                {translate("{0} lines", lines.length)}
+                              </Chip>
+                              <Chip mono>
+                                {translate("{0} users", usersUsing)}
+                              </Chip>
                             </div>
                             <span className="text-button">
-                              Studio <ArrowUpRight size={14} />
+                              {translate("Studio") + " "}
+                              <ArrowUpRight size={14} />
                             </span>
                           </div>
                         </button>
@@ -1525,32 +1668,31 @@ function App() {
                   <section className="panel">
                     <div className="panel-heading compact">
                       <div className="chip-group">
-                        <h2>Alerts</h2>
+                        <h2>{translate("Alerts")}</h2>
                         <span
                           className={
                             "count" + (activeAlerts.length ? " warn" : "")
                           }
                         >
-                          {activeAlerts.length} open
+                          {translate("{0} open", activeAlerts.length)}
                         </span>
                       </div>
                       <SegmentedControl
                         value={alertFilter}
                         options={[
-                          ["all", "All"],
-                          ["open", "Open"],
+                          ["all", translate("All")],
+                          ["open", translate("Open")],
                         ]}
                         onChange={setAlertFilter}
                       />
                     </div>
-                    {!(
-                      alertFilter === "open" ? activeAlerts : state.alerts
-                    ).length ? (
+                    {!(alertFilter === "open" ? activeAlerts : state.alerts)
+                      .length ? (
                       <div className="quiet radar-quiet">
                         <span className="quiet-ring">
                           <ShieldCheck size={26} />
                         </span>
-                        <h3>All quiet</h3>
+                        <h3>{translate("All quiet")}</h3>
                       </div>
                     ) : (
                       (alertFilter === "open"
@@ -1566,12 +1708,16 @@ function App() {
                           <span className="alert-mark" />
                           <div>
                             <div>
-                              <strong>{a.code.replaceAll("-", " ")}</strong>
+                              <strong>{alertLabel(a.code)}</strong>
                               <Badge tone={a.closed ? "neutral" : "warning"}>
-                                {a.closed ? "Closed" : a.seen ? "Read" : "Open"}
+                                {a.closed
+                                  ? translate("Closed")
+                                  : a.seen
+                                    ? translate("Read")
+                                    : translate("Open")}
                               </Badge>
                             </div>
-                            <p>{a.message}</p>
+                            <p>{localizeMessage(a.message)}</p>
                             <small>
                               {when(a.first)} → {when(a.last)}
                             </small>
@@ -1589,7 +1735,7 @@ function App() {
                                 }
                               >
                                 <Check size={13} />
-                                Read
+                                {translate("Read")}
                               </Button>
                             )}
                             {!a.closed && (
@@ -1604,7 +1750,7 @@ function App() {
                                 }
                               >
                                 <X size={13} />
-                                Close
+                                {translate("Close")}
                               </Button>
                             )}
                           </div>
@@ -1614,22 +1760,31 @@ function App() {
                   </section>
                   <section className="panel">
                     <div className="panel-heading compact">
-                      <h2>Operations</h2>
-                      <span className="count">{state.tasks.length}</span>
+                      <h2>{translate("Operations")}</h2>
+                      <span className="count">
+                        {formatNumber(state.tasks.length)}
+                      </span>
                     </div>
                     {!state.tasks.length ? (
-                      <Empty title="No operations yet">
-                        Deployments and remote tasks appear here.
+                      <Empty title={translate("No operations yet")}>
+                        {translate("Deployments and remote tasks appear here.")}
                       </Empty>
                     ) : (
                       <div className="ops-list">
                         {state.tasks.map((t) => {
                           const hostName =
                             state.hosts.find((h) => h.id === t.host)?.name ||
-                            "Removed";
+                            translate("Removed");
                           return (
                             <div className="op-row" key={t.id}>
-                              <span className={"op-icon " + t.state}>
+                              <span
+                                className={"op-icon " + t.state}
+                                aria-label={translate(
+                                  "Task state {0}",
+                                  taskLabel(t.state),
+                                )}
+                                role="img"
+                              >
                                 {t.state === "succeeded" ? (
                                   <CheckCircle2 size={16} />
                                 ) : t.state === "failed" ? (
@@ -1642,12 +1797,19 @@ function App() {
                               </span>
                               <div className="op-main">
                                 <div className="op-head">
-                                  <strong>{t.kind}</strong>
+                                  <strong>{operationLabel(t.kind)}</strong>
                                   <Chip>{hostName}</Chip>
-                                  <Chip mono>step {t.step}</Chip>
+                                  <Chip mono>
+                                    {translate("Step {0}", t.step)}
+                                  </Chip>
                                 </div>
                                 {t.error && (
-                                  <p className="op-error">{t.error}</p>
+                                  <p className="op-error">
+                                    {translate(
+                                      "Operation failed. {0}",
+                                      t.error,
+                                    )}
+                                  </p>
                                 )}
                               </div>
                               <small className="mono op-time">
@@ -1659,21 +1821,22 @@ function App() {
                                   onClick={() =>
                                     void api(`tasks/${t.id}/logs`).then(
                                       (logs) =>
-                                        setModal(
+                                        setModal(() => (
                                           <LogsModal
-                                            title={`${t.kind} · ${hostName}`}
+                                            title={`${operationLabel(t.kind)} · ${hostName}`}
                                             logs={logs || []}
                                             onClose={() => setModal(null)}
-                                          />,
-                                        ),
+                                          />
+                                        )),
                                     )
                                   }
                                 >
                                   <Terminal size={13} />
-                                  Logs
+                                  {translate("Logs")}
                                 </Button>
                                 {["queued", "running"].includes(t.state) && (
                                   <Button
+                                    aria-label={translate("Cancel operation")}
                                     onClick={() => act(`tasks/${t.id}/cancel`)}
                                   >
                                     <X size={13} />
@@ -1681,6 +1844,7 @@ function App() {
                                 )}
                                 {["failed", "cancelled"].includes(t.state) && (
                                   <Button
+                                    aria-label={translate("Retry operation")}
                                     onClick={() => act(`tasks/${t.id}/retry`)}
                                   >
                                     <RotateCw size={13} />
@@ -1703,7 +1867,7 @@ function App() {
       {toast && (
         <div className="toast" role="status">
           <Check size={17} />
-          {toast}
+          {localizeMessage(toast)}
         </div>
       )}
     </div>

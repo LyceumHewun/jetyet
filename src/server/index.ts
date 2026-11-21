@@ -2,6 +2,19 @@ import page from "../web/index.html";
 import { createApp } from "./api";
 import { loadConfig } from "./config";
 import { storage } from "./db";
+
+const faviconIcoUrl = new URL("../web/assets/favicon.ico", import.meta.url);
+const faviconSvgUrl = new URL("../web/assets/favicon.svg", import.meta.url);
+
+function assetResponse(url: URL, contentType: string) {
+  return new Response(Bun.file(url), {
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": "public, max-age=86400",
+    },
+  });
+}
+
 const config = loadConfig(),
   store = storage(config),
   app = createApp(store);
@@ -13,6 +26,8 @@ const server = Bun.serve({
     "/": page,
     "/portal": page,
     "/set-password": page,
+    "/favicon.ico": () => assetResponse(faviconIcoUrl, "image/x-icon"),
+    "/favicon.svg": () => assetResponse(faviconSvgUrl, "image/svg+xml"),
     "/api/*": app.fetch,
     "/auth/*": app.fetch,
     "/sub/*": app.fetch,

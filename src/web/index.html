@@ -1,10 +1,18 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-overlayscrollbars-initialize>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#f9fafb" />
-    <title>Jetyet — Network control</title>
+    <link rel="icon" href="./assets/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link
+      rel="icon"
+      href="./assets/favicon.svg"
+      type="image/svg+xml"
+      sizes="any"
+    />
+    <title>Jetyet</title>
     <script>
       (() => {
         try {
@@ -20,7 +28,7 @@
       })();
     </script>
   </head>
-  <body>
+  <body data-overlayscrollbars-initialize>
     <div id="root"></div>
     <script type="module" src="./main.tsx"></script>
   </body>

@@ -1,47 +1,40 @@
+import { formatDate, t as translate } from "../i18n";
 import { Calendar, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { DateTime } from "luxon";
 import { useEffect, useRef, useState } from "react";
 
-const MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
-const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
+const displayZone = "Asia/Hong_Kong";
+const weekdays = Array.from({ length: 7 }, (_, day) =>
+  Date.UTC(2024, 0, 7 + day),
+);
 const pad = (n: number) => String(n).padStart(2, "0");
+const now = () => DateTime.now().setZone(displayZone);
 
-function parseValue(val: string): Date | null {
-  if (!val) return null;
-  const norm = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(val)
-    ? val + ":00Z"
-    : val.endsWith("Z")
-      ? val
-      : val + "Z";
-  const ms = Date.parse(norm);
-  return Number.isFinite(ms) ? new Date(ms) : null;
+function parseValue(value: string): DateTime | null {
+  const date = DateTime.fromISO(value, { zone: "UTC" }).setZone(displayZone);
+  return date.isValid ? date : null;
 }
 
-function formatIsoMinute(d: Date): string {
-  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+function formatIsoMinute(date: DateTime): string {
+  return date.toUTC().toFormat("yyyy-MM-dd'T'HH:mm");
 }
 
-function formatDisplay(d: Date): string {
-  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
+function formatDisplay(date: DateTime): string {
+  return formatDate(date.toMillis(), {
+    timeZone: displayZone,
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
 }
 
 export function DateTimePicker({
   value,
   onChange,
-  placeholder = "Select date & time (UTC)",
+  placeholder = translate("Select date & time (HKT)"),
   allowClear = true,
 }: {
   value: string;
@@ -52,19 +45,15 @@ export function DateTimePicker({
   const parsed = parseValue(value);
   const [open, setOpen] = useState(false);
   const [dropUp, setDropUp] = useState(false);
-  const [viewYear, setViewYear] = useState(
-    () => (parsed || new Date()).getUTCFullYear(),
-  );
-  const [viewMonth, setViewMonth] = useState(
-    () => (parsed || new Date()).getUTCMonth(),
-  );
+  const [viewYear, setViewYear] = useState(() => (parsed ?? now()).year);
+  const [viewMonth, setViewMonth] = useState(() => (parsed ?? now()).month - 1);
   const root = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
-    const base = parseValue(value) || new Date();
-    setViewYear(base.getUTCFullYear());
-    setViewMonth(base.getUTCMonth());
+    const base = parseValue(value) ?? now();
+    setViewYear(base.year);
+    setViewMonth(base.month - 1);
     const onDown = (e: MouseEvent) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false);
     };
@@ -89,27 +78,21 @@ export function DateTimePicker({
   ];
 
   const updateDate = (year: number, month: number, day: number) => {
-    const base = parsed || new Date();
-    const next = new Date(
-      Date.UTC(year, month, day, base.getUTCHours(), base.getUTCMinutes()),
-    );
-    onChange(formatIsoMinute(next));
+    const base = parsed ?? now();
+    onChange(formatIsoMinute(base.set({ year, month: month + 1, day })));
   };
 
   const updateTime = (hours: number, minutes: number) => {
-    const base = parsed || new Date();
-    const h = Math.max(0, Math.min(23, Number.isFinite(hours) ? hours : 0));
-    const m = Math.max(0, Math.min(59, Number.isFinite(minutes) ? minutes : 0));
-    const next = new Date(
-      Date.UTC(
-        base.getUTCFullYear(),
-        base.getUTCMonth(),
-        base.getUTCDate(),
-        h,
-        m,
-      ),
+    const base = parsed ?? now();
+    const hour = Math.max(
+      0,
+      Math.min(23, Number.isFinite(hours) ? Math.trunc(hours) : 0),
     );
-    onChange(formatIsoMinute(next));
+    const minute = Math.max(
+      0,
+      Math.min(59, Number.isFinite(minutes) ? Math.trunc(minutes) : 0),
+    );
+    onChange(formatIsoMinute(base.set({ hour, minute })));
   };
 
   const shiftMonth = (delta: number) => {
@@ -149,7 +132,7 @@ export function DateTimePicker({
           <button
             type="button"
             className="ui-clear-btn"
-            aria-label="Clear date"
+            aria-label={translate("Clear date")}
             onClick={() => onChange("")}
           >
             <X size={13} />
@@ -162,26 +145,32 @@ export function DateTimePicker({
             <button
               type="button"
               className="icon-button"
-              aria-label="Previous month"
+              aria-label={translate("Previous month")}
               onClick={() => shiftMonth(-1)}
             >
               <ChevronLeft size={15} />
             </button>
             <strong className="mono">
-              {MONTHS[viewMonth]} {viewYear}
+              {formatDate(Date.UTC(viewYear, viewMonth, 1), {
+                timeZone: "UTC",
+                month: "short",
+                year: "numeric",
+              })}
             </strong>
             <button
               type="button"
               className="icon-button"
-              aria-label="Next month"
+              aria-label={translate("Next month")}
               onClick={() => shiftMonth(1)}
             >
               <ChevronRight size={15} />
             </button>
           </div>
           <div className="ui-cal-weekdays">
-            {WEEKDAYS.map((w) => (
-              <span key={w}>{w}</span>
+            {weekdays.map((day) => (
+              <span key={day}>
+                {formatDate(day, { timeZone: "UTC", weekday: "short" })}
+              </span>
             ))}
           </div>
           <div className="ui-cal-days">
@@ -195,9 +184,9 @@ export function DateTimePicker({
                   className={
                     "ui-cal-day" +
                     (parsed &&
-                    parsed.getUTCFullYear() === viewYear &&
-                    parsed.getUTCMonth() === viewMonth &&
-                    parsed.getUTCDate() === day
+                    parsed.year === viewYear &&
+                    parsed.month === viewMonth + 1 &&
+                    parsed.day === day
                       ? " selected"
                       : "")
                   }
@@ -209,18 +198,15 @@ export function DateTimePicker({
             )}
           </div>
           <div className="ui-cal-time">
-            <span className="muted">UTC</span>
+            <span className="muted">{translate("HKT")}</span>
             <input
               type="number"
               min={0}
               max={23}
-              aria-label="Hour"
-              value={parsed ? pad(parsed.getUTCHours()) : "00"}
+              aria-label={translate("Hour")}
+              value={parsed ? pad(parsed.hour) : "00"}
               onChange={(e) =>
-                updateTime(
-                  Number(e.target.value),
-                  parsed ? parsed.getUTCMinutes() : 0,
-                )
+                updateTime(Number(e.target.value), parsed ? parsed.minute : 0)
               }
             />
             <span>:</span>
@@ -228,21 +214,18 @@ export function DateTimePicker({
               type="number"
               min={0}
               max={59}
-              aria-label="Minute"
-              value={parsed ? pad(parsed.getUTCMinutes()) : "00"}
+              aria-label={translate("Minute")}
+              value={parsed ? pad(parsed.minute) : "00"}
               onChange={(e) =>
-                updateTime(
-                  parsed ? parsed.getUTCHours() : 0,
-                  Number(e.target.value),
-                )
+                updateTime(parsed ? parsed.hour : 0, Number(e.target.value))
               }
             />
             <button
               type="button"
               className="text-button"
-              onClick={() => onChange(formatIsoMinute(new Date()))}
+              onClick={() => onChange(formatIsoMinute(now()))}
             >
-              Now
+              {translate("Now")}
             </button>
           </div>
         </div>

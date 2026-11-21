@@ -1,3 +1,9 @@
+import {
+  type UiError,
+  formatNumber,
+  localizeError,
+  t as translate,
+} from "./i18n";
 import { useEffect, useState } from "react";
 import {
   Area,
@@ -8,7 +14,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, when } from "./client";
+import { api, formatUptime, when } from "./client";
 import {
   DateTimePicker,
   Empty,
@@ -17,6 +23,7 @@ import {
   SegmentedControl,
   Stage,
 } from "./components";
+import { eventLabel } from "./labels";
 import type { Row } from "./types";
 type HistorySnapshot = {
   entityId: string;
@@ -38,7 +45,7 @@ export function History({
     [custom, setCustom] = useState({ start: "", end: "" }),
     [snapshot, setSnapshot] = useState<HistorySnapshot | null>(null),
     [loading, setLoading] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState<UiError>("");
   useEffect(() => {
     setSnapshot(null);
     if (range === "custom" && (!custom.start || !custom.end)) {
@@ -88,7 +95,7 @@ export function History({
       .catch((e) => {
         if (!cancelled && e?.name !== "AbortError") {
           setSnapshot(null);
-          setError(e instanceof Error ? e.message : "Failed to load history.");
+          setError(e instanceof Error ? e : "Failed to load history.");
           setLoading(false);
         }
       });
@@ -103,10 +110,10 @@ export function History({
     observations = samples.filter((p) => p.reachable !== null),
     unitSuffix =
       current?.resolution === "day"
-        ? "/day"
+        ? translate("/day")
         : current?.resolution === "hour"
-          ? "/hr"
-          : "/min",
+          ? translate("/hr")
+          : translate("/min"),
     createdAt =
       typeof entity.created === "number"
         ? entity.created
@@ -138,17 +145,21 @@ export function History({
   return (
     <Stage
       title={entity.name}
-      tag="Telemetry"
-      subtitle={entity.address ? `${entity.address}${entity.port ? ":" + entity.port : ""}` : undefined}
+      tag={translate("Telemetry")}
+      subtitle={
+        entity.address
+          ? `${entity.address}${entity.port ? ":" + entity.port : ""}`
+          : undefined
+      }
       onClose={onClose}
       actions={
         <SegmentedControl
           value={range}
           options={[
-            ["24", "24h"],
-            ["168", "7d"],
-            ["720", "30d"],
-            ["custom", "Custom"],
+            ["24", translate("24h")],
+            ["168", translate("7d")],
+            ["720", translate("30d")],
+            ["custom", translate("Custom")],
           ]}
           onChange={setRange}
         />
@@ -158,7 +169,7 @@ export function History({
         {range === "custom" && (
           <div className="studio-card">
             <div className="form-grid">
-              <Field label="Start (UTC)">
+              <Field label={translate("Start (HKT)")}>
                 <DateTimePicker
                   value={custom.start}
                   onChange={(start) =>
@@ -166,7 +177,7 @@ export function History({
                   }
                 />
               </Field>
-              <Field label="End (UTC)">
+              <Field label={translate("End (HKT)")}>
                 <DateTimePicker
                   value={custom.end}
                   onChange={(end) => setCustom((prev) => ({ ...prev, end }))}
@@ -177,7 +188,7 @@ export function History({
         )}
         {error && (
           <p className="form-error" role="alert">
-            {error}
+            {localizeError(error)}
           </p>
         )}
         {entity.kind === "host" && (
@@ -195,12 +206,14 @@ export function History({
                         ? "warning"
                         : "danger"
                 }
-                label="Availability"
+                label={translate("Availability")}
               />
               <div>
-                <span className="kpi-label">AVAILABILITY</span>
+                <span className="kpi-label">{translate("AVAILABILITY")}</span>
                 <strong className="telemetry-big">
-                  {availability === null ? "—" : availability.toFixed(2) + "%"}
+                  {availability === null
+                    ? "—"
+                    : formatNumber(availability, 2) + "%"}
                 </strong>
               </div>
             </div>
@@ -209,25 +222,20 @@ export function History({
                 percent={current ? coverage : 0}
                 size={60}
                 tone="accent"
-                label="Coverage"
+                label={translate("Coverage")}
               />
               <div>
-                <span className="kpi-label">COVERAGE</span>
+                <span className="kpi-label">{translate("COVERAGE")}</span>
                 <strong className="telemetry-big">
-                  {current ? coverage.toFixed(1) + "%" : "—"}
+                  {current ? formatNumber(coverage, 1) + "%" : "—"}
                 </strong>
               </div>
             </div>
             <div className="studio-card telemetry-kpi-card">
               <div>
-                <span className="kpi-label">HOST UPTIME</span>
+                <span className="kpi-label">{translate("HOST UPTIME")}</span>
                 <strong className="telemetry-big mono">
-                  {entity.uptime
-                    ? Math.floor(entity.uptime / 86400) +
-                      "d " +
-                      Math.floor((entity.uptime % 86400) / 3600) +
-                      "h"
-                    : "—"}
+                  {formatUptime(entity.uptime)}
                 </strong>
               </div>
             </div>
@@ -235,14 +243,14 @@ export function History({
         )}
         {loading ? (
           <div className="studio-card">
-            <p className="muted">Loading telemetry…</p>
+            <p className="muted">{translate("Loading telemetry…")}</p>
           </div>
         ) : !current ? (
           !error &&
           incompleteCustom && (
             <div className="studio-card">
               <p className="muted">
-                Enter start and end timestamps to load history.
+                {translate("Enter start and end timestamps to load history.")}
               </p>
             </div>
           )
@@ -257,12 +265,14 @@ export function History({
             >
               <section className="panel">
                 <div className="panel-heading compact">
-                  <h2>Traffic (MiB{unitSuffix})</h2>
+                  <h2>{translate("Traffic (MiB{0})", unitSuffix)}</h2>
                 </div>
                 <div className="chart-pad">
                   {!samples.length ? (
-                    <Empty title="No observations">
-                      Unknown periods are not recorded as downtime.
+                    <Empty title={translate("No observations")}>
+                      {translate(
+                        "Unknown periods are not recorded as downtime.",
+                      )}
                     </Empty>
                   ) : (
                     <div className="chart">
@@ -303,13 +313,13 @@ export function History({
                           />
                           <Area
                             dataKey="outMiB"
-                            name={`Outbound MiB${unitSuffix}`}
+                            name={translate("Outbound MiB{0}", unitSuffix)}
                             stroke="var(--accent)"
                             fill="var(--accent-soft)"
                           />
                           <Area
                             dataKey="inMiB"
-                            name={`Inbound MiB${unitSuffix}`}
+                            name={translate("Inbound MiB{0}", unitSuffix)}
                             stroke="var(--good)"
                             fill="var(--good-soft)"
                           />
@@ -323,7 +333,7 @@ export function History({
                 samples.some((p) => p.cpu !== null) && (
                   <section className="panel">
                     <div className="panel-heading compact">
-                      <h2>Resource utilization (%)</h2>
+                      <h2>{translate("Resource utilization (%)")}</h2>
                     </div>
                     <div className="chart-pad">
                       <div className="chart">
@@ -363,25 +373,25 @@ export function History({
                             />
                             <Area
                               dataKey="cpu"
-                              name="CPU mean"
+                              name={translate("CPU mean")}
                               stroke="var(--accent)"
                               fill="var(--accent-soft)"
                             />
                             <Area
                               dataKey="cpu_max"
-                              name="CPU max"
+                              name={translate("CPU max")}
                               stroke="var(--warning)"
                               fill="none"
                             />
                             <Area
                               dataKey="memory"
-                              name="Memory mean"
+                              name={translate("Memory mean")}
                               stroke="var(--good)"
                               fill="none"
                             />
                             <Area
                               dataKey="disk"
-                              name="Disk mean"
+                              name={translate("Disk mean")}
                               stroke="var(--muted)"
                               fill="none"
                             />
@@ -394,20 +404,22 @@ export function History({
             </div>
             <section className="panel">
               <div className="panel-heading compact">
-                <h2>Events</h2>
-                <span className="count">{events.length}</span>
+                <h2>{translate("Events")}</h2>
+                <span className="count">{formatNumber(events.length)}</span>
               </div>
               <div className="events-pad">
                 {events.length ? (
                   events.map((e: Row) => (
                     <div className="event-line" key={e.id}>
-                      <strong>{e.type}</strong>
+                      <strong>{eventLabel(e.type)}</strong>
                       <small className="mono">{when(e.at)}</small>
                       <pre>{e.data}</pre>
                     </div>
                   ))
                 ) : (
-                  <p className="muted">No events in this range.</p>
+                  <p className="muted">
+                    {translate("No events in this range.")}
+                  </p>
                 )}
               </div>
             </section>
