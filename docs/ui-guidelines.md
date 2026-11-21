@@ -88,6 +88,27 @@ Always reference CSS custom properties defined in `src/web/styles.css` and suppo
   - `--font`: `"Space Grotesk Variable"` for Latin UI text, paired with platform-native Simplified Chinese sans-serif fallbacks (`"PingFang SC"`, `"Hiragino Sans GB"`, `"Microsoft YaHei"`, `"Noto Sans CJK SC"`, `"Source Han Sans SC"`, `"Noto Sans SC"`, `sans-serif`) so mixed English/Chinese interfaces render crisply without bundling multi-megabyte CJK font files.
   - `--mono`: `"JetBrains Mono Variable"` (with `"JetBrains Mono"`, `"Cascadia Code"`, `"SFMono-Regular"`, `ui-monospace`, plus CJK sans fallbacks before `monospace`) for metrics, timestamps, addresses, URLs, logs, and template code.
 - **Type Scale & Tokens**: Use `rem` tokens (`--text-2xs` `0.625rem` / 10px, `--text-xs` `0.6875rem` / 11px, `--text-sm` `0.75rem` / 12px, `--text-md` `0.8125rem` / 13px, `--text-base` `0.875rem` / 14px, `--text-lg` `0.9375rem` / 15px, `--text-xl` `1rem` / 16px, `--text-2xl` `1.25rem` / 20px, `--text-h1` `clamp(1.5rem, 2.5vw, 1.75rem)`) so typography respects browser root font-size preferences. Headings use `text-wrap: balance`; helper and guidance copy use `text-wrap: pretty`.
+- **UI Typography Usage**: Map every UI text role to an explicit font family, size token, and weight in `src/web/styles.css`:
+
+| Text Role | Family | Size Token | Weight | CSS Targets / Usage |
+| --- | --- | --- | --- | --- |
+| Page & stage heading (`h1`) | `--font` | `--text-h1` (`--text-2xl` in `.stage-title-row`) | `700` | Top-level stage headings (`h1`, `.stage-title-row h1`) |
+| Brand wordmark | `--font` | `--text-2xl` | `700` | Header and auth `jetyet.` wordmark (`.brand`) |
+| Section & modal heading (`h2`) | `--font` | `--text-lg` (`--text-xl` in `.modal-title-wrap`) | `600` (`700` in modals) | Panel, template card, and modal headings (`h2`, `.template-card-head h2`, `.modal-title-wrap h2`) |
+| Card & subsection heading (`h3`) | `--font` | `--text-base` | `600` (`550` in empty states) | Subsection and empty-state headings (`h3`, `.empty h3`, `.quiet h3`) |
+| Body (default) | `--font` | `--text-base` | `400` (`600` on `.compact-name` / `.preview-name`) | Document root and primary card titles (`body`) |
+| Body (compact) & inputs | `--font` | `--text-md` | `400` (`600` on active/strong items) | Modal/focus copy, inputs, selects, language options, portal items (`.modal-body`, `.focus-content`, `input`, `select`, `.ui-select-*`, `.ui-lang-option`, `.portal-tpl-item`) |
+| Body (secondary) & form labels | `--font` | `--text-sm` | `400` (`550`–`600` on labels/legends) | Muted copy, `small`, `.field`, `legend`, alerts, toasts, banners (`.muted`, `small`, `.field`, `legend`, `.error-banner`, `.toast`) |
+| Buttons (base) | `--font` | `--text-base` | `400` | Default `<button>` controls |
+| Buttons (navigation) | `--font` | `--text-md` | `500` (`600` when `.active`) | Command dock tabs (`.dock-item`) |
+| Buttons (compact & utility) | `--font` | `--text-sm` | `500` (`600` selected; `400` on `.text-button` / menus) | `.stage-back`, `.segmented-control button`, `.toggle-pill`, `.pick-chip`, `.ui-lang-trigger`, `.subtle-button`, `.quick-row-btn`, `.action-popover button`, `.text-button` |
+| Buttons (micro actions) | `--font` | `--text-xs` | `400` | Table row actions and chart range pills (`.row-buttons button`, `.range-tabs button`) |
+| Captions & metadata | `--font` | `--text-xs` | `400` (`500`–`600` on pills/avatars) | Subtitles, chips, legends, timestamps, counts, helper notes (`.entity-title small`, `.chip`, `.trust-pill`, `.io-legend`, `.op-time`, `.form-note`, `.history-stats span`, `.count` in `--mono`) |
+| Micro-labels, KPIs & badges | `--font` | `--text-2xs` | `600` (`400` on `.badge` / `.field small`) | `.kpi-label`, `.worker-pill`, `.dock-item b`, `.stale-tag`, `.badge`, `.mini-bar-head`, `.panel-heading .muted`, `.field small` |
+| Tables (cells & row links) | `--font` | `--text-sm` | `400` (`600` on `.name-button`) | Table rows and clickable entity names (`table`, `.name-button`) |
+| Tables (headers & cell subtext) | `--font` | `--text-2xs` | `550` (`400` on `td > small`) | Column headers and secondary cell captions (`th`, `td > small`) |
+| Code blocks & template source | `--mono` | `--text-xs` (`--text-sm` in `.template-source`) | `400` | Preformatted code, template cards, monospace textareas, URLs (`.code-output`, `.template-card pre`, `.field textarea`, `.template-source`, `.link-row-url`) |
+| Code & telemetry (micro) | `--mono` | `--text-2xs` | `400` | Event logs, chart axes, quota/alert timestamps (`.event-line pre`, `.chart`, `.alert-row small`, `.quota small`) |
 - **Locale-Aware Leading & Tracking**:
   - Default (English): `--lh-tight: 1.3`, `--lh-body: 1.5`, `--lh-code: 1.65`, `--tracking-h1: -0.02em`, `--tracking-h2: -0.01em`, `--tracking-kpi: 0.08em`.
   - Simplified Chinese (`:root:lang(zh)`): relax leading to `--lh-tight: 1.35` and `--lh-body: 1.58`, remove negative heading tracking (`--tracking-h1: 0em`, `--tracking-h2: 0em`), and moderate uppercase label tracking (`--tracking-kpi: 0.04em`) so Hanzi glyphs do not crowd. Keep `--tracking-brand: -0.03em` on the Latin `jetyet.` wordmark.

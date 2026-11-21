@@ -49,10 +49,10 @@ export function LanguageControl({
     LOCALE_OPTIONS.find((opt) => opt.value === locale) ?? LOCALE_OPTIONS[0];
 
   const closeMenu = (restoreFocus = false) => {
-    setOpen(false);
     if (restoreFocus) {
-      requestAnimationFrame(() => triggerRef.current?.focus());
+      triggerRef.current?.focus();
     }
+    setOpen(false);
   };
 
   useEffect(() => {
@@ -64,27 +64,23 @@ export function LanguageControl({
       }
     };
 
-    const onWindowKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeMenu(true);
+    const onFocusIn = (e: FocusEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) {
+        setOpen(false);
       }
     };
 
     window.addEventListener("mousedown", onPointerDown);
-    window.addEventListener("keydown", onWindowKey);
+    document.addEventListener("focusin", onFocusIn);
     return () => {
       window.removeEventListener("mousedown", onPointerDown);
-      window.removeEventListener("keydown", onWindowKey);
+      document.removeEventListener("focusin", onFocusIn);
     };
   }, [open]);
 
   useEffect(() => {
     if (!open) return;
-    const raf = requestAnimationFrame(() => {
-      optionRefs.current[focusIndex]?.focus();
-    });
-    return () => cancelAnimationFrame(raf);
+    optionRefs.current[focusIndex]?.focus();
   }, [open, focusIndex]);
 
   const openMenu = (targetIdx?: number) => {
@@ -103,10 +99,19 @@ export function LanguageControl({
   };
 
   const selectOption = (nextLocale: AppLocale) => {
-    if (nextLocale !== locale) {
-      onChange(nextLocale);
-    }
+    onChange(nextLocale);
     closeMenu(true);
+  };
+
+  const onControlKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (!open) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeMenu(true);
+    } else if (e.key === "Tab") {
+      setOpen(false);
+    }
   };
 
   const onTriggerKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
@@ -123,6 +128,8 @@ export function LanguageControl({
             ? (activeIdx + 1) % LOCALE_OPTIONS.length
             : (activeIdx - 1 + LOCALE_OPTIONS.length) % LOCALE_OPTIONS.length;
         openMenu(nextIdx);
+      } else {
+        optionRefs.current[focusIndex]?.focus();
       }
     } else if (e.key === "Home" && open) {
       e.preventDefault();
@@ -149,14 +156,13 @@ export function LanguageControl({
     } else if (e.key === "End") {
       e.preventDefault();
       setFocusIndex(LOCALE_OPTIONS.length - 1);
-    } else if (e.key === "Tab") {
-      setOpen(false);
     }
   };
 
   return (
     <div
       ref={rootRef}
+      onKeyDown={onControlKeyDown}
       className={[
         "ui-lang",
         open ? "open" : "",
