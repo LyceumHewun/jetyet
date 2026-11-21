@@ -1,5 +1,4 @@
-import { Activity, AlertCircle, Clock } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -9,10 +8,16 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, formatUptime, when } from "./client";
-import { Badge, Dialog, Empty, Field } from "./components";
+import { api, when } from "./client";
+import {
+  DateTimePicker,
+  Empty,
+  Field,
+  RingMeter,
+  SegmentedControl,
+  Stage,
+} from "./components";
 import type { Row } from "./types";
-
 type HistorySnapshot = {
   entityId: string;
   start: number;
@@ -22,15 +27,6 @@ type HistorySnapshot = {
   events: Row[];
 };
 
-const chartTooltipStyle = {
-  backgroundColor: "#ffffff",
-  border: "2px solid #8f7588",
-  borderRadius: "10px",
-  boxShadow: "none",
-  fontSize: "13px",
-  color: "#191018",
-};
-
 export function History({
   entity,
   onClose,
@@ -38,16 +34,11 @@ export function History({
   entity: Row;
   onClose: () => void;
 }) {
-  const uid = useId();
-  const [range, setRange] = useState("24");
-  const [custom, setCustom] = useState({ start: "", end: "" });
-  const [snapshot, setSnapshot] = useState<HistorySnapshot | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const reduceMotion =
-    typeof window !== "undefined" &&
-    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-
+  const [range, setRange] = useState("24"),
+    [custom, setCustom] = useState({ start: "", end: "" }),
+    [snapshot, setSnapshot] = useState<HistorySnapshot | null>(null),
+    [loading, setLoading] = useState(false),
+    [error, setError] = useState("");
   useEffect(() => {
     setSnapshot(null);
     if (range === "custom" && (!custom.start || !custom.end)) {
@@ -55,12 +46,11 @@ export function History({
       setError("");
       return;
     }
-    const end = range === "custom" ? Date.parse(custom.end + "Z") : Date.now();
-    const start =
-      range === "custom"
-        ? Date.parse(custom.start + "Z")
-        : end - Number(range) * 3600000;
-
+    const end = range === "custom" ? Date.parse(custom.end + "Z") : Date.now(),
+      start =
+        range === "custom"
+          ? Date.parse(custom.start + "Z")
+          : end - Number(range) * 3600000;
     if (!Number.isFinite(start) || !Number.isFinite(end)) {
       setLoading(false);
       if (range === "custom") setError("Enter valid start and end timestamps.");
@@ -71,7 +61,6 @@ export function History({
       setError("End time must be after start time.");
       return;
     }
-
     const controller = new AbortController();
     let cancelled = false;
     setLoading(true);
@@ -103,349 +92,328 @@ export function History({
           setLoading(false);
         }
       });
-
     return () => {
       cancelled = true;
       controller.abort();
     };
   }, [entity.id, range, custom.start, custom.end]);
-
-  const current = snapshot?.entityId === entity.id ? snapshot : null;
-  const samples = current?.samples ?? [];
-  const events = current?.events ?? [];
-  const observations = samples.filter((p) => p.reachable !== null);
-  const unitSuffix =
-    current?.resolution === "day"
-      ? "/day"
-      : current?.resolution === "hour"
-        ? "/hr"
-        : "/min";
-
-  const createdAt =
-    typeof entity.created === "number"
-      ? entity.created
-      : entity.created
-        ? Date.parse(entity.created)
-        : NaN;
-  const effectiveStart = current
-    ? Number.isFinite(createdAt)
-      ? Math.max(current.start, createdAt)
-      : current.start
-    : 0;
-  const expected = current
-    ? Math.max(0, (current.end - effectiveStart) / 60000)
-    : 0;
-  const coverage = expected
-    ? Math.min(
-        100,
-        (observations.reduce((sum, p) => sum + p.observations, 0) / expected) *
+  const current = snapshot?.entityId === entity.id ? snapshot : null,
+    samples = current?.samples ?? [],
+    events = current?.events ?? [],
+    observations = samples.filter((p) => p.reachable !== null),
+    unitSuffix =
+      current?.resolution === "day"
+        ? "/day"
+        : current?.resolution === "hour"
+          ? "/hr"
+          : "/min",
+    createdAt =
+      typeof entity.created === "number"
+        ? entity.created
+        : entity.created
+          ? Date.parse(entity.created)
+          : NaN,
+    effectiveStart = current
+      ? Number.isFinite(createdAt)
+        ? Math.max(current.start, createdAt)
+        : current.start
+      : 0,
+    expected = current
+      ? Math.max(0, (current.end - effectiveStart) / 60000)
+      : 0,
+    coverage = expected
+      ? Math.min(
           100,
-      )
-    : 0;
-  const availability = observations.length
-    ? (observations.reduce((sum, p) => sum + p.successes, 0) /
-        observations.reduce((sum, p) => sum + p.observations, 0)) *
-      100
-    : null;
-  const incompleteCustom = range === "custom" && (!custom.start || !custom.end);
-
-  const trafficData = samples.map((p) => ({
-    ...p,
-    time: when(p.at),
-    inMiB: Number(((p.inbound || 0) / 1024 ** 2).toFixed(2)),
-    outMiB: Number(((p.outbound || 0) / 1024 ** 2).toFixed(2)),
-  }));
-
-  const resourceData = samples.map((p) => ({
-    ...p,
-    time: when(p.at),
-    cpu: p.cpu !== null ? Number(p.cpu.toFixed(1)) : null,
-    cpu_max: p.cpu_max !== null ? Number(p.cpu_max.toFixed(1)) : null,
-    memory: p.memory !== null ? Number(p.memory.toFixed(1)) : null,
-    disk: p.disk !== null ? Number(p.disk.toFixed(1)) : null,
-  }));
-
+          (observations.reduce((sum, p) => sum + p.observations, 0) /
+            expected) *
+            100,
+        )
+      : 0,
+    availability = observations.length
+      ? (observations.reduce((sum, p) => sum + p.successes, 0) /
+          observations.reduce((sum, p) => sum + p.observations, 0)) *
+        100
+      : null,
+    incompleteCustom = range === "custom" && (!custom.start || !custom.end);
   return (
-    <Dialog
-      title={`${entity.name} · History`}
-      subtitle="Asia/Hong_Kong display · custom range inputs in UTC"
+    <Stage
+      title={entity.name}
+      tag="Telemetry"
+      subtitle={entity.address ? `${entity.address}${entity.port ? ":" + entity.port : ""}` : undefined}
       onClose={onClose}
-      wide
-    >
-      <div className="dialog-body" aria-busy={loading}>
-        <div className="range-tabs" role="group" aria-label="Reporting range">
-          {[
-            ["24", "24 hours"],
-            ["168", "7 days"],
-            ["720", "30 days"],
+      actions={
+        <SegmentedControl
+          value={range}
+          options={[
+            ["24", "24h"],
+            ["168", "7d"],
+            ["720", "30d"],
             ["custom", "Custom"],
-          ].map(([v, label]) => (
-            <button
-              type="button"
-              className={range === v ? "range-tab selected" : "range-tab"}
-              aria-pressed={range === v}
-              key={v}
-              onClick={() => setRange(v)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
+          ]}
+          onChange={setRange}
+        />
+      }
+    >
+      <div className="telemetry-stack" aria-busy={loading}>
         {range === "custom" && (
-          <div className="form-grid custom-range-grid">
-            <Field label="Start (UTC)" htmlFor={`${uid}-start`}>
-              <input
-                id={`${uid}-start`}
-                type="datetime-local"
-                value={custom.start}
-                onChange={(e) =>
-                  setCustom((prev) => ({ ...prev, start: e.target.value }))
-                }
-              />
-            </Field>
-            <Field label="End (UTC)" htmlFor={`${uid}-end`}>
-              <input
-                id={`${uid}-end`}
-                type="datetime-local"
-                value={custom.end}
-                onChange={(e) =>
-                  setCustom((prev) => ({ ...prev, end: e.target.value }))
-                }
-              />
-            </Field>
+          <div className="studio-card">
+            <div className="form-grid">
+              <Field label="Start (UTC)">
+                <DateTimePicker
+                  value={custom.start}
+                  onChange={(start) =>
+                    setCustom((prev) => ({ ...prev, start }))
+                  }
+                />
+              </Field>
+              <Field label="End (UTC)">
+                <DateTimePicker
+                  value={custom.end}
+                  onChange={(end) => setCustom((prev) => ({ ...prev, end }))}
+                />
+              </Field>
+            </div>
           </div>
         )}
-
         {error && (
           <p className="form-error" role="alert">
-            <AlertCircle size={18} aria-hidden="true" />
-            <span>{error}</span>
+            {error}
           </p>
         )}
-
         {entity.kind === "host" && (
-          <div className="history-stats">
-            <div className="history-kpi">
-              <span>Observed availability</span>
-              <strong>
-                {availability === null ? "—" : availability.toFixed(2) + "%"}
-              </strong>
+          <div className="telemetry-kpis">
+            <div className="studio-card telemetry-kpi-card">
+              <RingMeter
+                percent={availability ?? 0}
+                size={60}
+                tone={
+                  availability === null
+                    ? "accent"
+                    : availability >= 95
+                      ? "good"
+                      : availability >= 80
+                        ? "warning"
+                        : "danger"
+                }
+                label="Availability"
+              />
+              <div>
+                <span className="kpi-label">AVAILABILITY</span>
+                <strong className="telemetry-big">
+                  {availability === null ? "—" : availability.toFixed(2) + "%"}
+                </strong>
+              </div>
             </div>
-            <div className="history-kpi">
-              <span>Monitoring coverage</span>
-              <strong>{current ? coverage.toFixed(1) + "%" : "—"}</strong>
+            <div className="studio-card telemetry-kpi-card">
+              <RingMeter
+                percent={current ? coverage : 0}
+                size={60}
+                tone="accent"
+                label="Coverage"
+              />
+              <div>
+                <span className="kpi-label">COVERAGE</span>
+                <strong className="telemetry-big">
+                  {current ? coverage.toFixed(1) + "%" : "—"}
+                </strong>
+              </div>
             </div>
-            <div className="history-kpi">
-              <span>Host uptime</span>
-              <strong>{formatUptime(entity.uptime)}</strong>
+            <div className="studio-card telemetry-kpi-card">
+              <div>
+                <span className="kpi-label">HOST UPTIME</span>
+                <strong className="telemetry-big mono">
+                  {entity.uptime
+                    ? Math.floor(entity.uptime / 86400) +
+                      "d " +
+                      Math.floor((entity.uptime % 86400) / 3600) +
+                      "h"
+                    : "—"}
+                </strong>
+              </div>
             </div>
           </div>
         )}
-
         {loading ? (
-          <div className="history-loading">
-            <progress aria-label="Loading history" className="flat-progress" />
-            <div className="skeleton-block" />
-            <div className="skeleton-block short" />
+          <div className="studio-card">
+            <p className="muted">Loading telemetry…</p>
           </div>
         ) : !current ? (
           !error &&
           incompleteCustom && (
-            <p className="muted-copy">
-              Enter start and end timestamps in UTC to load history.
-            </p>
+            <div className="studio-card">
+              <p className="muted">
+                Enter start and end timestamps to load history.
+              </p>
+            </div>
           )
         ) : (
           <>
-            <section className="history-section">
-              <div className="history-section-head">
-                <h3>Traffic (MiB{unitSuffix})</h3>
-                <div className="chart-legend" aria-hidden="true">
-                  <span>
-                    <i className="swatch accent" /> Outbound
-                  </span>
-                  <span>
-                    <i className="swatch good" /> Inbound
-                  </span>
+            <div
+              className={
+                entity.kind === "host" && samples.some((p) => p.cpu !== null)
+                  ? "charts-grid"
+                  : ""
+              }
+            >
+              <section className="panel">
+                <div className="panel-heading compact">
+                  <h2>Traffic (MiB{unitSuffix})</h2>
                 </div>
-              </div>
-              {!samples.length ? (
-                <Empty
-                  title="No observations in this range"
-                  icon={<Activity size={24} />}
-                >
-                  Unobserved periods are recorded as unknown, never as VPS
-                  downtime.
-                </Empty>
-              ) : (
-                <div className="chart">
-                  <ResponsiveContainer width="100%" height={240}>
-                    <AreaChart data={trafficData}>
-                      <CartesianGrid
-                        stroke="#dcc6d5"
-                        strokeDasharray="4 4"
-                        vertical={false}
-                      />
-                      <XAxis
-                        dataKey="time"
-                        tick={{ fontSize: 12, fill: "#5b4957" }}
-                        tickLine={false}
-                        axisLine={{ stroke: "#dcc6d5" }}
-                        minTickGap={60}
-                      />
-                      <YAxis
-                        tick={{ fontSize: 12, fill: "#5b4957" }}
-                        tickLine={false}
-                        axisLine={false}
-                        width={54}
-                      />
-                      <Tooltip contentStyle={chartTooltipStyle} />
-                      <Area
-                        type="monotone"
-                        dataKey="outMiB"
-                        name={`Outbound MiB${unitSuffix}`}
-                        stroke="#c20e70"
-                        strokeWidth={2.5}
-                        fill="#fce6f2"
-                        fillOpacity={0.9}
-                        isAnimationActive={!reduceMotion}
-                        animationDuration={450}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="inMiB"
-                        name={`Inbound MiB${unitSuffix}`}
-                        stroke="#0e7a56"
-                        strokeWidth={2.5}
-                        fill="#e3f7ef"
-                        fillOpacity={0.65}
-                        isAnimationActive={!reduceMotion}
-                        animationDuration={450}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </section>
-
-            {entity.kind === "host" && samples.some((p) => p.cpu !== null) && (
-              <section className="history-section">
-                <div className="history-section-head">
-                  <h3>Resource utilization (%)</h3>
-                  <div className="chart-legend" aria-hidden="true">
-                    <span>
-                      <i className="swatch accent" /> CPU mean
-                    </span>
-                    <span>
-                      <i className="swatch warning" /> CPU max
-                    </span>
-                    <span>
-                      <i className="swatch good" /> Memory
-                    </span>
-                    <span>
-                      <i className="swatch ink" /> Disk
-                    </span>
-                  </div>
-                </div>
-                <div className="chart">
-                  <ResponsiveContainer width="100%" height={220}>
-                    <AreaChart data={resourceData}>
-                      <CartesianGrid
-                        stroke="#dcc6d5"
-                        strokeDasharray="4 4"
-                        vertical={false}
-                      />
-                      <XAxis
-                        dataKey="time"
-                        tick={{ fontSize: 12, fill: "#5b4957" }}
-                        tickLine={false}
-                        axisLine={{ stroke: "#dcc6d5" }}
-                        minTickGap={60}
-                      />
-                      <YAxis
-                        domain={[0, 100]}
-                        tick={{ fontSize: 12, fill: "#5b4957" }}
-                        tickLine={false}
-                        axisLine={false}
-                        width={42}
-                      />
-                      <Tooltip contentStyle={chartTooltipStyle} />
-                      <Area
-                        type="monotone"
-                        dataKey="cpu"
-                        name="CPU mean (%)"
-                        stroke="#c20e70"
-                        strokeWidth={2.5}
-                        fill="#fce6f2"
-                        fillOpacity={0.75}
-                        isAnimationActive={!reduceMotion}
-                        animationDuration={450}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="cpu_max"
-                        name="CPU max (%)"
-                        stroke="#9a5500"
-                        strokeWidth={2}
-                        strokeDasharray="4 3"
-                        fill="none"
-                        isAnimationActive={!reduceMotion}
-                        animationDuration={450}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="memory"
-                        name="Memory mean (%)"
-                        stroke="#0e7a56"
-                        strokeWidth={2}
-                        fill="none"
-                        isAnimationActive={!reduceMotion}
-                        animationDuration={450}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="disk"
-                        name="Disk mean (%)"
-                        stroke="#5b4957"
-                        strokeWidth={2}
-                        strokeDasharray="2 3"
-                        fill="none"
-                        isAnimationActive={!reduceMotion}
-                        animationDuration={450}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
+                <div className="chart-pad">
+                  {!samples.length ? (
+                    <Empty title="No observations">
+                      Unknown periods are not recorded as downtime.
+                    </Empty>
+                  ) : (
+                    <div className="chart">
+                      <ResponsiveContainer width="100%" height={260}>
+                        <AreaChart
+                          data={samples.map((p) => ({
+                            ...p,
+                            time: when(p.at),
+                            inMiB: p.inbound / 1024 ** 2,
+                            outMiB: p.outbound / 1024 ** 2,
+                          }))}
+                        >
+                          <CartesianGrid
+                            stroke="var(--border)"
+                            strokeDasharray="3 3"
+                            vertical={false}
+                          />
+                          <XAxis
+                            dataKey="time"
+                            stroke="var(--border)"
+                            tick={{ fontSize: 10, fill: "var(--muted)" }}
+                            minTickGap={60}
+                          />
+                          <YAxis
+                            stroke="var(--border)"
+                            tick={{ fontSize: 10, fill: "var(--muted)" }}
+                            width={45}
+                          />
+                          <Tooltip
+                            contentStyle={{
+                              background: "var(--surface)",
+                              border: "1px solid var(--border)",
+                              borderRadius: "6px",
+                              color: "var(--ink)",
+                              fontSize: "12px",
+                            }}
+                            labelStyle={{ color: "var(--muted)" }}
+                          />
+                          <Area
+                            dataKey="outMiB"
+                            name={`Outbound MiB${unitSuffix}`}
+                            stroke="var(--accent)"
+                            fill="var(--accent-soft)"
+                          />
+                          <Area
+                            dataKey="inMiB"
+                            name={`Inbound MiB${unitSuffix}`}
+                            stroke="var(--good)"
+                            fill="var(--good-soft)"
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
                 </div>
               </section>
-            )}
-
-            <section className="history-section">
-              <div className="history-section-head">
-                <h3>Accounting & operation events</h3>
-                <Badge tone="neutral" icon={<Clock size={14} />}>
-                  {events.length} events
-                </Badge>
-              </div>
-              {events.length ? (
-                <div className="event-list">
-                  {events.map((e: Row) => (
-                    <article className="event-line" key={e.id}>
-                      <div className="event-line-head">
-                        <Badge tone="accent">{e.type}</Badge>
-                        <small className="mono">{when(e.at)}</small>
+              {entity.kind === "host" &&
+                samples.some((p) => p.cpu !== null) && (
+                  <section className="panel">
+                    <div className="panel-heading compact">
+                      <h2>Resource utilization (%)</h2>
+                    </div>
+                    <div className="chart-pad">
+                      <div className="chart">
+                        <ResponsiveContainer width="100%" height={260}>
+                          <AreaChart
+                            data={samples.map((p) => ({
+                              ...p,
+                              time: when(p.at),
+                            }))}
+                          >
+                            <CartesianGrid
+                              stroke="var(--border)"
+                              strokeDasharray="3 3"
+                              vertical={false}
+                            />
+                            <XAxis
+                              dataKey="time"
+                              stroke="var(--border)"
+                              tick={{ fontSize: 10, fill: "var(--muted)" }}
+                              minTickGap={60}
+                            />
+                            <YAxis
+                              domain={[0, 100]}
+                              stroke="var(--border)"
+                              tick={{ fontSize: 10, fill: "var(--muted)" }}
+                              width={35}
+                            />
+                            <Tooltip
+                              contentStyle={{
+                                background: "var(--surface)",
+                                border: "1px solid var(--border)",
+                                borderRadius: "6px",
+                                color: "var(--ink)",
+                                fontSize: "12px",
+                              }}
+                              labelStyle={{ color: "var(--muted)" }}
+                            />
+                            <Area
+                              dataKey="cpu"
+                              name="CPU mean"
+                              stroke="var(--accent)"
+                              fill="var(--accent-soft)"
+                            />
+                            <Area
+                              dataKey="cpu_max"
+                              name="CPU max"
+                              stroke="var(--warning)"
+                              fill="none"
+                            />
+                            <Area
+                              dataKey="memory"
+                              name="Memory mean"
+                              stroke="var(--good)"
+                              fill="none"
+                            />
+                            <Area
+                              dataKey="disk"
+                              name="Disk mean"
+                              stroke="var(--muted)"
+                              fill="none"
+                            />
+                          </AreaChart>
+                        </ResponsiveContainer>
                       </div>
+                    </div>
+                  </section>
+                )}
+            </div>
+            <section className="panel">
+              <div className="panel-heading compact">
+                <h2>Events</h2>
+                <span className="count">{events.length}</span>
+              </div>
+              <div className="events-pad">
+                {events.length ? (
+                  events.map((e: Row) => (
+                    <div className="event-line" key={e.id}>
+                      <strong>{e.type}</strong>
+                      <small className="mono">{when(e.at)}</small>
                       <pre>{e.data}</pre>
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted-copy">No events in this range.</p>
-              )}
+                    </div>
+                  ))
+                ) : (
+                  <p className="muted">No events in this range.</p>
+                )}
+              </div>
             </section>
           </>
         )}
       </div>
-    </Dialog>
+    </Stage>
   );
 }

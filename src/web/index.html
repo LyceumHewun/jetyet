@@ -3,8 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta name="theme-color" content="#faf5f8" />
-    <title>Jetyet</title>
+    <meta name="theme-color" content="#f9fafb" />
+    <title>Jetyet — Network control</title>
+    <script>
+      (() => {
+        try {
+          const saved = localStorage.getItem("jetyet-theme");
+          const dark =
+            saved === "dark" ||
+            (!saved && matchMedia("(prefers-color-scheme: dark)").matches);
+          const theme = dark ? "dark" : "light";
+          document.documentElement.dataset.theme = theme;
+          const meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", dark ? "#111827" : "#f9fafb");
+        } catch {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
