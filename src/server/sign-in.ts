@@ -2,7 +2,7 @@ import type { Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { digest, same, token } from "./crypto";
-import type { Store } from "./db";
+import type { Entity, Store } from "./db";
 import { HttpError, requireOrigin } from "./errors";
 import { portalOverview } from "./routes/portal";
 
@@ -11,14 +11,24 @@ const sessionDays = 7;
 const invalidLink = () =>
   new HttpError(403, "This password link is invalid or expired");
 
-export function issuePasswordLink(s: Store, user: string) {
+export function issuePasswordLink(s: Store, user: Entity) {
   const secret = token();
-  const expires = Date.now() + day;
+  const now = Date.now();
+  const expires = now + day;
+  const previous = s.db
+    .query("SELECT 1 FROM portal_password_links WHERE user=? AND expires>?")
+    .get(user.id, now);
   s.db
     .query(
       "INSERT INTO portal_password_links VALUES(?,?,?) ON CONFLICT(user) DO UPDATE SET hash=excluded.hash,expires=excluded.expires",
     )
-    .run(user, digest(secret), expires);
+    .run(user.id, digest(secret), expires);
+  s.event(user.id, "portal.password-link.issued", {
+    actor: s.config.admin.username,
+    username: user.username,
+    expires,
+    replacedLink: previous !== null,
+  });
   return { url: `${s.config.origin}/set-password#${secret}`, expires };
 }
 
@@ -173,15 +183,19 @@ export function registerSignIn(app: Hono, s: Store) {
     });
     s.db
       .transaction(() => {
-        passwordLinkUser(linkHash);
+        const current = passwordLinkUser(linkHash);
+        const replacedPassword = !!passwordHash(current.id);
         s.db
           .query(
             "INSERT INTO portal_passwords VALUES(?,?) ON CONFLICT(user) DO UPDATE SET hash=excluded.hash",
           )
-          .run(user.id, hash);
-        revokePortalAccess(s, user.id);
-        s.event(user.id, "portal.password.changed", {});
-        signIn(c, user.id);
+          .run(current.id, hash);
+        revokePortalAccess(s, current.id);
+        s.event(current.id, "portal.password.changed", {
+          username: current.username,
+          replacedPassword,
+        });
+        signIn(c, current.id);
       })
       .immediate();
     return c.json({ username: user.username, role: "subscriber" });

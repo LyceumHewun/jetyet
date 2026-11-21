@@ -1177,6 +1177,7 @@ svg.spinning {
   background: var(--warning);
 }
 .search {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -1191,8 +1192,19 @@ svg.spinning {
   background: transparent;
   outline: none;
   padding: 0;
+  padding-inline-end: var(--space-6);
+  min-inline-size: 0;
   width: 220px;
   font-size: var(--text-sm);
+}
+.search > svg {
+  flex-shrink: 0;
+}
+.search .ui-clear-btn {
+  position: absolute;
+  inset-inline-end: var(--space-2);
+  inline-size: var(--space-6);
+  block-size: var(--space-6);
 }
 .search:focus-within {
   outline: 2px solid var(--accent);
@@ -2081,6 +2093,9 @@ legend {
 .ui-input-wrap .ui-input {
   padding-right: 34px;
 }
+.ui-input-wrap .ui-input[type="password"]::-ms-reveal {
+  display: none;
+}
 .ui-input-action,
 .ui-clear-btn {
   border: 0;
@@ -2473,9 +2488,35 @@ legend {
 .event-line strong {
   font-size: var(--text-xs);
 }
-.event-line small {
-  float: right;
+.event-line-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+}
+.event-line time {
   font-size: var(--text-2xs);
+  color: var(--muted);
+}
+.event-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+}
+.event-details > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+.event-details dt {
+  color: var(--muted);
+}
+.event-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 .event-line pre {
   font-size: var(--text-2xs);

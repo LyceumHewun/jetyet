@@ -112,9 +112,7 @@ export function registerUsersRoutes({ app, s, entity, view, checked }: Routes) {
               409,
               "Enable the user and set their sign-in username first",
             );
-          const link = issuePasswordLink(s, u.id);
-          s.event(u.id, "portal.password-link.issued", {});
-          return link;
+          return issuePasswordLink(s, u);
         })
         .immediate(),
     );

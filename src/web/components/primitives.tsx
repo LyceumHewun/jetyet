@@ -58,11 +58,11 @@ export function Input({
         <button
           type="button"
           className="ui-input-action"
+          disabled={props.disabled}
           aria-label={
             visible ? translate("Hide password") : translate("Show password")
           }
           onClick={() => setVisible((v) => !v)}
-          tabIndex={-1}
         >
           {visible ? <EyeOff size={14} /> : <Eye size={14} />}
         </button>
@@ -94,11 +94,14 @@ export function SearchInput({
   onChange: (value: string) => void;
   placeholder?: string;
 }) {
+  const inputRef = useRef<HTMLInputElement>(null);
   return (
-    <label className="search">
-      <Search size={15} />
+    <div className="search">
+      <Search size={15} aria-hidden="true" />
       <input
+        ref={inputRef}
         type="text"
+        aria-label={placeholder ?? translate("Search")}
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -108,12 +111,15 @@ export function SearchInput({
           type="button"
           className="ui-clear-btn"
           aria-label={translate("Clear search")}
-          onClick={() => onChange("")}
+          onClick={() => {
+            onChange("");
+            inputRef.current?.focus();
+          }}
         >
           <X size={13} />
         </button>
       )}
-    </label>
+    </div>
   );
 }
 

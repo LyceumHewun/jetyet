@@ -1,5 +1,6 @@
 import {
   type UiError,
+  formatDate,
   formatNumber,
   localizeError,
   t as translate,
@@ -25,6 +26,82 @@ import {
 } from "./components";
 import { eventLabel } from "./labels";
 import type { Row } from "./types";
+
+function eventTime(at: number) {
+  return formatDate(at, {
+    timeZone: "Asia/Hong_Kong",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+}
+
+function EventDetails({ type, data }: { type: string; data: string }) {
+  const issued = type === "portal.password-link.issued";
+  if (!issued && type !== "portal.password.changed") {
+    return data && data.trim() !== "{}" ? <pre>{data}</pre> : null;
+  }
+
+  let values: Record<string, unknown> = {};
+  try {
+    values = JSON.parse(data) ?? {};
+  } catch {
+    // Invalid data has no displayable audit fields.
+  }
+  if (typeof values.username !== "string") {
+    return (
+      <p className="muted">
+        {translate("No additional details were recorded.")}
+      </p>
+    );
+  }
+
+  return (
+    <dl className="event-details">
+      {issued && typeof values.actor === "string" && (
+        <div>
+          <dt>{translate("Issued by")}</dt>
+          <dd>{values.actor}</dd>
+        </div>
+      )}
+      <div>
+        <dt>{translate("Username")}</dt>
+        <dd>{values.username}</dd>
+      </div>
+      {issued && typeof values.expires === "number" && (
+        <div>
+          <dt>{translate("Expires")}</dt>
+          <dd className="mono">{eventTime(values.expires)}</dd>
+        </div>
+      )}
+      {issued && typeof values.replacedLink === "boolean" && (
+        <div>
+          <dt>{translate("Previous link")}</dt>
+          <dd>
+            {values.replacedLink
+              ? translate("Revoked")
+              : translate("No active link")}
+          </dd>
+        </div>
+      )}
+      {!issued && typeof values.replacedPassword === "boolean" && (
+        <div>
+          <dt>{translate("Password")}</dt>
+          <dd>
+            {values.replacedPassword
+              ? translate("Replaced password")
+              : translate("Set initial password")}
+          </dd>
+        </div>
+      )}
+    </dl>
+  );
+}
+
 type HistorySnapshot = {
   entityId: string;
   start: number;
@@ -411,9 +488,16 @@ export function History({
                 {events.length ? (
                   events.map((e: Row) => (
                     <div className="event-line" key={e.id}>
-                      <strong>{eventLabel(e.type)}</strong>
-                      <small className="mono">{when(e.at)}</small>
-                      <pre>{e.data}</pre>
+                      <div className="event-line-head">
+                        <strong>{eventLabel(e.type)}</strong>
+                        <time
+                          className="mono"
+                          dateTime={new Date(e.at).toISOString()}
+                        >
+                          {eventTime(e.at)}
+                        </time>
+                      </div>
+                      <EventDetails type={e.type} data={e.data} />
                     </div>
                   ))
                 ) : (
