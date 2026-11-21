@@ -1,245 +1,124 @@
-import { Check, ChevronDown, Languages } from "lucide-react";
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { Check } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import type { Locale } from "../i18n";
 
-export type AppLocale = "en" | "zh-Hans";
+const choices = [
+  { locale: "en", label: "English" },
+  { locale: "zh-Hans", label: "简体中文" },
+] as const;
 
-export type LanguageControlProps = {
-  locale: AppLocale;
-  onChange: (locale: AppLocale) => void;
-  label: string;
-  className?: string;
-  disabled?: boolean;
-  compact?: boolean;
-};
+function Flag({ locale }: { locale: Locale }) {
+  if (locale === "en") {
+    return (
+      <svg viewBox="0 0 30 20" aria-hidden="true" focusable="false">
+        <path fill="#012169" d="M0 0h30v20H0z" />
+        <path stroke="#fff" strokeWidth="4" d="m0 0 30 20m0-20L0 20" />
+        <path
+          fill="#c8102e"
+          d="M0 0v1.5l15 10V10Zm30 0h-2.2L15 8.5V10ZM0 20h2.2L15 11.5V10Zm30 0v-1.5l-15-10V10Z"
+        />
+        <path stroke="#fff" strokeWidth="7" d="M15 0v20M0 10h30" />
+        <path stroke="#c8102e" strokeWidth="4" d="M15 0v20M0 10h30" />
+      </svg>
+    );
+  }
 
-const LOCALE_OPTIONS: ReadonlyArray<{ value: AppLocale; label: string }> = [
-  { value: "en", label: "English" },
-  { value: "zh-Hans", label: "简体中文" },
-];
+  const star =
+    "M0-1 0.224-.309.951-.309.363.118.588.809 0 .382-.588.809-.363.118-.951-.309-.224-.309Z";
+  return (
+    <svg viewBox="0 0 30 20" aria-hidden="true" focusable="false">
+      <path fill="#de2910" d="M0 0h30v20H0z" />
+      <g fill="#ffde00">
+        <path d={star} transform="translate(5 5) scale(3)" />
+        <path d={star} transform="translate(10 2) rotate(-121)" />
+        <path d={star} transform="translate(12 4) rotate(-98)" />
+        <path d={star} transform="translate(12 7) rotate(-74)" />
+        <path d={star} transform="translate(10 9) rotate(-51)" />
+      </g>
+    </svg>
+  );
+}
 
-/**
- * Compact custom language switcher without native `<select>` for toolbars and auth views.
- */
 export function LanguageControl({
   locale,
   onChange,
   label,
-  className = "",
-  disabled = false,
-  compact = false,
-}: LanguageControlProps) {
+}: {
+  locale: Locale;
+  onChange: (locale: Locale) => void;
+  label: string;
+}) {
   const [open, setOpen] = useState(false);
-  const [dropUp, setDropUp] = useState(false);
-  const [alignEnd, setAlignEnd] = useState(false);
-  const [focusIndex, setFocusIndex] = useState(() =>
-    Math.max(
-      0,
-      LOCALE_OPTIONS.findIndex((opt) => opt.value === locale),
-    ),
-  );
-
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const labelId = useId();
-  const valueId = useId();
-  const menuId = useId();
-
-  const current =
-    LOCALE_OPTIONS.find((opt) => opt.value === locale) ?? LOCALE_OPTIONS[0];
-
-  const closeMenu = (restoreFocus = false) => {
-    if (restoreFocus) {
-      triggerRef.current?.focus();
-    }
-    setOpen(false);
-  };
+  const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const optionsId = useId();
 
   useEffect(() => {
     if (!open) return;
 
-    const onPointerDown = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) {
-        setOpen(false);
-      }
+    const onPointerDown = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
     };
-
-    const onFocusIn = (e: FocusEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-
-    window.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("focusin", onFocusIn);
-    return () => {
-      window.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("focusin", onFocusIn);
-    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    optionRefs.current[focusIndex]?.focus();
-  }, [open, focusIndex]);
-
-  const openMenu = (targetIdx?: number) => {
-    if (disabled) return;
-    if (rootRef.current) {
-      const rect = rootRef.current.getBoundingClientRect();
-      setDropUp(window.innerHeight - rect.bottom < 120 && rect.top > 120);
-      setAlignEnd(rect.left + 156 > window.innerWidth - 12);
-    }
-    const activeIdx = Math.max(
-      0,
-      LOCALE_OPTIONS.findIndex((opt) => opt.value === locale),
-    );
-    setFocusIndex(targetIdx ?? activeIdx);
-    setOpen(true);
+  const closeAndFocusTrigger = () => {
+    setOpen(false);
+    trigger.current?.focus();
   };
 
-  const selectOption = (nextLocale: AppLocale) => {
-    onChange(nextLocale);
-    closeMenu(true);
-  };
-
-  const onControlKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (!open) return;
-    if (e.key === "Escape") {
-      e.preventDefault();
-      e.stopPropagation();
-      closeMenu(true);
-    } else if (e.key === "Tab") {
-      setOpen(false);
-    }
-  };
-
-  const onTriggerKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
-    if (disabled) return;
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      if (!open) {
-        const activeIdx = Math.max(
-          0,
-          LOCALE_OPTIONS.findIndex((opt) => opt.value === locale),
-        );
-        const nextIdx =
-          e.key === "ArrowDown"
-            ? (activeIdx + 1) % LOCALE_OPTIONS.length
-            : (activeIdx - 1 + LOCALE_OPTIONS.length) % LOCALE_OPTIONS.length;
-        openMenu(nextIdx);
-      } else {
-        optionRefs.current[focusIndex]?.focus();
-      }
-    } else if (e.key === "Home" && open) {
-      e.preventDefault();
-      setFocusIndex(0);
-    } else if (e.key === "End" && open) {
-      e.preventDefault();
-      setFocusIndex(LOCALE_OPTIONS.length - 1);
-    }
-  };
-
-  const onOptionKeyDown = (
-    e: KeyboardEvent<HTMLButtonElement>,
-    idx: number,
-  ) => {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setFocusIndex((idx + 1) % LOCALE_OPTIONS.length);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setFocusIndex((idx - 1 + LOCALE_OPTIONS.length) % LOCALE_OPTIONS.length);
-    } else if (e.key === "Home") {
-      e.preventDefault();
-      setFocusIndex(0);
-    } else if (e.key === "End") {
-      e.preventDefault();
-      setFocusIndex(LOCALE_OPTIONS.length - 1);
-    }
-  };
-
+  const currentName = locale === "en" ? choices[0].label : choices[1].label;
   return (
     <div
-      ref={rootRef}
-      onKeyDown={onControlKeyDown}
-      className={[
-        "ui-lang",
-        open ? "open" : "",
-        dropUp ? "drop-up" : "",
-        alignEnd ? "align-end" : "",
-        compact ? "compact" : "",
-        disabled ? "disabled" : "",
-        className,
-      ]
-        .filter(Boolean)
-        .join(" ")}
+      className="language-picker"
+      ref={root}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+      onKeyDown={(event) => {
+        if (!open || event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        closeAndFocusTrigger();
+      }}
     >
-      <span id={labelId} className="visually-hidden">
-        {label}
-      </span>
       <button
-        ref={triggerRef}
+        ref={trigger}
         type="button"
-        className="ui-lang-trigger"
-        disabled={disabled}
-        aria-disabled={disabled || undefined}
-        aria-haspopup="listbox"
+        className="language-trigger"
+        aria-label={`${label} · ${currentName}`}
         aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
-        aria-labelledby={`${labelId} ${valueId}`}
+        aria-controls={optionsId}
         title={label}
-        onClick={() => {
-          if (open) {
-            closeMenu(false);
-          } else {
-            openMenu();
-          }
-        }}
-        onKeyDown={onTriggerKeyDown}
+        onClick={() => setOpen(!open)}
       >
-        <Languages size={14} className="ui-lang-icon" aria-hidden="true" />
-        <span id={valueId} className="ui-lang-value" lang={locale}>
-          {current.label}
-        </span>
-        <ChevronDown
-          size={13}
-          className="ui-lang-chevron"
-          aria-hidden="true"
-        />
+        <Flag locale={locale} />
       </button>
-
-      {open && (
-        <div
-          id={menuId}
-          role="listbox"
-          aria-label={label}
-          className="ui-lang-menu"
-        >
-          {LOCALE_OPTIONS.map((opt, idx) => {
-            const active = opt.value === locale;
-            return (
-              <button
-                key={opt.value}
-                ref={(el) => {
-                  optionRefs.current[idx] = el;
-                }}
-                type="button"
-                role="option"
-                lang={opt.value}
-                aria-selected={active}
-                tabIndex={idx === focusIndex ? 0 : -1}
-                className={"ui-lang-option" + (active ? " active" : "")}
-                onClick={() => selectOption(opt.value)}
-                onKeyDown={(e) => onOptionKeyDown(e, idx)}
-              >
-                <span>{opt.label}</span>
-                {active && <Check size={13} aria-hidden="true" />}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      <div
+        className="language-options"
+        id={optionsId}
+        role="group"
+        aria-label={label}
+        hidden={!open}
+      >
+        {choices.map(({ locale: choice, label: name }) => (
+          <button
+            key={choice}
+            type="button"
+            lang={choice}
+            aria-pressed={locale === choice}
+            onClick={() => {
+              onChange(choice);
+              closeAndFocusTrigger();
+            }}
+          >
+            <Flag locale={choice} />
+            <span>{name}</span>
+            {locale === choice && <Check size={14} aria-hidden="true" />}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

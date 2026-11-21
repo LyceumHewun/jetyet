@@ -1,15 +1,8 @@
 import { ScrollArea } from "./Scrollbars";
 import { t as translate } from "../i18n";
-import {
-  Check,
-  Copy,
-  ExternalLink,
-  KeyRound,
-  Link2,
-  Terminal,
-} from "lucide-react";
+import { Check, Copy, ExternalLink, Terminal } from "lucide-react";
 import { useState } from "react";
-import { copyToClipboard, when } from "../client";
+import { when } from "../client";
 import type { Row } from "../types";
 import { Badge, Button, Chip, CopyButton, SearchInput } from "./primitives";
 import { Modal } from "./workspace";
@@ -21,6 +14,33 @@ export type LinkItem = {
   isDefault?: boolean;
 };
 
+function SubscriptionLinkRow({ item }: { item: LinkItem }) {
+  return (
+    <li className={item.isDefault ? "link-row is-featured" : "link-row"}>
+      <strong className="link-row-name">{item.label}</strong>
+      <code className="link-row-url" title={item.url}>
+        {item.url}
+      </code>
+      <div className="link-card-actions">
+        <CopyButton
+          text={item.url}
+          ariaLabel={translate("Copy link for {0}", item.label)}
+        />
+        <a
+          href={item.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="icon-button link-open-btn"
+          title={translate("Open URL")}
+          aria-label={translate("Open {0}", item.label)}
+        >
+          <ExternalLink size={14} aria-hidden="true" />
+        </a>
+      </div>
+    </li>
+  );
+}
+
 export function SubscriptionLinksModal({
   userName,
   items,
@@ -30,16 +50,7 @@ export function SubscriptionLinksModal({
   items: LinkItem[];
   onClose: () => void;
 }) {
-  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const copy = (id: string, text: string) => {
-    void copyToClipboard(text).then((ok) => {
-      if (!ok) return;
-      setCopiedId(id);
-      setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 2000);
-    });
-  };
-
   const defaultItem = items.find((i) => i.isDefault);
   const templateItems = items.filter((i) => !i.isDefault);
   const q = query.trim().toLowerCase();
@@ -53,129 +64,66 @@ export function SubscriptionLinksModal({
 
   return (
     <Modal
-      title={userName}
-      tag={translate("Subscription Links")}
+      title={translate("Subscription Links")}
       subtitle={translate(
-        "Personal subscription URLs. Keep private and share only with this user.",
+        "Keep these links private. Share them only with {0}.",
+        userName,
       )}
       onClose={onClose}
-      wide
+      className="link-dialog"
     >
-      <ScrollArea axis="y" className="modal-body">
-        {defaultItem && (
-          <div className="link-card default">
-            <div className="link-card-head">
-              <div className="chip-group">
-                <Link2 size={14} className="muted" />
-                <strong>{defaultItem.label}</strong>
-                <Badge tone="good">{translate("Default")}</Badge>
-              </div>
-              <div className="link-card-actions">
-                <Button
-                  variant={copiedId === defaultItem.id ? "primary" : "subtle"}
-                  className="link-action-btn"
-                  onClick={() => copy(defaultItem.id, defaultItem.url)}
-                >
-                  {copiedId === defaultItem.id ? (
-                    <Check size={13} />
-                  ) : (
-                    <Copy size={13} />
-                  )}
-                  {copiedId === defaultItem.id
-                    ? translate("Copied")
-                    : translate("Copy")}
-                </Button>
-                <a
-                  href={defaultItem.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="icon-button link-open-btn"
-                  title={translate("Open URL")}
-                  aria-label={translate("Open default subscription")}
-                >
-                  <ExternalLink size={14} />
-                </a>
-              </div>
-            </div>
-            <ScrollArea axis="x" className="link-url mono">
-              {defaultItem.url}
-            </ScrollArea>
-          </div>
-        )}
+      <ScrollArea axis="y" className="link-dialog-scroll">
+        <div className="link-dialog-content">
+          {defaultItem && (
+            <ul className="subscription-link-list">
+              <SubscriptionLinkRow item={defaultItem} />
+            </ul>
+          )}
 
-        {templateItems.length > 0 && (
-          <div className="link-templates-block">
-            <div className="link-templates-bar">
-              <div className="chip-group">
-                <span className="kpi-label">{translate("TEMPLATES")}</span>
-                <Chip mono>
-                  {q
-                    ? `${filtered.length}/${templateItems.length}`
-                    : templateItems.length}
-                </Chip>
-              </div>
-              {templateItems.length > 3 && (
-                <SearchInput
-                  value={query}
-                  onChange={setQuery}
-                  placeholder={translate(
-                    "Filter {0} templates…",
-                    templateItems.length,
-                  )}
-                />
-              )}
-            </div>
-            <ScrollArea axis="y" className="link-compact-list">
-              {filtered.length ? (
-                filtered.map((item) => {
-                  const done = copiedId === item.id;
-                  return (
-                    <div key={item.id} className="link-row">
-                      <strong className="link-row-name" title={item.label}>
-                        {item.label}
-                      </strong>
-                      <span className="link-row-url mono" title={item.url}>
-                        {item.url}
-                      </span>
-                      <div className="link-card-actions">
-                        <Button
-                          variant={done ? "primary" : "subtle"}
-                          className="link-action-btn"
-                          onClick={() => copy(item.id, item.url)}
-                        >
-                          {done ? <Check size={13} /> : <Copy size={13} />}
-                          {done ? translate("Copied") : translate("Copy")}
-                        </Button>
-                        <a
-                          href={item.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="icon-button link-open-btn"
-                          title={translate("Open URL")}
-                          aria-label={translate("Open {0}", item.label)}
-                        >
-                          <ExternalLink size={14} />
-                        </a>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="diff-empty muted">
-                  {translate("No templates matching “{0}”.", query)}
+          {templateItems.length > 0 && (
+            <section className="link-templates-block">
+              <div className="link-templates-bar">
+                <div className="chip-group">
+                  <h3>{translate("Templates")}</h3>
+                  <Chip mono>
+                    {q
+                      ? `${filtered.length}/${templateItems.length}`
+                      : templateItems.length}
+                  </Chip>
                 </div>
+                {templateItems.length > 3 && (
+                  <SearchInput
+                    value={query}
+                    onChange={setQuery}
+                    placeholder={translate(
+                      "Filter {0} templates…",
+                      templateItems.length,
+                    )}
+                  />
+                )}
+              </div>
+              {filtered.length ? (
+                <ul className="subscription-link-list">
+                  {filtered.map((item) => (
+                    <SubscriptionLinkRow key={item.id} item={item} />
+                  ))}
+                </ul>
+              ) : (
+                <p className="diff-empty muted">
+                  {translate("No templates matching “{0}”.", query)}
+                </p>
               )}
-            </ScrollArea>
-          </div>
-        )}
+            </section>
+          )}
+        </div>
       </ScrollArea>
       <div className="modal-foot">
-        <Button onClick={() => copy("__all__", allText)}>
-          {copiedId === "__all__" ? <Check size={14} /> : <Copy size={14} />}
-          {copiedId === "__all__"
-            ? translate("Copied all")
-            : translate("Copy all ({0})", items.length)}
-        </Button>
+        <CopyButton
+          text={allText}
+          label={translate("Copy all ({0})", items.length)}
+          copiedLabel={translate("Copied all")}
+          variant="default"
+        />
         <Button variant="primary" onClick={onClose}>
           {translate("Done")}
         </Button>
@@ -379,44 +327,39 @@ export function PasswordLinkModal({
 }) {
   return (
     <Modal
-      title={userName}
-      tag={translate("Portal Password Link")}
+      title={translate("Portal Password Link")}
       subtitle={translate(
         "Single-use link for setting or replacing the subscriber's portal password.",
       )}
       onClose={onClose}
-      wide
+      className="link-dialog"
     >
-      <ScrollArea axis="y" className="modal-body">
-        <div className="link-card default">
-          <div className="link-card-head">
-            <div className="chip-group">
-              <KeyRound size={14} className="muted" />
-              <strong>{username ? `@${username}` : userName}</strong>
+      <ScrollArea axis="y" className="link-dialog-scroll">
+        <div className="link-dialog-content">
+          <div className="link-row is-featured">
+            <div className="link-row-name chip-group">
+              <strong>{userName}</strong>
+              {username && <span className="muted">@{username}</span>}
               <Badge tone="good">{translate("Single-use")}</Badge>
             </div>
-            <CopyButton
-              text={url}
-              label={translate("Copy link")}
-              copiedLabel={translate("Copied")}
-              variant="primary"
-              className="link-action-btn"
-            />
+            <code className="link-row-url" title={url}>
+              {url}
+            </code>
+            <div className="link-card-actions">
+              <CopyButton text={url} label={translate("Copy link")} />
+            </div>
           </div>
-          <ScrollArea axis="x" className="link-url mono">
-            {url}
-          </ScrollArea>
-        </div>
-        <div className="chip-group">
-          <Chip mono>
-            {translate("Expires") + " "}
-            {when(expires)}
-          </Chip>
-          <span className="muted">
-            {translate(
-              "Generating this link invalidated any prior unused link; existing password and sessions stay active until replaced.",
-            )}
-          </span>
+          <div className="password-link-meta">
+            <Chip mono>
+              {translate("Expires") + " "}
+              {when(expires)}
+            </Chip>
+            <p className="muted">
+              {translate(
+                "Generating this link invalidated any prior unused link; existing password and sessions stay active until replaced.",
+              )}
+            </p>
+          </div>
         </div>
       </ScrollArea>
       <div className="modal-foot">

@@ -434,11 +434,28 @@ describe("authorization and templates", () => {
         adminCookie,
       );
       expect(response.status).toBe(200);
-      const { url } = await response.json();
-      return new URL(url).hash.slice(1);
+      const { url, expires } = await response.json();
+      return { token: new URL(url).hash.slice(1), expires };
     };
-    const revoked = await issue();
-    const active = await issue();
+    const eventData = (type: string) =>
+      s.db
+        .query<{ data: string }, [string, string]>(
+          "SELECT data FROM events WHERE entity=? AND type=? ORDER BY rowid",
+        )
+        .all(user.id, type)
+        .map(({ data }) => JSON.parse(data));
+    const first = await issue();
+    const second = await issue();
+    const revoked = first.token;
+    const active = second.token;
+    expect(eventData("portal.password-link.issued")).toEqual(
+      [first, second].map(({ expires }, index) => ({
+        actor: s.config.admin.username,
+        username: "friend",
+        expires,
+        replacedLink: index === 1,
+      })),
+    );
     const path = "/api/portal-password";
     const malformed = await post(path, { token: "short" });
     expect(malformed.status).toBe(403);
@@ -461,16 +478,20 @@ describe("authorization and templates", () => {
       (await app.request("/api/state", { headers: { cookie: oldCookie } }))
         .status,
     ).toBe(401);
-    const expiring = await issue();
+    const { token: expiring } = await issue();
     setSystemTime(now + 86400000);
     expect((await post(path, { token: expiring })).status).toBe(403);
-    const reset = await issue();
+    const { token: reset } = await issue();
     expect((await portal(oldCookie)).status).toBe(200);
     const changed = await post(path, {
       token: reset,
       password: "second-portal-password",
     });
     expect(changed.status).toBe(200);
+    expect(eventData("portal.password.changed")).toEqual([
+      { username: "friend", replacedPassword: false },
+      { username: "friend", replacedPassword: true },
+    ]);
     expect((await portal(oldCookie)).status).toBe(401);
     expect(
       (

@@ -4,11 +4,13 @@ This document defines the visual design system and UI conventions for Jetyet (`s
 
 ## Layout
 
-- **Console Shell**: Top command bar (`max-width: 1360px` centered) with brand + live worker pulse pills on the left, 4-domain segmented view switcher (`Infra`, `Users`, `Templates`, `Activity`) in the center, and compact utility controls on the right. No left sidebar.
+- **Console Shell**: Top command bar (`max-width: 1360px` centered) with the brand on the left, 4-domain segmented view switcher (`Infra`, `Users`, `Templates`, `Activity`) in the center, and compact utility controls on the right. No left sidebar.
 - **Spatial In-Place Expand Bento**: Primary collections (`Infra` hosts+nodes and `Users`) render in a responsive spatial grid where clicking any card expands it full-width (`grid-column: 1 / -1`) in-place to reveal live inline telemetry charts, ring meters, and quick controls while sibling cards remain visible directly below. Default to expanding the first host in `Infra` for 0-click telemetry visibility.
 - **Full-Canvas `Stage` vs. Lightweight `Modal`**:
   - Use full-canvas `Stage` views (with top `← Back` bar, 2-column live-preview studios, or split IDE) for heavy/rich workflows: creating/editing entities (`EntityForm`), template editing (`TemplateEditor`), full telemetry (`History`), and archives. Never use slide-over drawers.
   - Use crisp flat `Modal` dialogs (`src/web/components/workspace.tsx`) for confirmations (`Confirm`, `ForceRemove`), notices, quick code/link/log inspection (`Code`), and lightweight input prompts (`Correction`, `OperationForm`), so the user keeps spatial context behind the overlay.
+  - Use a shared layout for subscription and password link dialogs. Put the default subscription first and show each URL on one line. Copy and open actions use the full URL. Keep one scrollable body with the footer outside it.
+- **Subscription Portal**: Put the default subscription first, followed by traffic usage and then template selection. Show accounted usage against the configured quota, the current period and next reset in Asia/Hong_Kong, and inbound and outbound traffic for the latest 24 hourly buckets. Use the portal's initial data for the metrics and show an empty chart state when no samples exist. Group assigned and personal templates in one picker and show only the selected template's pinned link and controls. Load personal template source when the editor opens.
 - **Login Page**: Render as a centered minimalist card (`max-width: 400px`) on `--paper` with the brand centered above the card and a top-right theme toggle. Do not add decorative top accent stripes or split-screen hero panels.
 
 ## Color System & Dark Mode
@@ -68,6 +70,7 @@ Always reference CSS custom properties defined in `src/web/styles.css` and suppo
 - The initial release supports English and Simplified Chinese (`zh-Hans`).
 - Both languages cover the full web interface: the management console, Subscription Portal, shared sign-in, and portal password setup.
 - On first visit, use the highest-priority supported browser language and default to English if none matches. Store an explicit language choice in the current browser and honor it across pages and sign-out.
+- Show only the current language's flag in the header. Open a compact dropdown with a flag and endonym for each option, and mark the selected language.
 - Localize product copy, statuses, validation, and common errors. Format dates and numbers for the selected language. Display dates in the Asia/Hong_Kong timezone.
 - Preserve names entered by users, subscription configuration, commands, and third-party diagnostic details. Pair third-party errors with a localized summary when shown in the interface.
 
@@ -75,6 +78,7 @@ Always reference CSS custom properties defined in `src/web/styles.css` and suppo
 
 - The Jetyet brand mark is the approved Lucide rocket outline, drawn in the brand accent (`#b074d1`). The rocket represents liftoff.
 - Use the same rocket mark in the management console, Subscription Portal, shared sign-in, password setup, and favicon.
+- Pair the rocket with the custom vector wordmark in page headers and auth views. Use the wordmark only as part of the brand.
 - Localize browser tab titles as `Page name · Jetyet`. Update the title when switching primary views. Dialogs and editor stages retain the parent view's title.
 
 ## Scrolling
@@ -85,33 +89,34 @@ Always reference CSS custom properties defined in `src/web/styles.css` and suppo
 ## Typography, Spacing & Interactions
 
 - **Font Stacks**:
-  - `--font`: `"Space Grotesk Variable"` for Latin UI text, paired with platform-native Simplified Chinese sans-serif fallbacks (`"PingFang SC"`, `"Hiragino Sans GB"`, `"Microsoft YaHei"`, `"Noto Sans CJK SC"`, `"Source Han Sans SC"`, `"Noto Sans SC"`, `sans-serif`) so mixed English/Chinese interfaces render crisply without bundling multi-megabyte CJK font files.
-  - `--mono`: `"JetBrains Mono Variable"` (with `"JetBrains Mono"`, `"Cascadia Code"`, `"SFMono-Regular"`, `ui-monospace`, plus CJK sans fallbacks before `monospace`) for metrics, timestamps, addresses, URLs, logs, and template code.
+  - `--font`: use the browser's default `sans-serif` in the English interface to preserve its original rendered typography. In Simplified Chinese, use Arial for Latin text followed by platform CJK sans-serif families such as PingFang SC, Microsoft YaHei, and Noto Sans CJK SC. The UI uses locally installed fonts.
+  - `--mono`: `ui-monospace, "Cascadia Code", Consolas, monospace` for metrics, timestamps, addresses, URLs, logs, and template code. Add platform CJK fallbacks in the Simplified Chinese interface.
 - **Type Scale & Tokens**: Use `rem` tokens (`--text-2xs` `0.625rem` / 10px, `--text-xs` `0.6875rem` / 11px, `--text-sm` `0.75rem` / 12px, `--text-md` `0.8125rem` / 13px, `--text-base` `0.875rem` / 14px, `--text-lg` `0.9375rem` / 15px, `--text-xl` `1rem` / 16px, `--text-2xl` `1.25rem` / 20px, `--text-h1` `clamp(1.5rem, 2.5vw, 1.75rem)`) so typography respects browser root font-size preferences. Headings use `text-wrap: balance`; helper and guidance copy use `text-wrap: pretty`.
 - **UI Typography Usage**: Map every UI text role to an explicit font family, size token, and weight in `src/web/styles.css`:
 
 | Text Role | Family | Size Token | Weight | CSS Targets / Usage |
 | --- | --- | --- | --- | --- |
 | Page & stage heading (`h1`) | `--font` | `--text-h1` (`--text-2xl` in `.stage-title-row`) | `700` | Top-level stage headings (`h1`, `.stage-title-row h1`) |
-| Brand wordmark | `--font` | `--text-2xl` | `700` | Header and auth `jetyet.` wordmark (`.brand`) |
 | Section & modal heading (`h2`) | `--font` | `--text-lg` (`--text-xl` in `.modal-title-wrap`) | `600` (`700` in modals) | Panel, template card, and modal headings (`h2`, `.template-card-head h2`, `.modal-title-wrap h2`) |
 | Card & subsection heading (`h3`) | `--font` | `--text-base` | `600` (`550` in empty states) | Subsection and empty-state headings (`h3`, `.empty h3`, `.quiet h3`) |
 | Body (default) | `--font` | `--text-base` | `400` (`600` on `.compact-name` / `.preview-name`) | Document root and primary card titles (`body`) |
-| Body (compact) & inputs | `--font` | `--text-md` | `400` (`600` on active/strong items) | Modal/focus copy, inputs, selects, language options, portal items (`.modal-body`, `.focus-content`, `input`, `select`, `.ui-select-*`, `.ui-lang-option`, `.portal-tpl-item`) |
+| Body (compact) & inputs | `--font` | `--text-md` | `400` (`600` on active/strong items) | Modal/focus copy, inputs, selects, portal items (`.modal-body`, `.focus-content`, `input`, `select`, `.ui-select-*`, `.portal-tpl-item`) |
 | Body (secondary) & form labels | `--font` | `--text-sm` | `400` (`550`–`600` on labels/legends) | Muted copy, `small`, `.field`, `legend`, alerts, toasts, banners (`.muted`, `small`, `.field`, `legend`, `.error-banner`, `.toast`) |
 | Buttons (base) | `--font` | `--text-base` | `400` | Default `<button>` controls |
 | Buttons (navigation) | `--font` | `--text-md` | `500` (`600` when `.active`) | Command dock tabs (`.dock-item`) |
-| Buttons (compact & utility) | `--font` | `--text-sm` | `500` (`600` selected; `400` on `.text-button` / menus) | `.stage-back`, `.segmented-control button`, `.toggle-pill`, `.pick-chip`, `.ui-lang-trigger`, `.subtle-button`, `.quick-row-btn`, `.action-popover button`, `.text-button` |
+| Buttons (compact & utility) | `--font` | `--text-sm` | `500` (`600` selected; `400` on `.text-button` / menus) | `.stage-back`, `.segmented-control button`, `.toggle-pill`, `.pick-chip`, `.subtle-button`, `.quick-row-btn`, `.action-popover button`, `.text-button` |
+| Buttons (action rows) | `--font` | `--text-md` | `400` | Collection, editor, dialog and portal action rows |
 | Buttons (micro actions) | `--font` | `--text-xs` | `400` | Table row actions and chart range pills (`.row-buttons button`, `.range-tabs button`) |
-| Captions & metadata | `--font` | `--text-xs` | `400` (`500`–`600` on pills/avatars) | Subtitles, chips, legends, timestamps, counts, helper notes (`.entity-title small`, `.chip`, `.trust-pill`, `.io-legend`, `.op-time`, `.form-note`, `.history-stats span`, `.count` in `--mono`) |
-| Micro-labels, KPIs & badges | `--font` | `--text-2xs` | `600` (`400` on `.badge` / `.field small`) | `.kpi-label`, `.worker-pill`, `.dock-item b`, `.stale-tag`, `.badge`, `.mini-bar-head`, `.panel-heading .muted`, `.field small` |
+| Captions & metadata | `--font` | `--text-xs` | `400` (`500`–`600` on pills/avatars) | Subtitles, chips, badges, legends, timestamps, counts, and helper notes |
+| Micro-labels & KPIs | `--font` | `--text-2xs` | `600` (`400` on `.field small`) | `.kpi-label`, `.dock-item b`, `.stale-tag`, `.mini-bar-head`, `.panel-heading .muted`, `.field small` |
 | Tables (cells & row links) | `--font` | `--text-sm` | `400` (`600` on `.name-button`) | Table rows and clickable entity names (`table`, `.name-button`) |
 | Tables (headers & cell subtext) | `--font` | `--text-2xs` | `550` (`400` on `td > small`) | Column headers and secondary cell captions (`th`, `td > small`) |
 | Code blocks & template source | `--mono` | `--text-xs` (`--text-sm` in `.template-source`) | `400` | Preformatted code, template cards, monospace textareas, URLs (`.code-output`, `.template-card pre`, `.field textarea`, `.template-source`, `.link-row-url`) |
 | Code & telemetry (micro) | `--mono` | `--text-2xs` | `400` | Event logs, chart axes, quota/alert timestamps (`.event-line pre`, `.chart`, `.alert-row small`, `.quota small`) |
 - **Locale-Aware Leading & Tracking**:
-  - Default (English): `--lh-tight: 1.3`, `--lh-body: 1.5`, `--lh-code: 1.65`, `--tracking-h1: -0.02em`, `--tracking-h2: -0.01em`, `--tracking-kpi: 0.08em`.
-  - Simplified Chinese (`:root:lang(zh)`): relax leading to `--lh-tight: 1.35` and `--lh-body: 1.58`, remove negative heading tracking (`--tracking-h1: 0em`, `--tracking-h2: 0em`), and moderate uppercase label tracking (`--tracking-kpi: 0.04em`) so Hanzi glyphs do not crowd. Keep `--tracking-brand: -0.03em` on the Latin `jetyet.` wordmark.
-- **Numerals**: Apply `font-variant-numeric: tabular-nums` to `.mono`, `pre`, tables, counts, ring values, KPI figures, worker pills, and quota readouts for stable column alignment across both languages.
+  - Default (English): use `1.5` for body text and section headings and `1.3` for page headings. Use `1.65` in code and slight negative tracking on headings.
+  - Simplified Chinese (`:root:lang(zh)`): use `1.35` for headings and `1.58` for body text. Set heading tracking to zero and uppercase label tracking to `0.04em`.
+- **Numerals**: Apply `font-variant-numeric: tabular-nums` to `.mono`, `pre`, tables, counts, ring values, KPI figures, and quota readouts for stable column alignment across both languages.
 - **Spacing**: Maintain `16px–24px` (`--space-4` to `--space-6`) card/panel padding while keeping table rows and operational lists moderately compact.
+- **Control Rows**: Use `--action-height` for collection search fields and action buttons. The shared `Chip` and `Badge` styles use `--badge-height` (`1.5rem` minimum), matching type size, leading, and padding. Center them within the row. Use `--utility-height` for the language trigger, theme, and account controls. Let groups wrap on narrow screens.
 - **Interactive States**: Sidebar navigation items, icon buttons, and action-popover items use translucent lavender hover (`--accent-hover-bg`) and active (`--accent-soft`) states with `--accent` text.

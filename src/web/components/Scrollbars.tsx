@@ -1,4 +1,3 @@
-import "@fontsource-variable/jetbrains-mono";
 import "overlayscrollbars/styles/overlayscrollbars.css";
 import {
   ClickScrollPlugin,

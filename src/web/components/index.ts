@@ -1,4 +1,4 @@
-export { BrandMark, type BrandMarkProps } from "./BrandMark";
+export { BrandMark, BrandWordmark, type BrandMarkProps } from "./BrandMark";
 export { DateTimePicker } from "./DateTimePicker";
 export { InlineTelemetry } from "./InlineTelemetry";
 export {
@@ -8,11 +8,7 @@ export {
   SubscriptionLinksModal,
   type LinkItem,
 } from "./inspectors";
-export {
-  LanguageControl,
-  type AppLocale,
-  type LanguageControlProps,
-} from "./LanguageControl";
+export { LanguageControl } from "./LanguageControl";
 export { MiniBar, QuotaBar, RingMeter, Sparkline } from "./meters";
 export {
   Badge,

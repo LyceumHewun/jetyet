@@ -19,6 +19,7 @@ import { api, fmt } from "./client";
 import {
   Badge,
   BrandMark,
+  BrandWordmark,
   ScrollArea,
   Button,
   Checkbox,
@@ -108,10 +109,8 @@ export function Login({
       <div className="login-wrap">
         <div className="login-brand">
           <span className="brand">
-            <span className="brand-symbol">
-              <BrandMark size={22} />
-            </span>
-            jetyet<span className="brand-period">.</span>
+            <BrandMark size={22} />
+            <BrandWordmark />
           </span>
         </div>
         <div className="login-card">
@@ -333,10 +332,8 @@ export function SetPassword({
       <div className="login-wrap">
         <div className="login-brand">
           <span className="brand">
-            <span className="brand-symbol">
-              <BrandMark size={22} />
-            </span>
-            jetyet<span className="brand-period">.</span>
+            <BrandMark size={22} />
+            <BrandWordmark />
           </span>
         </div>
         <div className="login-card">

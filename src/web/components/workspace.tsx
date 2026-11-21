@@ -174,6 +174,7 @@ export function Modal({
   children,
   onClose,
   wide = false,
+  className = "",
 }: {
   title: string;
   tag?: string;
@@ -181,6 +182,7 @@ export function Modal({
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  className?: string;
 }) {
   useEffect(lockDocumentScroll, []);
   useEffect(() => {
@@ -202,7 +204,9 @@ export function Modal({
       }}
     >
       <section
-        className={"modal-box" + (wide ? " wide" : "")}
+        className={["modal-box", wide && "wide", className]
+          .filter(Boolean)
+          .join(" ")}
         role="dialog"
         aria-modal="true"
         aria-label={title}

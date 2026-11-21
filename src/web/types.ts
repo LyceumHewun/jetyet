@@ -21,6 +21,18 @@ export type PortalData = {
   templates: PortalTemplateSummary[];
   defaultTemplate: string | null;
   defaultLink: string | null;
+  traffic: PortalTraffic;
+};
+
+export type PortalTraffic = {
+  inbound: number;
+  outbound: number;
+  used: number;
+  limit: number | null;
+  direction: "in" | "out" | "both";
+  periodStart: number;
+  nextReset: number;
+  samples: { at: number; inbound: number; outbound: number }[];
 };
 
 export type PortalTemplateDetail = PortalTemplateSummary & {

@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
+import { counted, usage } from "../accounting";
 import { digest } from "../crypto";
 import { strip, type Entity, type Store } from "../db";
 import { HttpError, requireOrigin } from "../errors";
@@ -38,6 +39,60 @@ function templateSummary(t: Entity) {
   };
 }
 
+function portalTraffic(s: Store, user: Entity) {
+  const current = usage(s, user);
+  const hour = 3600000;
+  const now = Date.now();
+  const start = Math.floor(now / hour) * hour - 23 * hour;
+  const rows = s.db
+    .query<
+      { at: number; inbound: number; outbound: number },
+      [number, number, string, number, number]
+    >(
+      `SELECT (at / ?) * ? AS at,
+              SUM(inbound) AS inbound,
+              SUM(outbound) AS outbound
+       FROM samples
+       WHERE entity = ? AND resolution = 'minute' AND at BETWEEN ? AND ?
+       GROUP BY 1
+       ORDER BY 1`,
+    )
+    .all(hour, hour, user.id, start, now);
+  const byHour = new Map(rows.map((row) => [row.at, row]));
+  const samples = rows.length
+    ? Array.from({ length: 24 }, (_, index) => {
+        const at = start + index * hour;
+        return byHour.get(at) ?? { at, inbound: 0, outbound: 0 };
+      })
+    : [];
+  return {
+    inbound: current.inbound,
+    outbound: current.outbound,
+    used: counted(user.quota, current),
+    limit: user.quota.limit,
+    direction: user.quota.direction,
+    periodStart: current.start,
+    nextReset: current.next,
+    samples,
+  };
+}
+
+export function portalOverview(s: Store, user: Entity) {
+  const assigned = (user.templateIds as string[])
+    .map((id) => subscriptionTemplate(s, user, id))
+    .filter((t) => t !== null);
+  const personal = s.list(personalKind).filter((t) => t.owner === user.id);
+  const expired = isExpired(user);
+  return {
+    name: user.name,
+    expired,
+    defaultLink: expired ? null : subscriptionLink(s, user),
+    defaultTemplate: user.defaultTemplate,
+    templates: [...assigned, ...personal].map(templateSummary),
+    traffic: portalTraffic(s, user),
+  };
+}
+
 export function registerPortalRoutes(
   app: Hono,
   s: Store,
@@ -58,21 +113,7 @@ export function registerPortalRoutes(
       throw new HttpError(404, "Template unavailable");
     return t;
   }
-  portal.get("/", (c) => {
-    const user = c.get("user");
-    const assigned = (user.templateIds as string[])
-      .map((id) => subscriptionTemplate(s, user, id))
-      .filter((t) => t !== null);
-    const personal = s.list(personalKind).filter((t) => t.owner === user.id);
-    const expired = isExpired(user);
-    return c.json({
-      name: user.name,
-      expired,
-      defaultLink: expired ? null : subscriptionLink(s, user),
-      defaultTemplate: user.defaultTemplate,
-      templates: [...assigned, ...personal].map(templateSummary),
-    });
-  });
+  portal.get("/", (c) => c.json(portalOverview(s, c.get("user"))));
   portal.get("/templates/:id", (c) => {
     const user = c.get("user");
     const t = template(user, c.req.param("id"));
@@ -107,7 +148,7 @@ export function registerPortalRoutes(
             draft: source.body,
             published: false,
           });
-          return { id: t.id };
+          return { ...templateSummary(t), body: source.body };
         })
         .immediate(),
       201,
@@ -175,13 +216,13 @@ export function registerPortalRoutes(
   });
   portal.post("/templates/:id/publish", (c) => {
     const user = c.get("user");
-    s.db
+    const published = s.db
       .transaction(() => {
         const t = template(user, c.req.param("id"), true);
         if (typeof t.draft !== "string" || t.previewed !== digest(t.draft))
           throw new HttpError(409, "Preview the saved draft before publishing");
         preview(user, t.draft, true);
-        s.put(
+        return s.put(
           personalKind,
           {
             ...strip(t),
@@ -197,7 +238,7 @@ export function registerPortalRoutes(
         );
       })
       .immediate();
-    return c.json({ ok: true });
+    return c.json(templateSummary(published));
   });
   app.route("/api/portal", portal);
 }
