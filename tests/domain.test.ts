@@ -529,9 +529,14 @@ describe("authorization and templates", () => {
     expect(await overview.json()).toMatchObject({
       defaultLink: `${s.config.origin}/sub/${s.secrets(user.id).subscriptionToken}`,
     });
+    s.put("node", { ...strip(node), name: "rule" }, undefined, node.id);
     const literalBody = defaultTemplate
-      .replace("{{ choices | yaml | indent: 6 }}", `      - ${node.name}`)
-      .replace("MATCH,Proxy", `MATCH,${node.name}`);
+      .replace("{{ choices | yaml | indent: 6 }}", "      - rule")
+      .replace(
+        "  - MATCH,Proxy",
+        "  - SUB-RULE,(NETWORK,TCP),rule\n  - MATCH,rule",
+      )
+      .concat("sub-rules:\n  rule:\n    - MATCH,Proxy\n");
     s.put(
       "template",
       { ...strip(template), body: literalBody },
@@ -545,7 +550,9 @@ describe("authorization and templates", () => {
     expect(assigned.status).toBe(200);
     const assignedText = (await assigned.json()).text;
     expect(assignedText).toContain("MATCH,Preview node 1");
-    expect(assignedText).not.toMatch(/\bNode\b/);
+    expect(assignedText).toContain("mode: rule");
+    expect(assignedText).toContain("SUB-RULE,(NETWORK,TCP),rule");
+    expect(assignedText).not.toContain("name: rule");
     s.put("template", strip(template), undefined, template.id);
     const created = await request("/api/portal/templates", "POST", {
       sourceId: template.id,

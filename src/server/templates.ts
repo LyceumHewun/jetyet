@@ -56,19 +56,33 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
     config["proxy-groups"].map((g: { name: string }) => g.name),
   );
   for (const proxy of config.proxies) {
+    if (typeof proxy?.name !== "string" || !proxy.name || names.has(proxy.name))
+      throw Error("Duplicate or missing proxy name");
     let placeholder = `Preview node ${names.size + 1}`;
     while (groupNames.has(placeholder)) placeholder += " (preview)";
     names.set(proxy.name, placeholder);
-    proxy.server = `node-${names.size}.invalid`;
-    proxy.port = 443;
+    proxy.name = placeholder;
+    const host = `node-${names.size}.invalid`;
+    if ("server" in proxy) proxy.server = host;
+    if ("port" in proxy) proxy.port = 443;
     if ("ports" in proxy) proxy.ports = "443-444";
-    if ("sni" in proxy) proxy.sni = proxy.server;
-    if ("servername" in proxy) proxy.servername = proxy.server;
-    if ("server-name" in proxy) proxy["server-name"] = proxy.server;
+    if ("sni" in proxy) proxy.sni = host;
+    if ("servername" in proxy) proxy.servername = host;
+    if ("server-name" in proxy) proxy["server-name"] = host;
   }
   for (const [literal, simulated] of literalNames) {
     const placeholder = names.get(simulated);
     if (placeholder) names.set(literal, placeholder);
+  }
+  for (const group of config["proxy-groups"]) {
+    if (Array.isArray(group.proxies))
+      group.proxies = group.proxies.map(
+        (name: string) => names.get(name) ?? name,
+      );
+  }
+  for (const proxy of config.proxies) {
+    const alias = names.get(proxy["dialer-proxy"]);
+    if (alias) proxy["dialer-proxy"] = alias;
   }
   for (const rules of [
     config.rules,
@@ -78,6 +92,7 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
     for (const [i, rule] of rules.entries()) {
       if (typeof rule !== "string") continue;
       const parts = rule.split(",");
+      if (parts[0].trim().toUpperCase() === "SUB-RULE") continue;
       const index = ruleTarget(parts);
       const replacement = names.get(parts[index]?.trim());
       if (replacement) {
@@ -88,8 +103,6 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
   }
   function redact(value: unknown): unknown {
     if (typeof value === "string") {
-      const renamed = names.get(value);
-      if (renamed) return renamed;
       return redactQueryCredentials(
         value
           .replace(
