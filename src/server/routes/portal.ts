@@ -9,6 +9,8 @@ const personalKind = "personal-template";
 const title = z.string().trim().min(1).max(100);
 const isExpired = (user: Entity) =>
   !!user.expires && Date.parse(user.expires) <= Date.now();
+const subscriptionLink = (s: Store, user: Entity) =>
+  `${s.config.origin}/sub/${s.secrets(user.id).subscriptionToken}`;
 
 function availableTemplate(s: Store, user: Entity, id: string) {
   const t = s.get(id);
@@ -62,9 +64,11 @@ export function registerPortalRoutes(
       .map((id) => subscriptionTemplate(s, user, id))
       .filter((t) => t !== null);
     const personal = s.list(personalKind).filter((t) => t.owner === user.id);
+    const expired = isExpired(user);
     return c.json({
       name: user.name,
-      expired: isExpired(user),
+      expired,
+      defaultLink: expired ? null : subscriptionLink(s, user),
       defaultTemplate: user.defaultTemplate,
       templates: [...assigned, ...personal].map(templateSummary),
     });
@@ -75,7 +79,7 @@ export function registerPortalRoutes(
     const summary = templateSummary(t);
     const link =
       !isExpired(user) && t.published
-        ? `${s.config.origin}/sub/${s.secrets(user.id).subscriptionToken}?template=${t.id}`
+        ? `${subscriptionLink(s, user)}?template=${t.id}`
         : null;
     return c.json({
       ...summary,
@@ -141,7 +145,7 @@ export function registerPortalRoutes(
   });
   function preview(s: Store, user: Entity, body: string) {
     try {
-      render(s, user, body, "admin-preview");
+      render(s, user, body);
       return render(s, user, body, "portal-preview");
     } catch {
       throw new HttpError(

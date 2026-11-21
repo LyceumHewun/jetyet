@@ -303,9 +303,10 @@ describe("traffic integrity", () => {
       ok: true,
       id: user.id,
     });
-    expect(await (await authReq(s.secrets(user2.id).vpnToken)).json()).toEqual(
-      { ok: true, id: user2.id },
-    );
+    expect(await (await authReq(s.secrets(user2.id).vpnToken)).json()).toEqual({
+      ok: true,
+      id: user2.id,
+    });
     addObservation(
       s,
       user,
@@ -487,6 +488,7 @@ describe("authorization and templates", () => {
     );
     expect(await (await portal(newCookie)).json()).toMatchObject({
       expired: true,
+      defaultLink: null,
     });
     s.put(
       "user",
@@ -497,7 +499,11 @@ describe("authorization and templates", () => {
     expect((await portal(newCookie)).status).toBe(401);
   });
   test("personal template publication is owner-scoped and previews hide live node details", async () => {
-    const { user, template } = fixture();
+    const { node, user, template } = fixture();
+    const body = defaultTemplate
+      .replace("{{ choices | yaml | indent: 6 }}", `      - ${node.name}`)
+      .replace("MATCH,Proxy", `MATCH,${node.name}`);
+    s.put("template", { ...strip(template), body }, undefined, template.id);
     const app = createApp(s);
     const another = s.put(
       "user",
@@ -518,6 +524,10 @@ describe("authorization and templates", () => {
         headers: { origin: s.config.origin, cookie: `jetyet=${secret}` },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
+    const overview = await request("/api/portal");
+    expect(await overview.json()).toMatchObject({
+      defaultLink: `${s.config.origin}/sub/${s.secrets(user.id).subscriptionToken}`,
+    });
     const created = await request("/api/portal/templates", "POST", {
       sourceId: template.id,
       name: "Personal",
@@ -533,11 +543,22 @@ describe("authorization and templates", () => {
     expect(preview.status).toBe(200);
     const { text } = await preview.json();
     expect(text).toContain("Preview node 1");
+    expect(text).toContain("MATCH,Preview node 1");
+    expect(text).not.toMatch(/\bNode\b/);
     expect(text).not.toContain("203.0.113.1");
     expect(text).not.toContain(s.secrets(user.id).vpnToken);
     expect((await request(root + "/publish", "POST")).status).toBe(200);
     expect(await (await subscription(user)).text()).toContain("203.0.113.1");
     expect((await subscription(another)).status).toBe(403);
+    expect(
+      (
+        await request(root, "PUT", {
+          name: "Bad rule",
+          body: body.replace(`MATCH,${node.name}`, "MATCH,Missing policy"),
+        })
+      ).status,
+    ).toBe(200);
+    expect((await request(root + "/preview", "POST")).status).toBe(422);
     expect(
       (await request(root, "PUT", { name: "Broken", body: "dns:" })).status,
     ).toBe(200);

@@ -14,8 +14,23 @@ const engine = new Liquid({
 });
 const credentialField =
   /^(?:password|passwd|uuid|token|secret|username|authentication|auth|authorization|api[-_]?key|private[-_]?key|access[-_]?key)$/i;
+const commaPayloadRules = new Set([
+  "NOT",
+  "OR",
+  "AND",
+  "SUB-RULE",
+  "DOMAIN-REGEX",
+  "PROCESS-NAME-REGEX",
+  "PROCESS-PATH-REGEX",
+]);
 
-function redactPreview(text: string) {
+function ruleTarget(parts: string[]) {
+  const type = parts[0].trim().toUpperCase();
+  if (type === "MATCH") return 1;
+  return commaPayloadRules.has(type) ? parts.length - 1 : 2;
+}
+
+function redactPreview(text: string, literalNames: Map<string, string>) {
   const config = YAML.parse(text, { maxAliasCount: 100 });
   const names = new Map<string, string>();
   const groupNames = new Set(
@@ -30,15 +45,31 @@ function redactPreview(text: string) {
     if ("ports" in proxy) proxy.ports = "443-444";
     if ("sni" in proxy) proxy.sni = proxy.server;
   }
+  for (const [literal, simulated] of literalNames) {
+    const placeholder = names.get(simulated);
+    if (placeholder) names.set(literal, placeholder);
+  }
+  for (const rules of [
+    config.rules,
+    ...Object.values(config["sub-rules"] ?? {}),
+  ]) {
+    if (!Array.isArray(rules)) continue;
+    for (const [i, rule] of rules.entries()) {
+      if (typeof rule !== "string") continue;
+      const parts = rule.split(",");
+      const index = ruleTarget(parts);
+      const replacement = names.get(parts[index]?.trim());
+      if (replacement) {
+        parts[index] = replacement;
+        rules[i] = parts.join(",");
+      }
+    }
+  }
   function redact(value: unknown): unknown {
     if (typeof value === "string") {
       const renamed = names.get(value);
       if (renamed) return renamed;
-      // Rule policies follow a comma and can be followed by the no-resolve flag.
       return value
-        .replace(/,([^,]+)(,no-resolve)?$/, (match, policy, suffix) =>
-          names.has(policy) ? `,${names.get(policy)}${suffix ?? ""}` : match,
-        )
         .replace(
           /\/sub\/[a-zA-Z0-9_-]+|\/set-password#[a-zA-Z0-9_-]+/g,
           "[REDACTED]",
@@ -132,13 +163,19 @@ function proxies(
         return h && !h.deleted && h.enabled && !h.deleting;
       })(),
   );
-  const names = new Set<string>();
-  return nodes.map((n, i) => {
-    if (names.has(n.name))
-      throw Error("Authorized nodes have duplicate display names");
-    names.add(n.name);
+  const names = new Set(nodes.map((n) => n.name));
+  if (names.size !== nodes.length)
+    throw Error("Authorized nodes have duplicate display names");
+  const literalNames = new Map<string, string>();
+  const rows = nodes.map((n, i) => {
+    let name = n.name;
+    if (mode === "portal-preview") {
+      name = `Node ${i + 1}`;
+      while (names.has(name)) name += " (simulated)";
+      literalNames.set(n.name, name);
+    }
     return {
-      name: mode === "portal-preview" ? `Node ${i + 1}` : n.name,
+      name,
       type: "hysteria2",
       server: mode === "portal-preview" ? `node-${i + 1}.invalid` : n.address,
       port: mode === "portal-preview" ? 443 : n.port,
@@ -155,6 +192,7 @@ function proxies(
       ...(n.downMbps ? { down: n.downMbps } : {}),
     };
   });
+  return { rows, literalNames };
 }
 export function render(
   s: Store,
@@ -164,7 +202,7 @@ export function render(
 ) {
   if (/{%\s*(include|render|layout|extends)\b/i.test(body))
     throw Error("File and partial loading is not allowed");
-  const p = proxies(s, u, mode);
+  const { rows: p, literalNames } = proxies(s, u, mode);
   const text = engine.parseAndRenderSync(body, {
     proxies: p,
     choices: p.length ? p.map((p) => p.name) : ["DIRECT"],
@@ -173,8 +211,10 @@ export function render(
   });
   if (Buffer.byteLength(text) > 1024 * 1024)
     throw Error("Rendered configuration is too large");
-  validateStructure(text);
-  return mode === "portal-preview" ? redactPreview(text) : text;
+  const output =
+    mode === "portal-preview" ? redactPreview(text, literalNames) : text;
+  validateStructure(output);
+  return output;
 }
 export function validateStructure(text: string) {
   const doc = YAML.parseDocument(text, { uniqueKeys: true });
@@ -186,7 +226,9 @@ export function validateStructure(text: string) {
     !Array.isArray(c.proxies) ||
     !Array.isArray(c["proxy-groups"]) ||
     !Array.isArray(c.rules) ||
-    !c.dns
+    !c.dns ||
+    typeof c.dns !== "object" ||
+    Array.isArray(c.dns)
   )
     throw Error(
       "A complete mihomo configuration requires proxies, proxy-groups, rules and dns",
@@ -217,6 +259,26 @@ export function validateStructure(text: string) {
         !g["include-all-providers"])
     )
       throw Error(`Invalid references or empty group: ${g.name}`);
+  const subRules = Object.keys(c["sub-rules"] ?? {});
+  for (const rules of [c.rules, ...Object.values(c["sub-rules"] ?? {})]) {
+    if (!Array.isArray(rules)) throw Error("Invalid routing rule list");
+    for (const rule of rules) {
+      if (typeof rule !== "string")
+        throw Error("Routing rules must be strings");
+      const parts = rule.split(",").map((part) => part.trim());
+      const [type] = parts;
+      const index = ruleTarget(parts);
+      const target = parts[index];
+      if (!type || index < 1 || !target)
+        throw Error("Routing rule is missing a policy");
+      if (
+        !names.has(target) &&
+        target !== "GLOBAL" &&
+        !(type.toUpperCase() === "SUB-RULE" && subRules.includes(target))
+      )
+        throw Error(`Routing rule points to an unavailable policy: ${target}`);
+    }
+  }
 }
 export async function validateMihomo(s: Store, text: string) {
   const dir = await mkdtemp(join(tmpdir(), "jetyet-mihomo-"));
