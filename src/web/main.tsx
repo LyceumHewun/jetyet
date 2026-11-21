@@ -58,7 +58,6 @@ import {
   TemplateEditor,
 } from "./forms";
 import { History } from "./history";
-import { isMockEnabled, setMockEnabled } from "./mock";
 import "./styles.css";
 import type { Row, State } from "./types";
 
@@ -192,27 +191,7 @@ function App() {
     [alertFilter, setAlertFilter] = useState<"all" | "open">("all"),
     [theme, setTheme] = useState<"light" | "dark">(() =>
       document.documentElement.dataset.theme === "dark" ? "dark" : "light",
-    ),
-    [mock, setMock] = useState(() => isMockEnabled());
-
-  const toggleMock = () => {
-    const next = !mock;
-    setMockEnabled(next);
-    setMock(next);
-    setExpandedHost(undefined);
-    setExpandedUser(null);
-    setStage(null);
-    setModal(null);
-    if (next) {
-      setSession("demo");
-      void refresh();
-    } else {
-      setSession(null);
-      api("session")
-        .then((x) => setSession(x.username))
-        .catch(() => {});
-    }
-  };
+    );
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -613,14 +592,6 @@ function App() {
             })}
           </nav>
           <div className="command-right">
-            <button
-              type="button"
-              className={"mock-pill" + (mock ? " active" : "")}
-              onClick={toggleMock}
-              title={mock ? "Exit mock data" : "Load mock data"}
-            >
-              {mock ? "Mock ON" : "Mock"}
-            </button>
             <Button
               variant="icon"
               aria-label={

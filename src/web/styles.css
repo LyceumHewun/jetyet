@@ -359,24 +359,6 @@ pre {
   background: var(--paper);
   color: var(--muted);
 }
-.mock-pill {
-  font: 600 11px var(--mono);
-  padding: 4px 9px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--paper);
-  color: var(--muted);
-}
-.mock-pill:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-hover-bg);
-}
-.mock-pill.active {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
-}
 .account-chip:hover {
   border-color: var(--accent);
   background: var(--accent-hover-bg);
