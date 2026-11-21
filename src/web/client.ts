@@ -1,5 +1,6 @@
 import { isMockEnabled, mockApi } from "./mock";
 import type { Row } from "./types";
+
 export async function api(
   path: string,
   method = "GET",
@@ -49,3 +50,48 @@ export const amount = (r: Row) =>
     : r.quota?.direction === "out"
       ? r.usage?.outbound || 0
       : (r.usage?.inbound || 0) + (r.usage?.outbound || 0);
+
+export function formatUptime(seconds?: number | null): string {
+  if (!seconds || seconds <= 0) return "—";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  if (days > 0) return `${days}d ${hours}h`;
+  const mins = Math.floor((seconds % 3600) / 60);
+  return hours > 0 ? `${hours}h ${mins}m` : `${Math.max(1, mins)}m`;
+}
+
+export function directionMeta(dir?: string): { short: string; label: string } {
+  if (dir === "out") return { short: "Out", label: "Outbound only (from VPS)" };
+  if (dir === "in") return { short: "In", label: "Inbound only (from VPS)" };
+  return { short: "Both", label: "Outbound + inbound" };
+}
+
+let supportsDisplayTransition: boolean | undefined;
+
+export function canTransitionDisplay(): boolean {
+  if (supportsDisplayTransition !== undefined) return supportsDisplayTransition;
+  if (
+    typeof window === "undefined" ||
+    !window.CSS?.supports?.("transition-behavior", "allow-discrete") ||
+    !document.body
+  ) {
+    return false;
+  }
+  const probe = document.createElement("div");
+  probe.style.cssText =
+    "transition: display 1s allow-discrete !important; display: block;";
+  document.body.appendChild(probe);
+  getComputedStyle(probe).display;
+  probe.style.display = "none";
+  supportsDisplayTransition = getComputedStyle(probe).display === "block";
+  probe.remove();
+  return supportsDisplayTransition;
+}
+
+export function supportsTopLayerExit(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    !!window.CSS?.supports?.("overlay", "auto") &&
+    canTransitionDisplay()
+  );
+}
