@@ -84,7 +84,13 @@ Always reference CSS custom properties defined in `src/web/styles.css` and suppo
 
 ## Typography, Spacing & Interactions
 
-- **Fonts**: Keep `Space Grotesk Variable` (`--font`) for UI text and `--mono` for metrics, timestamps, addresses, and code.
-- **Type Scale**: Page `h1` `clamp(1.5rem, 2.5vw, 1.75rem)` (`700`), section `h2` `15px` (`600`), subheading `h3` `14px` (`600`), body `14px`, compact table/meta `11px–13px`.
+- **Font Stacks**:
+  - `--font`: `"Space Grotesk Variable"` for Latin UI text, paired with platform-native Simplified Chinese sans-serif fallbacks (`"PingFang SC"`, `"Hiragino Sans GB"`, `"Microsoft YaHei"`, `"Noto Sans CJK SC"`, `"Source Han Sans SC"`, `"Noto Sans SC"`, `sans-serif`) so mixed English/Chinese interfaces render crisply without bundling multi-megabyte CJK font files.
+  - `--mono`: `"JetBrains Mono Variable"` (with `"JetBrains Mono"`, `"Cascadia Code"`, `"SFMono-Regular"`, `ui-monospace`, plus CJK sans fallbacks before `monospace`) for metrics, timestamps, addresses, URLs, logs, and template code.
+- **Type Scale & Tokens**: Use `rem` tokens (`--text-2xs` `0.625rem` / 10px, `--text-xs` `0.6875rem` / 11px, `--text-sm` `0.75rem` / 12px, `--text-md` `0.8125rem` / 13px, `--text-base` `0.875rem` / 14px, `--text-lg` `0.9375rem` / 15px, `--text-xl` `1rem` / 16px, `--text-2xl` `1.25rem` / 20px, `--text-h1` `clamp(1.5rem, 2.5vw, 1.75rem)`) so typography respects browser root font-size preferences. Headings use `text-wrap: balance`; helper and guidance copy use `text-wrap: pretty`.
+- **Locale-Aware Leading & Tracking**:
+  - Default (English): `--lh-tight: 1.3`, `--lh-body: 1.5`, `--lh-code: 1.65`, `--tracking-h1: -0.02em`, `--tracking-h2: -0.01em`, `--tracking-kpi: 0.08em`.
+  - Simplified Chinese (`:root:lang(zh)`): relax leading to `--lh-tight: 1.35` and `--lh-body: 1.58`, remove negative heading tracking (`--tracking-h1: 0em`, `--tracking-h2: 0em`), and moderate uppercase label tracking (`--tracking-kpi: 0.04em`) so Hanzi glyphs do not crowd. Keep `--tracking-brand: -0.03em` on the Latin `jetyet.` wordmark.
+- **Numerals**: Apply `font-variant-numeric: tabular-nums` to `.mono`, `pre`, tables, counts, ring values, KPI figures, worker pills, and quota readouts for stable column alignment across both languages.
 - **Spacing**: Maintain `16px–24px` (`--space-4` to `--space-6`) card/panel padding while keeping table rows and operational lists moderately compact.
 - **Interactive States**: Sidebar navigation items, icon buttons, and action-popover items use translucent lavender hover (`--accent-hover-bg`) and active (`--accent-soft`) states with `--accent` text.
