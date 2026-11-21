@@ -1,3 +1,4 @@
+import { isMockEnabled, mockApi } from "./mock";
 import type { Row } from "./types";
 export async function api(
   path: string,
@@ -5,6 +6,7 @@ export async function api(
   body?: unknown,
   signal?: AbortSignal,
 ) {
+  if (isMockEnabled()) return mockApi(path, method, body);
   const r = await fetch("/api/" + path, {
     method,
     headers: body === undefined ? {} : { "Content-Type": "application/json" },

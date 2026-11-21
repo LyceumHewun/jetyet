@@ -1,22 +1,30 @@
 import "@fontsource-variable/space-grotesk";
 import {
   Activity,
+  Archive,
   ArrowUpRight,
-  Bell,
   Check,
-  ChevronRight,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Clock,
   FileCode2,
-  ListChecks,
+  Link2,
   LogOut,
+  Moon,
   Network,
   Plus,
   Radio,
   RefreshCw,
-  Search,
+  RotateCw,
   Server,
+  ShieldAlert,
   ShieldCheck,
+  Sun,
+  Terminal,
   Users,
   X,
+  XCircle,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -24,12 +32,21 @@ import { api, when } from "./client";
 import {
   Actions,
   Badge,
+  Button,
+  Chip,
   Code,
   Confirm,
-  Dialog,
+  DriftModal,
   Empty,
+  InlineTelemetry,
+  LogsModal,
+  MiniBar,
   QuotaBar,
-  Stat,
+  SearchInput,
+  SegmentedControl,
+  Sparkline,
+  Stage,
+  SubscriptionLinksModal,
   Table,
 } from "./components";
 import {
@@ -41,8 +58,10 @@ import {
   TemplateEditor,
 } from "./forms";
 import { History } from "./history";
+import { isMockEnabled, setMockEnabled } from "./mock";
 import "./styles.css";
 import type { Row, State } from "./types";
+
 const initial: State = {
   hosts: [],
   nodes: [],
@@ -55,33 +74,171 @@ const initial: State = {
 };
 
 const tabs = [
-  ["Overview", Activity],
-  ["VPS", Server],
-  ["Nodes", Radio],
+  ["Infra", Server],
   ["Users", Users],
   ["Templates", FileCode2],
-  ["Operations", ListChecks],
-  ["Alerts", Bell],
+  ["Activity", Activity],
 ] as const;
+
+function hostSparkPoints(h: Row): number[] {
+  const base = typeof h.cpu === "number" ? h.cpu : 24;
+  const mem = typeof h.memory === "number" ? h.memory : 38;
+  return [
+    Math.max(5, base * 0.72),
+    Math.max(5, base * 0.88),
+    Math.max(5, (base + mem) * 0.45),
+    Math.max(5, base * 1.05),
+    Math.max(5, base * 0.92),
+    Math.max(5, (base + mem) * 0.52),
+    Math.max(5, base),
+  ];
+}
+
+function ArchiveView({
+  initialKind,
+  onHistory,
+  onClose,
+}: {
+  initialKind: "hosts" | "nodes" | "users";
+  onHistory: (r: Row) => void;
+  onClose: () => void;
+}) {
+  const [kind, setKind] = useState<"hosts" | "nodes" | "users">(initialKind);
+  const [rows, setRows] = useState<Row[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    api("archive/" + kind)
+      .then((res) => {
+        if (!cancelled) {
+          setRows(res || []);
+          setLoading(false);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setError((e as Error).message);
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [kind]);
+
+  return (
+    <Stage
+      title="Archived records"
+      tag="Archive"
+      onClose={onClose}
+      actions={
+        <SegmentedControl
+          value={kind}
+          options={[
+            ["hosts", "VPS"],
+            ["nodes", "Nodes"],
+            ["users", "Users"],
+          ]}
+          onChange={setKind}
+        />
+      }
+    >
+      {error && <p className="form-error">{error}</p>}
+      <section className="panel">
+        {loading ? (
+          <div className="chart-placeholder muted">Loading archive…</div>
+        ) : rows.length ? (
+          <Table headings={["Name", "Created", "History"]}>
+            {rows.map((r: Row) => (
+              <tr key={r.id}>
+                <td>{r.name}</td>
+                <td className="mono">{when(r.created)}</td>
+                <td>
+                  <Button onClick={() => onHistory(r)}>View history</Button>
+                </td>
+              </tr>
+            ))}
+          </Table>
+        ) : (
+          <Empty title="No archived records">
+            Deleted records retain their historical usage here.
+          </Empty>
+        )}
+      </section>
+    </Stage>
+  );
+}
 
 function App() {
   const [session, setSession] = useState<string | null>(null),
     [checking, setChecking] = useState(true),
     [state, setState] = useState<State>(initial),
-    [tab, setTab] = useState("Overview"),
+    [tab, setTab] = useState("Infra"),
+    [stage, setStage] = useState<ReactNode>(null),
     [modal, setModal] = useState<ReactNode>(null),
     [toast, setToast] = useState(""),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false),
-    [search, setSearch] = useState("");
+    [search, setSearch] = useState(""),
+    [expandedHost, setExpandedHost] = useState<string | null | undefined>(
+      undefined,
+    ),
+    [expandedUser, setExpandedUser] = useState<string | null>(null),
+    [inlineRange, setInlineRange] = useState("24"),
+    [alertFilter, setAlertFilter] = useState<"all" | "open">("all"),
+    [theme, setTheme] = useState<"light" | "dark">(() =>
+      document.documentElement.dataset.theme === "dark" ? "dark" : "light",
+    ),
+    [mock, setMock] = useState(() => isMockEnabled());
+
+  const toggleMock = () => {
+    const next = !mock;
+    setMockEnabled(next);
+    setMock(next);
+    setExpandedHost(undefined);
+    setExpandedUser(null);
+    setStage(null);
+    setModal(null);
+    if (next) {
+      setSession("demo");
+      void refresh();
+    } else {
+      setSession(null);
+      api("session")
+        .then((x) => setSession(x.username))
+        .catch(() => {});
+    }
+  };
+
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    try {
+      localStorage.setItem("jetyet-theme", next);
+    } catch {}
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute("content", next === "dark" ? "#111827" : "#f9fafb");
+  };
+
   const refresh = async () => {
     try {
-      setState(await api("state"));
+      const next = await api("state");
+      setState(next);
+      setExpandedHost((prev) =>
+        prev === undefined ? next.hosts?.[0]?.id || null : prev,
+      );
       setError("");
     } catch (e) {
       setError((e as Error).message);
     }
   };
+
   useEffect(() => {
     api("session")
       .then((x) => setSession(x.username))
@@ -89,22 +246,26 @@ function App() {
       .finally(() => setChecking(false));
     const out = () => {
       setSession(null);
+      setStage(null);
       setModal(null);
     };
     window.addEventListener("signedout", out);
     return () => window.removeEventListener("signedout", out);
   }, []);
+
   useEffect(() => {
     if (!session) return;
     void refresh();
     const id = setInterval(refresh, 10000);
     return () => clearInterval(id);
   }, [session]);
+
   useEffect(() => {
     if (!toast) return;
     const id = setTimeout(() => setToast(""), 4000);
     return () => clearTimeout(id);
   }, [toast]);
+
   const run = async (fn: () => Promise<any>, message = "Saved") => {
     setLoading(true);
     try {
@@ -119,28 +280,31 @@ function App() {
       setLoading(false);
     }
   };
+
   const act = (
     path: string,
     body?: unknown,
     method = "POST",
     message = "Queued",
   ) => void run(() => api(path, method, body), message).catch(() => {});
+
   const save = (kind: string, row?: Row) =>
-    setModal(
+    setStage(
       <EntityForm
         key={row?.id || "new"}
         kind={kind}
         row={row}
         state={state}
-        onClose={() => setModal(null)}
+        onClose={() => setStage(null)}
         onSave={async (data) => {
           await run(() =>
             api(kind + (row ? "/" + row.id : ""), row ? "PUT" : "POST", data),
           );
-          setModal(null);
+          setStage(null);
         }}
       />,
     );
+
   const operation = (n: Row, kind: string) => {
     if (kind === "detect") {
       act(`nodes/${n.id}/operation`, { kind });
@@ -173,19 +337,27 @@ function App() {
       />,
     );
   };
+
   const links = async (u: Row) => {
     try {
       const data = await api(`users/${u.id}/links`);
       setModal(
-        <Code
-          title={`${u.name} · subscription links`}
-          text={[
-            `Default\n${data.default}`,
-            ...data.templates.map(
-              (t: Row) =>
-                `${state.templates.find((x) => x.id === t.id)?.name || t.id}\n${t.url}`,
-            ),
-          ].join("\n\n")}
+        <SubscriptionLinksModal
+          userName={u.name}
+          items={[
+            {
+              id: "default",
+              label: "Default subscription",
+              url: data.default,
+              isDefault: true,
+            },
+            ...(data.templates || []).map((t: Row) => ({
+              id: t.id,
+              label:
+                state.templates.find((x) => x.id === t.id)?.name || t.id,
+              url: t.url,
+            })),
+          ]}
           onClose={() => setModal(null)}
         />,
       );
@@ -193,33 +365,38 @@ function App() {
       setError((e as Error).message);
     }
   };
+
   const trust = async (h: Row) => {
     try {
       const result = await api(`hosts/${h.id}/fingerprint`, "POST");
       setModal(
         <Confirm
-          title="Verify SSH host identity"
+          title={`Trust ${h.name}'s SSH identity?`}
+          action="Trust host key"
           onClose={() => setModal(null)}
-          action="Trust fingerprint"
           onConfirm={async () => {
-            await run(() => api(`hosts/${h.id}/trust`, "POST", result));
+            await run(
+              () =>
+                api(`hosts/${h.id}/trust`, "POST", {
+                  fingerprint: result.fingerprint,
+                }),
+              "Host key trusted",
+            );
             setModal(null);
           }}
         >
           <p>
-            Compare this fingerprint with your server provider or a trusted
-            connection before continuing.
+            Compare this fingerprint with your provider console before trusting
+            the host:
           </p>
-          <pre>{result.fingerprint}</pre>
-          <p>
-            {h.username}@{h.address}:{h.port}
-          </p>
+          <pre className="code-output">{result.fingerprint}</pre>
         </Confirm>,
       );
     } catch (e) {
       setError((e as Error).message);
     }
   };
+
   const remove = (kind: string, r: Row) =>
     setModal(
       <Confirm
@@ -240,8 +417,10 @@ function App() {
         </p>
       </Confirm>,
     );
+
   const history = (r: Row) =>
-    setModal(<History entity={r} onClose={() => setModal(null)} />);
+    setStage(<History entity={r} onClose={() => setStage(null)} />);
+
   const reset = (r: Row) =>
     setModal(
       <Confirm
@@ -259,8 +438,32 @@ function App() {
         </p>
       </Confirm>,
     );
+
+  const inspectDrift = (n: Row) =>
+    void api(`nodes/${n.id}/drift`)
+      .then((diff) =>
+        setModal(
+          <DriftModal
+            nodeName={n.name}
+            desired={diff.desired || ""}
+            observed={diff.observed || null}
+            onReapply={() => operation(n, "reapply")}
+            onClose={() => setModal(null)}
+          />,
+        ),
+      )
+      .catch((e) => setError(e.message));
+
   if (checking) return <div className="loading">Loading Jetyet…</div>;
-  if (!session) return <Login onLogin={setSession} />;
+  if (!session)
+    return (
+      <Login
+        onLogin={setSession}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
+    );
+
   const visible = (list: Row[]) => {
     const q = search.trim().toLowerCase();
     if (!q) return list;
@@ -272,6 +475,7 @@ function App() {
         .includes(q),
     );
   };
+
   const activeAlerts = state.alerts.filter((a) => !a.closed),
     nodeHealthy = state.nodes.filter(
       (n) =>
@@ -282,6 +486,7 @@ function App() {
         Date.now() - (n.probed || 0) < 600000 &&
         !state.hosts.find((h) => h.id === n.hostId)?.exhausted,
     ).length;
+
   const nodeLabel = (n: Row) => {
     const h = state.hosts.find((h) => h.id === n.hostId);
     return n.deleting || h?.deleting
@@ -296,159 +501,164 @@ function App() {
               ? "Running"
               : "Stopped";
   };
+
   const worker = (name: string) => {
     const w = state.workers.find((w) => w.name === name);
     return w && Date.now() - w.at < 30000;
   };
+
+  const hostsReachable = state.hosts.filter((h) => h.reachable).length;
+  const totalOnline = state.nodes.reduce(
+    (sum, n) =>
+      sum +
+      (Object.values(n.online || {}).reduce(
+        (a: any, b: any) => a + b,
+        0,
+      ) as number),
+    0,
+  );
+  const runningTasks = state.tasks.filter((t) =>
+    ["queued", "running"].includes(t.state),
+  ).length;
+
+  const tabCount: Record<string, number> = {
+    Infra: state.hosts.length,
+    Users: state.users.length,
+    Templates: state.templates.length,
+    Activity: activeAlerts.length + runningTasks,
+  };
+
+  const openArchive = (kind: "hosts" | "nodes" | "users") =>
+    setStage(
+      <ArchiveView
+        initialKind={kind}
+        onHistory={(r) => history(r)}
+        onClose={() => setStage(null)}
+      />,
+    );
+
+  const visibleHosts = visible(state.hosts);
+  const orderedHosts = [...visibleHosts].sort((a, b) =>
+    a.id === expandedHost ? -1 : b.id === expandedHost ? 1 : 0,
+  );
+  const visibleUsers = visible(state.users);
+  const orderedUsers = [...visibleUsers].sort((a, b) =>
+    a.id === expandedUser ? -1 : b.id === expandedUser ? 1 : 0,
+  );
+
   return (
     <div className="shell">
-      <aside className="sidebar">
-        <a
-          className="brand"
-          href="#"
-          onClick={(e) => {
-            e.preventDefault();
-            setTab("Overview");
-          }}
-        >
-          <span className="brand-symbol">
-            <Network size={20} />
-          </span>
-          jetyet<span className="brand-period">.</span>
-        </a>
-        <div className="workspace-label">PERSONAL NETWORK</div>
-        <nav>
-          {tabs.map(([name, Icon]) => (
-            <button
-              key={name}
-              aria-label={name}
-              className={tab === name ? "nav-item active" : "nav-item"}
-              onClick={() => {
-                setTab(name);
-                setSearch("");
+      <header className="command-bar">
+        <div className="command-bar-inner">
+          <div className="command-left">
+            <a
+              className="brand"
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                setStage(null);
+                setTab("Infra");
               }}
             >
-              <Icon size={18} />
-              <span>{name}</span>
-              {name === "Alerts" && activeAlerts.length > 0 && (
-                <b>{activeAlerts.length}</b>
-              )}
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="worker-heading">BACKGROUND WORKERS</div>
-          {["monitor", "operations"].map((name) => (
-            <div className="worker" key={name}>
-              <i className={worker(name) ? "online" : "offline"} />
-              <span>{name === "monitor" ? "Monitoring" : "Operations"}</span>
-              <small>{worker(name) ? "Running" : "No heartbeat"}</small>
+              <span className="brand-symbol">
+                <Network size={19} />
+              </span>
+              jetyet<span className="brand-period">.</span>
+            </a>
+            <div className="worker-pills" aria-label="Background workers">
+              {(
+                [
+                  ["monitor", "MON"],
+                  ["operations", "OPS"],
+                ] as const
+              ).map(([name, short]) => (
+                <span
+                  key={name}
+                  className={
+                    "worker-pill " + (worker(name) ? "online" : "offline")
+                  }
+                  title={`${name}: ${worker(name) ? "Running" : "No heartbeat"}`}
+                >
+                  <i />
+                  {short}
+                </span>
+              ))}
             </div>
-          ))}
-          <button
-            className="account"
-            onClick={() =>
-              void api("logout", "POST").then(() => setSession(null))
-            }
-          >
-            <span className="avatar">{session[0]?.toUpperCase()}</span>
-            <span>
-              {session}
-              <small>Administrator</small>
-            </span>
-            <LogOut size={16} />
-          </button>
-        </div>
-      </aside>
-      <main>
-        <header className="topbar">
-          <span>
-            Workspace <ChevronRight size={13} />
-            <strong>{tab}</strong>
-          </span>
-          <div>
-            <span className="timezone">Hong Kong · UTC+8</span>
+          </div>
+          <nav className="dock" aria-label="Primary navigation">
+            {tabs.map(([name, Icon]) => {
+              const count = tabCount[name] || 0;
+              const isAlert = name === "Activity" && activeAlerts.length > 0;
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  aria-label={name}
+                  className={
+                    !stage && tab === name ? "dock-item active" : "dock-item"
+                  }
+                  onClick={() => {
+                    setStage(null);
+                    setTab(name);
+                    setSearch("");
+                  }}
+                >
+                  <Icon size={15} />
+                  <span>{name}</span>
+                  {count > 0 && (
+                    <b className={isAlert ? "alert-count" : ""}>{count}</b>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+          <div className="command-right">
             <button
+              type="button"
+              className={"mock-pill" + (mock ? " active" : "")}
+              onClick={toggleMock}
+              title={mock ? "Exit mock data" : "Load mock data"}
+            >
+              {mock ? "Mock ON" : "Mock"}
+            </button>
+            <Button
+              variant="icon"
+              aria-label={
+                theme === "dark"
+                  ? "Switch to light mode"
+                  : "Switch to dark mode"
+              }
+              onClick={toggleTheme}
+              title={theme === "dark" ? "Light mode" : "Dark mode"}
+            >
+              {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            </Button>
+            <Button
+              variant="icon"
               aria-label="Refresh"
-              className="icon-button"
+              className={loading ? "spinning" : ""}
               disabled={loading}
               onClick={() => void refresh()}
+              title="Refresh"
             >
-              <RefreshCw size={16} />
-            </button>
+              <RefreshCw size={15} />
+            </Button>
             <button
-              className="icon-button"
-              aria-label="Alerts"
-              onClick={() => setTab("Alerts")}
+              type="button"
+              className="account-chip"
+              onClick={() =>
+                void api("logout", "POST").then(() => setSession(null))
+              }
+              title={`Sign out (${session})`}
             >
-              <Bell size={17} />
-              {activeAlerts.length > 0 && <i className="notification-dot" />}
+              <span className="avatar">{session[0]?.toUpperCase()}</span>
+              <LogOut size={14} />
             </button>
           </div>
-        </header>
+        </div>
+      </header>
+      <main className="canvas">
         <div className="content">
-          <div className="page-heading">
-            <div>
-              <div className="eyebrow">NETWORK CONTROL</div>
-              <h1>{tab === "Overview" ? "Your network, at a glance." : tab}</h1>
-              <p>
-                {
-                  (
-                    {
-                      Overview:
-                        "Hosts, connections and access. One place to keep things running.",
-                      VPS: "Manage SSH access, host health and provider traffic allowances.",
-                      Nodes: "Native Hysteria 2 services. One node per host.",
-                      Users:
-                        "Individual access, shared nodes, independent allowances.",
-                      Templates:
-                        "Complete mihomo configurations, shaped for your users.",
-                      Operations:
-                        "Persisted remote work, from deployment to cleanup.",
-                      Alerts: "Faults, recoveries and accounting gaps.",
-                    } as Record<string, string>
-                  )[tab]
-                }
-              </p>
-            </div>
-            {["VPS", "Nodes", "Users", "Templates"].includes(tab) && (
-              <button
-                className="primary"
-                onClick={() =>
-                  tab === "Templates"
-                    ? setModal(
-                        <TemplateEditor
-                          state={state}
-                          onClose={() => setModal(null)}
-                          refresh={refresh}
-                        />,
-                      )
-                    : save(
-                        (
-                          {
-                            VPS: "hosts",
-                            Nodes: "nodes",
-                            Users: "users",
-                          } as Record<string, string>
-                        )[tab],
-                      )
-                }
-              >
-                <Plus size={16} />
-                Add{" "}
-                {
-                  (
-                    {
-                      VPS: "VPS",
-                      Nodes: "node",
-                      Users: "user",
-                      Templates: "template",
-                    } as Record<string, string>
-                  )[tab]
-                }
-              </button>
-            )}
-          </div>
           {error && (
             <div className="error-banner" role="alert">
               {error}
@@ -457,797 +667,948 @@ function App() {
               </button>
             </div>
           )}
-          {tab === "Overview" && (
+          {stage ? (
+            stage
+          ) : (
             <>
-              <div className="stats">
-                <Stat
-                  label="VPS HOSTS"
-                  value={state.hosts.length}
-                  detail={`${state.hosts.filter((h) => h.reachable).length} reachable`}
-                  icon={<Server size={18} />}
-                />
-                <Stat
-                  label="HEALTHY NODES"
-                  value={`${nodeHealthy} / ${state.nodes.length}`}
-                  detail="Authenticated proxy probes"
-                  icon={<Radio size={18} />}
-                />
-                <Stat
-                  label="SUBSCRIPTION USERS"
-                  value={state.users.length}
-                  detail={`${state.users.filter((u) => u.enabled).length} enabled`}
-                  icon={<Users size={18} />}
-                />
-                <Stat
-                  label="OPEN ALERTS"
-                  value={activeAlerts.length}
-                  detail="In-platform records"
-                  icon={<Bell size={18} />}
-                />
-              </div>
-              <div className="overview-grid">
-                <section className="panel">
-                  <div className="panel-heading">
-                    <h2>Infrastructure</h2>
-                    <button
-                      className="text-button"
-                      onClick={() => setTab("VPS")}
-                    >
-                      All hosts <ArrowUpRight size={15} />
-                    </button>
+              {tab === "Infra" && (
+                <>
+                  <div className="action-strip">
+                    <div className="strip-left">
+                      <SearchInput
+                        placeholder="Filter VPS or nodes…"
+                        value={search}
+                        onChange={setSearch}
+                      />
+                      <div className="pulse-chips">
+                        <Chip mono>
+                          <i className="status-dot good" />
+                          {hostsReachable}/{state.hosts.length} VPS
+                        </Chip>
+                        <Chip mono>
+                          <Radio size={11} />
+                          {nodeHealthy}/{state.nodes.length} Nodes
+                        </Chip>
+                        <Chip mono>{totalOnline} Online</Chip>
+                      </div>
+                    </div>
+                    <div className="action-strip-right">
+                      <Button
+                        variant="subtle"
+                        onClick={() => openArchive("hosts")}
+                        title="Archived hosts, nodes & users"
+                      >
+                        <Archive size={14} />
+                        <span>Archive</span>
+                      </Button>
+                      <Button onClick={() => save("nodes")}>
+                        <Plus size={14} />
+                        <span>Node</span>
+                      </Button>
+                      <Button variant="primary" onClick={() => save("hosts")}>
+                        <Plus size={15} />
+                        <span>VPS</span>
+                      </Button>
+                    </div>
                   </div>
                   {!state.hosts.length ? (
-                    <Empty
-                      title="Connect your first VPS"
-                      action={
-                        <button
-                          className="primary"
-                          onClick={() => save("hosts")}
-                        >
-                          <Plus size={15} />
-                          Add VPS
-                        </button>
-                      }
-                    >
-                      Add SSH access, confirm its identity, then deploy a node.
-                    </Empty>
-                  ) : (
-                    state.hosts.slice(0, 6).map((h) => (
-                      <button
-                        key={h.id}
-                        className="host-strip"
-                        onClick={() => history(h)}
+                    <section className="panel">
+                      <Empty
+                        title="No hosts connected"
+                        action={
+                          <Button
+                            variant="primary"
+                            onClick={() => save("hosts")}
+                          >
+                            <Plus size={15} />
+                            Add VPS
+                          </Button>
+                        }
                       >
-                        <span className="host-icon">
-                          <Server size={18} />
-                        </span>
-                        <span>
-                          <strong>{h.name}</strong>
-                          <small className="mono">{h.address}</small>
-                        </span>
-                        <Badge
-                          tone={
-                            !h.enabled
-                              ? "neutral"
-                              : h.reachable
-                                ? "good"
-                                : "warning"
+                        Add a VPS to start managing your network.
+                      </Empty>
+                    </section>
+                  ) : (
+                    <div className="spatial-grid">
+                      {orderedHosts.map((h) => {
+                        const node = state.nodes.find((n) => n.hostId === h.id);
+                        const clients = node
+                          ? (Object.values(node.online || {}).reduce(
+                              (a: any, b: any) => a + b,
+                              0,
+                            ) as number)
+                          : 0;
+                        const isExpanded = expandedHost === h.id;
+                        const nLabel = node ? nodeLabel(node) : "";
+                        const hostActions: [string, () => void][] = [
+                          ["Edit VPS", () => save("hosts", h)],
+                          ["Full telemetry", () => history(h)],
+                          ["Reset usage", () => reset(h)],
+                          [
+                            "Correct usage",
+                            () =>
+                              setModal(
+                                <Correction
+                                  host={h}
+                                  onClose={() => setModal(null)}
+                                  onSave={async (v) => {
+                                    await run(() =>
+                                      api(`hosts/${h.id}/correct`, "POST", v),
+                                    );
+                                    setModal(null);
+                                  }}
+                                />,
+                              ),
+                          ],
+                          ["Delete VPS", () => remove("hosts", h)],
+                          [
+                            "Force remove",
+                            () =>
+                              setModal(
+                                <ForceRemove
+                                  host={h}
+                                  onClose={() => setModal(null)}
+                                  onSave={async () => {
+                                    await run(() =>
+                                      api(
+                                        `hosts/${h.id}/force-remove`,
+                                        "POST",
+                                        {
+                                          confirmation:
+                                            "REMOTE HOST DESTROYED OR HANDLED INDEPENDENTLY",
+                                        },
+                                      ),
+                                    );
+                                    setModal(null);
+                                  }}
+                                />,
+                              ),
+                          ],
+                        ];
+                        const nodeActions: [string, () => void][] = node
+                          ? [
+                              ["Edit node", () => save("nodes", node)],
+                              ["Deploy", () => operation(node, "deploy")],
+                              [
+                                "Show deploy command",
+                                () => operation(node, "command"),
+                              ],
+                              [
+                                "Detect installation",
+                                () => operation(node, "detect"),
+                              ],
+                              ["Upgrade", () => operation(node, "upgrade")],
+                              [
+                                "Inspect drift",
+                                () => inspectDrift(node),
+                              ],
+                              ["Reapply config", () => operation(node, "reapply")],
+                              ["Node history", () => history(node)],
+                              ["Delete node", () => remove("nodes", node)],
+                            ]
+                          : [];
+
+                        if (isExpanded) {
+                          return (
+                            <article
+                              key={h.id}
+                              className="spatial-card spatial-expanded"
+                            >
+                              <div className="expanded-head">
+                                <div className="expanded-head-left">
+                                  <span
+                                    className={
+                                      "status-dot " +
+                                      (!h.enabled
+                                        ? "neutral"
+                                        : h.reachable
+                                          ? "good"
+                                          : "warning")
+                                    }
+                                  />
+                                  <h2>{h.name}</h2>
+                                  <span className="mono muted">
+                                    {h.address}:{h.port}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className={
+                                      "trust-pill " +
+                                      (h.fingerprint ? "trusted" : "verify")
+                                    }
+                                    onClick={() => void trust(h)}
+                                  >
+                                    {h.fingerprint ? (
+                                      <>
+                                        <ShieldCheck size={13} />
+                                        SSH Trusted
+                                      </>
+                                    ) : (
+                                      <>
+                                        <ShieldAlert size={13} />
+                                        Verify SSH
+                                      </>
+                                    )}
+                                  </button>
+                                  {h.deleting && (
+                                    <Badge tone="warning">
+                                      Pending deletion
+                                    </Badge>
+                                  )}
+                                  {h.usageStale && (
+                                    <Badge tone="warning">Stale data</Badge>
+                                  )}
+                                  {node && (
+                                    <Badge
+                                      tone={
+                                        nLabel === "Running"
+                                          ? "good"
+                                          : nLabel === "Planned"
+                                            ? "neutral"
+                                            : "warning"
+                                      }
+                                    >
+                                      {node.name} {node.version || ""} ·{" "}
+                                      {clients} online
+                                    </Badge>
+                                  )}
+                                </div>
+                                <div className="expanded-head-right">
+                                  <SegmentedControl
+                                    value={inlineRange}
+                                    options={[
+                                      ["24", "24h"],
+                                      ["168", "7d"],
+                                      ["720", "30d"],
+                                    ]}
+                                    onChange={setInlineRange}
+                                  />
+                                  <Button onClick={() => save("hosts", h)}>
+                                    Edit
+                                  </Button>
+                                  <Actions items={hostActions} />
+                                  <Button
+                                    variant="subtle"
+                                    onClick={() => setExpandedHost(null)}
+                                    title="Collapse"
+                                  >
+                                    <ChevronUp size={15} />
+                                  </Button>
+                                </div>
+                              </div>
+                              <div className="expanded-zones">
+                                <InlineTelemetry
+                                  entity={h}
+                                  range={inlineRange}
+                                />
+                                <div className="expanded-actions-col">
+                                  <div className="expanded-actions-head">
+                                    <span className="kpi-label">
+                                      {node
+                                        ? "HYSTERIA 2 NODE"
+                                        : "QUICK ACTIONS"}
+                                    </span>
+                                    {node && <Actions items={nodeActions} />}
+                                  </div>
+                                  {node ? (
+                                    <>
+                                      <div className="node-mini-meta">
+                                        <strong>{node.name}</strong>
+                                        <small className="mono">
+                                          {node.address}:{node.port}
+                                        </small>
+                                        <div className="chip-group node-specs">
+                                          <Chip>
+                                            {node.probed &&
+                                            Date.now() - node.probed > 600000
+                                              ? "Probe stale"
+                                              : node.probe || "Pending"}
+                                          </Chip>
+                                          {node.hopping && (
+                                            <Chip mono>UDP {node.hopping}</Chip>
+                                          )}
+                                          {(node.upMbps > 0 ||
+                                            node.downMbps > 0) && (
+                                            <Chip mono>
+                                              ↑{node.upMbps}↓{node.downMbps}M
+                                            </Chip>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <Button
+                                        className="quick-row-btn"
+                                        onClick={() =>
+                                          operation(
+                                            node,
+                                            node.version ? "upgrade" : "deploy",
+                                          )
+                                        }
+                                      >
+                                        <span>
+                                          {node.version ? "Upgrade" : "Deploy"}
+                                        </span>
+                                        <span className="mono muted">
+                                          {node.version || "v2"}
+                                        </span>
+                                      </Button>
+                                      <Button
+                                        className="quick-row-btn"
+                                        onClick={() => inspectDrift(node)}
+                                      >
+                                        <span>Config drift</span>
+                                        <Badge
+                                          tone={node.drift ? "warning" : "good"}
+                                        >
+                                          {node.drift ? "Drift" : "Clean"}
+                                        </Badge>
+                                      </Button>
+                                    </>
+                                  ) : (
+                                    <Button
+                                      variant="primary"
+                                      onClick={() => save("nodes")}
+                                    >
+                                      <Plus size={14} />
+                                      Attach Node
+                                    </Button>
+                                  )}
+                                  <Button
+                                    className="quick-row-btn"
+                                    onClick={() => reset(h)}
+                                  >
+                                    <span>Reset usage</span>
+                                    <span className="mono muted">
+                                      {when(h.usage.next)}
+                                    </span>
+                                  </Button>
+                                  <Button
+                                    className="quick-row-btn"
+                                    onClick={() => history(h)}
+                                  >
+                                    <span>Full telemetry</span>
+                                    <ArrowUpRight size={14} className="muted" />
+                                  </Button>
+                                </div>
+                              </div>
+                            </article>
+                          );
+                        }
+
+                        return (
+                          <article
+                            key={h.id}
+                            className="spatial-card spatial-compact"
+                            onClick={() => setExpandedHost(h.id)}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setExpandedHost(h.id);
+                              }
+                            }}
+                          >
+                            <div className="compact-head">
+                              <span
+                                className={
+                                  "status-dot " +
+                                  (!h.enabled
+                                    ? "neutral"
+                                    : h.reachable
+                                      ? "good"
+                                      : "warning")
+                                }
+                              />
+                              <div className="entity-title">
+                                <strong className="compact-name">
+                                  {h.name}
+                                </strong>
+                                <small className="mono">{h.address}</small>
+                              </div>
+                              <Sparkline
+                                points={hostSparkPoints(h)}
+                                tone={
+                                  (h.cpu || 0) >= 85
+                                    ? "danger"
+                                    : h.reachable
+                                      ? "accent"
+                                      : "warning"
+                                }
+                              />
+                            </div>
+                            <div className="entity-meters">
+                              <MiniBar label="CPU" percent={h.cpu} />
+                              <MiniBar label="RAM" percent={h.memory} />
+                            </div>
+                            <QuotaBar row={h} />
+                            <div className="compact-foot">
+                              {node ? (
+                                <Badge
+                                  tone={
+                                    node.drift
+                                      ? "warning"
+                                      : nLabel === "Running"
+                                        ? "good"
+                                        : nLabel === "Planned"
+                                          ? "neutral"
+                                          : "warning"
+                                  }
+                                >
+                                  {node.name}
+                                  {node.drift
+                                    ? " · Drift"
+                                    : ` · ${clients} on`}
+                                </Badge>
+                              ) : (
+                                <Chip>No node</Chip>
+                              )}
+                              <span className="expand-cue">
+                                <ChevronDown size={14} />
+                              </span>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {tab === "Users" && (
+                <>
+                  <div className="action-strip">
+                    <SearchInput
+                      placeholder="Filter users…"
+                      value={search}
+                      onChange={setSearch}
+                    />
+                    <div className="action-strip-right">
+                      <Button
+                        variant="subtle"
+                        onClick={() => openArchive("users")}
+                      >
+                        <Archive size={14} />
+                        <span>Archive</span>
+                      </Button>
+                      <Button variant="primary" onClick={() => save("users")}>
+                        <Plus size={15} />
+                        <span>User</span>
+                      </Button>
+                    </div>
+                  </div>
+                  {!state.users.length ? (
+                    <section className="panel">
+                      <Empty
+                        title="No users yet"
+                        action={
+                          <Button
+                            variant="primary"
+                            onClick={() => save("users")}
+                          >
+                            <Plus size={15} />
+                            Add User
+                          </Button>
+                        }
+                      >
+                        Issue independent links, tokens and quotas.
+                      </Empty>
+                    </section>
+                  ) : (
+                    <div className="spatial-grid">
+                      {orderedUsers.map((u) => {
+                        const expired =
+                          u.expires && Date.parse(u.expires) < Date.now();
+                        const onlineCount = state.nodes.reduce(
+                          (sum, n) => sum + (n.online?.[u.id] || 0),
+                          0,
+                        );
+                        const isExpanded = expandedUser === u.id;
+                        const userActions: [string, () => void][] = [
+                          ["Edit", () => save("users", u)],
+                          ["Subscription links", () => void links(u)],
+                          ["Full telemetry", () => history(u)],
+                          ["Reset usage", () => reset(u)],
+                          ...(["subscription", "vpn", "both"] as const).map(
+                            (target) =>
+                              [
+                                `Rotate ${target}`,
+                                () =>
+                                  setModal(
+                                    <Confirm
+                                      title={`Rotate ${target} credentials?`}
+                                      action="Rotate"
+                                      onClose={() => setModal(null)}
+                                      onConfirm={async () => {
+                                        await run(() =>
+                                          api(`users/${u.id}/rotate`, "POST", {
+                                            target,
+                                          }),
+                                        );
+                                        setModal(null);
+                                      }}
+                                    >
+                                      <p>
+                                        Old{" "}
+                                        {target === "subscription"
+                                          ? "subscription links"
+                                          : "VPN credentials and active connections"}{" "}
+                                        will be revoked.
+                                      </p>
+                                    </Confirm>,
+                                  ),
+                              ] as [string, () => void],
+                          ),
+                          ["Delete", () => remove("users", u)],
+                        ];
+                        const statusTone =
+                          !u.enabled || u.exhausted || expired
+                            ? "warning"
+                            : "good";
+                        const statusLabel = !u.enabled
+                          ? "Disabled"
+                          : expired
+                            ? "Expired"
+                            : u.exhausted
+                              ? "Exhausted"
+                              : "Active";
+
+                        if (isExpanded) {
+                          return (
+                            <article
+                              key={u.id}
+                              className="spatial-card spatial-expanded"
+                            >
+                              <div className="expanded-head">
+                                <div className="expanded-head-left">
+                                  <span className="avatar">
+                                    {u.name[0]?.toUpperCase()}
+                                  </span>
+                                  <h2>{u.name}</h2>
+                                  {u.note && (
+                                    <span className="muted">{u.note}</span>
+                                  )}
+                                  <Badge tone={statusTone}>{statusLabel}</Badge>
+                                  <Chip mono>{onlineCount} online</Chip>
+                                  {u.expires && (
+                                    <Chip mono>Exp {when(u.expires)}</Chip>
+                                  )}
+                                  {u.usageStale && (
+                                    <Badge tone="warning">Stale</Badge>
+                                  )}
+                                </div>
+                                <div className="expanded-head-right">
+                                  <SegmentedControl
+                                    value={inlineRange}
+                                    options={[
+                                      ["24", "24h"],
+                                      ["168", "7d"],
+                                      ["720", "30d"],
+                                    ]}
+                                    onChange={setInlineRange}
+                                  />
+                                  <Button
+                                    variant="primary"
+                                    onClick={() => void links(u)}
+                                  >
+                                    <Link2 size={14} />
+                                    Links
+                                  </Button>
+                                  <Button onClick={() => save("users", u)}>
+                                    Edit
+                                  </Button>
+                                  <Actions items={userActions} />
+                                  <Button
+                                    variant="subtle"
+                                    onClick={() => setExpandedUser(null)}
+                                    title="Collapse"
+                                  >
+                                    <ChevronUp size={15} />
+                                  </Button>
+                                </div>
+                              </div>
+                              <div className="expanded-zones">
+                                <InlineTelemetry
+                                  entity={u}
+                                  range={inlineRange}
+                                />
+                                <div className="expanded-actions-col">
+                                  <span className="kpi-label">
+                                    AUTHORIZED NODES ({u.nodeIds.length})
+                                  </span>
+                                  <div className="chip-group">
+                                    {u.nodeIds.map((nid: string) => {
+                                      const n = state.nodes.find(
+                                        (x) => x.id === nid,
+                                      );
+                                      if (!n) return null;
+                                      const on = n.online?.[u.id] || 0;
+                                      return (
+                                        <Chip key={nid} mono={on > 0}>
+                                          {n.name}
+                                          {on > 0 ? ` · ${on}` : ""}
+                                        </Chip>
+                                      );
+                                    })}
+                                  </div>
+                                  {u.templateIds?.length > 0 && (
+                                    <div className="chip-group">
+                                      {u.templateIds.map((tid: string) => {
+                                        const t = state.templates.find(
+                                          (x) => x.id === tid,
+                                        );
+                                        if (!t) return null;
+                                        return (
+                                          <Chip
+                                            key={tid}
+                                            className={
+                                              tid === u.defaultTemplate
+                                                ? "accent-chip"
+                                                : ""
+                                            }
+                                          >
+                                            {t.name}
+                                          </Chip>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                  <Button
+                                    className="quick-row-btn"
+                                    onClick={() => reset(u)}
+                                  >
+                                    <span>Reset usage</span>
+                                    <span className="mono muted">
+                                      {when(u.usage.next)}
+                                    </span>
+                                  </Button>
+                                  <Button
+                                    className="quick-row-btn"
+                                    onClick={() => history(u)}
+                                  >
+                                    <span>Full telemetry</span>
+                                    <ArrowUpRight size={14} className="muted" />
+                                  </Button>
+                                </div>
+                              </div>
+                            </article>
+                          );
+                        }
+
+                        return (
+                          <article
+                            key={u.id}
+                            className="spatial-card spatial-compact"
+                            onClick={() => setExpandedUser(u.id)}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setExpandedUser(u.id);
+                              }
+                            }}
+                          >
+                            <div className="compact-head">
+                              <span className="avatar">
+                                {u.name[0]?.toUpperCase()}
+                              </span>
+                              <div className="entity-title">
+                                <strong className="compact-name">
+                                  {u.name}
+                                </strong>
+                                <small>{u.note || "—"}</small>
+                              </div>
+                              <Badge tone={statusTone}>{statusLabel}</Badge>
+                              <Button
+                                variant="icon"
+                                aria-label="Subscription links"
+                                title="Subscription links"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void links(u);
+                                }}
+                              >
+                                <Link2 size={14} />
+                              </Button>
+                            </div>
+                            <QuotaBar row={u} />
+                            <div className="compact-foot">
+                              <div className="chip-group">
+                                <Chip mono>{u.nodeIds.length} nodes</Chip>
+                                <Chip mono>{onlineCount} on</Chip>
+                              </div>
+                              <span className="expand-cue">
+                                <ChevronDown size={14} />
+                              </span>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {tab === "Templates" && (
+                <>
+                  <div className="action-strip">
+                    <SearchInput
+                      placeholder="Filter templates…"
+                      value={search}
+                      onChange={setSearch}
+                    />
+                    <div className="action-strip-right">
+                      <Button
+                        variant="primary"
+                        onClick={() =>
+                          setStage(
+                            <TemplateEditor
+                              state={state}
+                              onClose={() => setStage(null)}
+                              refresh={refresh}
+                            />,
+                          )
+                        }
+                      >
+                        <Plus size={15} />
+                        <span>Template</span>
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="templates-grid">
+                    {visible(state.templates).map((t) => {
+                      const src = t.draft || t.body || "";
+                      const lines = src.split("\n");
+                      const usersUsing = state.users.filter((u) =>
+                        u.templateIds?.includes(t.id),
+                      ).length;
+                      return (
+                        <button
+                          type="button"
+                          className="template-card"
+                          key={t.id}
+                          onClick={() =>
+                            setStage(
+                              <TemplateEditor
+                                template={t}
+                                state={state}
+                                onClose={() => setStage(null)}
+                                refresh={refresh}
+                              />,
+                            )
                           }
                         >
-                          {!h.enabled
-                            ? "Disabled"
-                            : h.reachable
-                              ? "Reachable"
-                              : "Unknown"}
-                        </Badge>
-                        <ChevronRight size={16} />
-                      </button>
-                    ))
-                  )}
-                </section>
-                <section className="panel">
-                  <div className="panel-heading">
-                    <h2>Needs attention</h2>
-                    <span className="count">{activeAlerts.length}</span>
+                          <div className="template-card-head">
+                            <span className="file-icon">
+                              <FileCode2 size={17} />
+                            </span>
+                            <h2>{t.name}</h2>
+                            <div className="chip-group template-badges">
+                              {t.published && t.draft && t.draft !== t.body && (
+                                <Badge tone="warning">Draft edits</Badge>
+                              )}
+                              <Badge tone={t.published ? "good" : "neutral"}>
+                                {t.published ? "Published" : "Draft"}
+                              </Badge>
+                            </div>
+                          </div>
+                          <pre>{lines.slice(0, 8).join("\n")}</pre>
+                          <div className="template-card-foot">
+                            <div className="chip-group">
+                              <Chip mono>{lines.length} lines</Chip>
+                              <Chip mono>{usersUsing} users</Chip>
+                            </div>
+                            <span className="text-button">
+                              Studio <ArrowUpRight size={14} />
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
-                  {!activeAlerts.length ? (
-                    <div className="quiet">
-                      <ShieldCheck size={30} />
-                      <h3>No open alerts</h3>
-                      <p>Monitoring events will appear here.</p>
+                </>
+              )}
+
+              {tab === "Activity" && (
+                <div className="activity-split">
+                  <section className="panel">
+                    <div className="panel-heading compact">
+                      <div className="chip-group">
+                        <h2>Alerts</h2>
+                        <span
+                          className={
+                            "count" + (activeAlerts.length ? " warn" : "")
+                          }
+                        >
+                          {activeAlerts.length} open
+                        </span>
+                      </div>
+                      <SegmentedControl
+                        value={alertFilter}
+                        options={[
+                          ["all", "All"],
+                          ["open", "Open"],
+                        ]}
+                        onChange={setAlertFilter}
+                      />
                     </div>
-                  ) : (
-                    activeAlerts.slice(0, 5).map((a) => (
-                      <div className="alert-strip" key={a.id}>
-                        <span className="alert-mark" />
-                        <div>
-                          <strong>{a.code.replaceAll("-", " ")}</strong>
-                          <p>{a.message}</p>
-                          <small>{when(a.last)}</small>
-                        </div>
+                    {!(
+                      alertFilter === "open" ? activeAlerts : state.alerts
+                    ).length ? (
+                      <div className="quiet radar-quiet">
+                        <span className="quiet-ring">
+                          <ShieldCheck size={26} />
+                        </span>
+                        <h3>All quiet</h3>
                       </div>
-                    ))
-                  )}
-                </section>
-              </div>
-              <section className="panel">
-                <div className="panel-heading">
-                  <h2>Current period usage</h2>
-                  <span className="muted">Independent reset schedules</span>
+                    ) : (
+                      (alertFilter === "open"
+                        ? activeAlerts
+                        : state.alerts
+                      ).map((a) => (
+                        <div
+                          className={
+                            "alert-row " + (a.closed ? "resolved" : "")
+                          }
+                          key={a.id}
+                        >
+                          <span className="alert-mark" />
+                          <div>
+                            <div>
+                              <strong>{a.code.replaceAll("-", " ")}</strong>
+                              <Badge tone={a.closed ? "neutral" : "warning"}>
+                                {a.closed ? "Closed" : a.seen ? "Read" : "Open"}
+                              </Badge>
+                            </div>
+                            <p>{a.message}</p>
+                            <small>
+                              {when(a.first)} → {when(a.last)}
+                            </small>
+                          </div>
+                          <div className="row-buttons">
+                            {!a.seen && (
+                              <Button
+                                onClick={() =>
+                                  act(
+                                    `alerts/${a.id}/read`,
+                                    undefined,
+                                    "POST",
+                                    "Marked read",
+                                  )
+                                }
+                              >
+                                <Check size={13} />
+                                Read
+                              </Button>
+                            )}
+                            {!a.closed && (
+                              <Button
+                                onClick={() =>
+                                  act(
+                                    `alerts/${a.id}/close`,
+                                    undefined,
+                                    "POST",
+                                    "Closed",
+                                  )
+                                }
+                              >
+                                <X size={13} />
+                                Close
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </section>
+                  <section className="panel">
+                    <div className="panel-heading compact">
+                      <h2>Operations</h2>
+                      <span className="count">{state.tasks.length}</span>
+                    </div>
+                    {!state.tasks.length ? (
+                      <Empty title="No operations yet">
+                        Deployments and remote tasks appear here.
+                      </Empty>
+                    ) : (
+                      <div className="ops-list">
+                        {state.tasks.map((t) => {
+                          const hostName =
+                            state.hosts.find((h) => h.id === t.host)?.name ||
+                            "Removed";
+                          return (
+                            <div className="op-row" key={t.id}>
+                              <span className={"op-icon " + t.state}>
+                                {t.state === "succeeded" ? (
+                                  <CheckCircle2 size={16} />
+                                ) : t.state === "failed" ? (
+                                  <XCircle size={16} />
+                                ) : t.state === "running" ? (
+                                  <RefreshCw size={15} className="spinning" />
+                                ) : (
+                                  <Clock size={15} />
+                                )}
+                              </span>
+                              <div className="op-main">
+                                <div className="op-head">
+                                  <strong>{t.kind}</strong>
+                                  <Chip>{hostName}</Chip>
+                                  <Chip mono>step {t.step}</Chip>
+                                </div>
+                                {t.error && (
+                                  <p className="op-error">{t.error}</p>
+                                )}
+                              </div>
+                              <small className="mono op-time">
+                                {when(t.updated)}
+                              </small>
+                              <div className="row-buttons">
+                                <Button
+                                  variant="subtle"
+                                  onClick={() =>
+                                    void api(`tasks/${t.id}/logs`).then(
+                                      (logs) =>
+                                        setModal(
+                                          <LogsModal
+                                            title={`${t.kind} · ${hostName}`}
+                                            logs={logs || []}
+                                            onClose={() => setModal(null)}
+                                          />,
+                                        ),
+                                    )
+                                  }
+                                >
+                                  <Terminal size={13} />
+                                  Logs
+                                </Button>
+                                {["queued", "running"].includes(t.state) && (
+                                  <Button
+                                    onClick={() => act(`tasks/${t.id}/cancel`)}
+                                  >
+                                    <X size={13} />
+                                  </Button>
+                                )}
+                                {["failed", "cancelled"].includes(t.state) && (
+                                  <Button
+                                    onClick={() => act(`tasks/${t.id}/retry`)}
+                                  >
+                                    <RotateCw size={13} />
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
                 </div>
-                {!state.users.length ? (
-                  <Empty
-                    title="No subscription users yet"
-                    action={
-                      <button onClick={() => save("users")}>
-                        <Plus size={15} />
-                        Create user
-                      </button>
-                    }
-                  >
-                    Create an individual subscription for yourself or a friend.
-                  </Empty>
-                ) : (
-                  <div className="usage-grid">
-                    {state.users.slice(0, 6).map((u) => (
-                      <div key={u.id} className="usage-tile">
-                        <div>
-                          <strong>{u.name}</strong>
-                          <Badge tone={u.exhausted ? "warning" : "good"}>
-                            {u.exhausted
-                              ? "Exhausted"
-                              : u.enabled
-                                ? "Enabled"
-                                : "Disabled"}
-                          </Badge>
-                        </div>
-                        <QuotaBar row={u} />
-                        <small>Resets {when(u.usage.next)}</small>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
+              )}
             </>
           )}
-          {["VPS", "Nodes", "Users", "Templates"].includes(tab) && (
-            <div className="toolbar">
-              <label className="search">
-                <Search size={16} />
-                <input
-                  placeholder={`Search ${tab.toLowerCase()}…`}
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
-              </label>
-              {tab !== "Templates" && (
-                <button
-                  onClick={() =>
-                    void api(
-                      "archive/" +
-                        (
-                          {
-                            VPS: "hosts",
-                            Nodes: "nodes",
-                            Users: "users",
-                          } as Record<string, string>
-                        )[tab],
-                    )
-                      .then((rows) =>
-                        setModal(
-                          <Dialog
-                            title="Archived records"
-                            onClose={() => setModal(null)}
-                            wide
-                          >
-                            <div className="dialog-body">
-                              {rows.length ? (
-                                <Table
-                                  headings={["Name", "Created", "History"]}
-                                >
-                                  {rows.map((r: Row) => (
-                                    <tr key={r.id}>
-                                      <td>{r.name}</td>
-                                      <td>{when(r.created)}</td>
-                                      <td>
-                                        <button onClick={() => history(r)}>
-                                          View history
-                                        </button>
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </Table>
-                              ) : (
-                                <Empty title="No archived records">
-                                  Deleted records retain their historical usage
-                                  here.
-                                </Empty>
-                              )}
-                            </div>
-                          </Dialog>,
-                        ),
-                      )
-                      .catch((e) => setError(e.message))
-                  }
-                >
-                  Archive
-                </button>
-              )}
-              <span className="muted">
-                {
-                  (
-                    {
-                      VPS: state.hosts,
-                      Nodes: state.nodes,
-                      Users: state.users,
-                      Templates: state.templates,
-                    } as Record<string, Row[]>
-                  )[tab].length
-                }{" "}
-                records
-              </span>
-            </div>
-          )}
-          {tab === "VPS" && (
-            <section className="panel table-panel">
-              {!state.hosts.length ? (
-                <Empty title="No hosts connected">
-                  Add a VPS to start managing your network.
-                </Empty>
-              ) : (
-                <Table
-                  headings={[
-                    "Host",
-                    "SSH identity",
-                    "Health",
-                    "Current usage",
-                    "Next reset",
-                    "Actions",
-                  ]}
-                >
-                  {visible(state.hosts).map((h) => (
-                    <tr key={h.id}>
-                      <td>
-                        <button
-                          className="name-button"
-                          onClick={() => history(h)}
-                        >
-                          {h.name}
-                        </button>
-                        <small className="mono">
-                          {h.address}:{h.port}
-                        </small>
-                        {h.deleting && (
-                          <Badge tone="warning">Pending deletion</Badge>
-                        )}
-                      </td>
-                      <td>
-                        <button
-                          className="text-button"
-                          onClick={() => void trust(h)}
-                        >
-                          {h.fingerprint ? (
-                            <>
-                              <ShieldCheck size={14} />
-                              Trusted
-                            </>
-                          ) : (
-                            "Verify fingerprint"
-                          )}
-                        </button>
-                      </td>
-                      <td>
-                        <Badge
-                          tone={
-                            !h.enabled
-                              ? "neutral"
-                              : h.reachable
-                                ? "good"
-                                : "warning"
-                          }
-                        >
-                          {!h.enabled
-                            ? "Disabled"
-                            : h.reachable
-                              ? "Reachable"
-                              : "Unreachable"}
-                        </Badge>
-                        <small>
-                          CPU {h.cpu?.toFixed(0) ?? "—"}% · RAM{" "}
-                          {h.memory?.toFixed(0) ?? "—"}%
-                        </small>
-                      </td>
-                      <td>
-                        <QuotaBar row={h} />
-                      </td>
-                      <td className="nowrap">{when(h.usage.next)}</td>
-                      <td>
-                        <Actions
-                          items={[
-                            ["Edit", () => save("hosts", h)],
-                            ["History", () => history(h)],
-                            ["Reset usage", () => reset(h)],
-                            [
-                              "Correct usage",
-                              () =>
-                                setModal(
-                                  <Correction
-                                    host={h}
-                                    onClose={() => setModal(null)}
-                                    onSave={async (v) => {
-                                      await run(() =>
-                                        api(`hosts/${h.id}/correct`, "POST", v),
-                                      );
-                                      setModal(null);
-                                    }}
-                                  />,
-                                ),
-                            ],
-                            ["Delete", () => remove("hosts", h)],
-                            [
-                              "Force remove",
-                              () =>
-                                setModal(
-                                  <ForceRemove
-                                    host={h}
-                                    onClose={() => setModal(null)}
-                                    onSave={async () => {
-                                      await run(() =>
-                                        api(
-                                          `hosts/${h.id}/force-remove`,
-                                          "POST",
-                                          {
-                                            confirmation:
-                                              "REMOTE HOST DESTROYED OR HANDLED INDEPENDENTLY",
-                                          },
-                                        ),
-                                      );
-                                      setModal(null);
-                                    }}
-                                  />,
-                                ),
-                            ],
-                          ]}
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </Table>
-              )}
-            </section>
-          )}
-          {tab === "Nodes" && (
-            <section className="panel table-panel">
-              {!state.nodes.length ? (
-                <Empty title="Plan your first node">
-                  Add a trusted VPS first, then plan and deploy its Hysteria 2
-                  node.
-                </Empty>
-              ) : (
-                <Table
-                  headings={[
-                    "Node",
-                    "VPS",
-                    "Service / probe",
-                    "Online clients",
-                    "Version",
-                    "Actions",
-                  ]}
-                >
-                  {visible(state.nodes).map((n) => (
-                    <tr key={n.id}>
-                      <td>
-                        <button
-                          className="name-button"
-                          onClick={() => history(n)}
-                        >
-                          {n.name}
-                        </button>
-                        <small className="mono">
-                          {n.address}:{n.port}
-                        </small>
-                      </td>
-                      <td>
-                        {state.hosts.find((h) => h.id === n.hostId)?.name ||
-                          "Removed"}
-                      </td>
-                      <td>
-                        <Badge
-                          tone={
-                            nodeLabel(n) === "Running"
-                              ? "good"
-                              : nodeLabel(n) === "Planned"
-                                ? "neutral"
-                                : "warning"
-                          }
-                        >
-                          {nodeLabel(n)}
-                        </Badge>
-                        <small>
-                          {[
-                            "Disabled",
-                            "Quota exhausted",
-                            "Pending deletion",
-                          ].includes(nodeLabel(n))
-                            ? "Probing paused"
-                            : n.probed && Date.now() - n.probed > 600000
-                              ? "Probe stale"
-                              : n.probe || "Not probed"}
-                          {n.drift ? " · Configuration drift" : ""}
-                        </small>
-                      </td>
-                      <td>
-                        {
-                          Object.values(n.online || {}).reduce(
-                            (a: any, b: any) => a + b,
-                            0,
-                          ) as number
-                        }
-                      </td>
-                      <td className="mono">{n.version || "—"}</td>
-                      <td>
-                        <Actions
-                          items={[
-                            ["Edit", () => save("nodes", n)],
-                            ["Deploy", () => operation(n, "deploy")],
-                            [
-                              "Show deploy command",
-                              () => operation(n, "command"),
-                            ],
-                            [
-                              "Detect installation",
-                              () => operation(n, "detect"),
-                            ],
-                            ["Upgrade", () => operation(n, "upgrade")],
-                            [
-                              "Inspect configuration drift",
-                              () =>
-                                void api(`nodes/${n.id}/drift`)
-                                  .then((diff) =>
-                                    setModal(
-                                      <Code
-                                        title="Configuration comparison · credentials hidden"
-                                        text={`PLATFORM CONFIGURATION\n${diff.desired}\nOBSERVED REMOTE CONFIGURATION\n${diff.observed || "No observation yet."}`}
-                                        onClose={() => setModal(null)}
-                                      />,
-                                    ),
-                                  )
-                                  .catch((e) => setError(e.message)),
-                            ],
-                            [
-                              "Reapply configuration",
-                              () => operation(n, "reapply"),
-                            ],
-                            ["History", () => history(n)],
-                            ["Delete", () => remove("nodes", n)],
-                          ]}
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </Table>
-              )}
-            </section>
-          )}
-          {tab === "Users" && (
-            <section className="panel table-panel">
-              {!state.users.length ? (
-                <Empty title="Access starts here">
-                  Each user gets an independent link, token and traffic
-                  allowance.
-                </Empty>
-              ) : (
-                <Table
-                  headings={[
-                    "User",
-                    "Access",
-                    "Current usage",
-                    "Nodes / clients",
-                    "Next reset",
-                    "Actions",
-                  ]}
-                >
-                  {visible(state.users).map((u) => (
-                    <tr key={u.id}>
-                      <td>
-                        <button
-                          className="name-button"
-                          onClick={() => history(u)}
-                        >
-                          {u.name}
-                        </button>
-                        <small>{u.note || "No note"}</small>
-                      </td>
-                      <td>
-                        <Badge
-                          tone={
-                            !u.enabled ||
-                            u.exhausted ||
-                            (u.expires && Date.parse(u.expires) < Date.now())
-                              ? "warning"
-                              : "good"
-                          }
-                        >
-                          {!u.enabled
-                            ? "Disabled"
-                            : u.expires && Date.parse(u.expires) < Date.now()
-                              ? "Expired"
-                              : u.exhausted
-                                ? "Exhausted"
-                                : "Enabled"}
-                        </Badge>
-                      </td>
-                      <td>
-                        <QuotaBar row={u} />
-                      </td>
-                      <td>
-                        {u.nodeIds.length} nodes
-                        <small>
-                          {state.nodes.reduce(
-                            (sum, n) => sum + (n.online?.[u.id] || 0),
-                            0,
-                          )}{" "}
-                          online client instances
-                        </small>
-                      </td>
-                      <td>{when(u.usage.next)}</td>
-                      <td>
-                        <Actions
-                          items={[
-                            ["Edit", () => save("users", u)],
-                            ["Subscription links", () => void links(u)],
-                            ["History", () => history(u)],
-                            ["Reset usage", () => reset(u)],
-                            ...(["subscription", "vpn", "both"] as const).map(
-                              (target) =>
-                                [
-                                  `Rotate ${target}`,
-                                  () =>
-                                    setModal(
-                                      <Confirm
-                                        title={`Rotate ${target} credentials?`}
-                                        action="Rotate"
-                                        onClose={() => setModal(null)}
-                                        onConfirm={async () => {
-                                          await run(() =>
-                                            api(
-                                              `users/${u.id}/rotate`,
-                                              "POST",
-                                              { target },
-                                            ),
-                                          );
-                                          setModal(null);
-                                        }}
-                                      >
-                                        <p>
-                                          Old{" "}
-                                          {target === "subscription"
-                                            ? "subscription links"
-                                            : "VPN credentials and active connections"}{" "}
-                                          will be revoked. Share updated
-                                          subscription information with this
-                                          user.
-                                        </p>
-                                      </Confirm>,
-                                    ),
-                                ] as [string, () => void],
-                            ),
-                            ["Delete", () => remove("users", u)],
-                          ]}
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </Table>
-              )}
-            </section>
-          )}
-          {tab === "Templates" && (
-            <div className="templates-grid">
-              {visible(state.templates).map((t) => (
-                <button
-                  className="template-card"
-                  key={t.id}
-                  onClick={() =>
-                    setModal(
-                      <TemplateEditor
-                        template={t}
-                        state={state}
-                        onClose={() => setModal(null)}
-                        refresh={refresh}
-                      />,
-                    )
-                  }
-                >
-                  <div>
-                    <span className="file-icon">
-                      <FileCode2 size={23} />
-                    </span>
-                    <Badge tone={t.published ? "good" : "neutral"}>
-                      {t.published ? "Published" : "Draft"}
-                    </Badge>
-                  </div>
-                  <h2>{t.name}</h2>
-                  <p>mihomo · complete configuration</p>
-                  <pre>
-                    {(t.draft || t.body).split("\n").slice(0, 8).join("\n")}
-                  </pre>
-                  <span className="text-button">
-                    Open template <ArrowUpRight size={15} />
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-          {tab === "Operations" && (
-            <section className="panel table-panel">
-              {!state.tasks.length ? (
-                <Empty title="No operations yet">
-                  Deployments, upgrades and connection revocations appear here.
-                </Empty>
-              ) : (
-                <Table
-                  headings={[
-                    "Operation",
-                    "VPS",
-                    "Status",
-                    "Updated",
-                    "Actions",
-                  ]}
-                >
-                  {state.tasks.map((t) => (
-                    <tr key={t.id}>
-                      <td>
-                        <strong>{t.kind}</strong>
-                        <small className="mono">
-                          {t.id.slice(0, 8)} · step {t.step}
-                        </small>
-                      </td>
-                      <td>
-                        {state.hosts.find((h) => h.id === t.host)?.name ||
-                          "Removed host"}
-                      </td>
-                      <td>
-                        <Badge
-                          tone={
-                            t.state === "succeeded"
-                              ? "good"
-                              : t.state === "failed"
-                                ? "danger"
-                                : "neutral"
-                          }
-                        >
-                          {t.state}
-                        </Badge>
-                        {t.error && <small>{t.error}</small>}
-                      </td>
-                      <td>{when(t.updated)}</td>
-                      <td>
-                        <Actions
-                          items={[
-                            [
-                              "Execution log",
-                              () =>
-                                void api(`tasks/${t.id}/logs`).then((logs) =>
-                                  setModal(
-                                    <Code
-                                      title="Execution log"
-                                      text={
-                                        logs
-                                          .map(
-                                            (l: Row) =>
-                                              `${when(l.at)}  ${l.message}`,
-                                          )
-                                          .join("\n") ||
-                                        "No detailed log recorded."
-                                      }
-                                      onClose={() => setModal(null)}
-                                    />,
-                                  ),
-                                ),
-                            ],
-                            ...(["queued", "running"].includes(t.state)
-                              ? [
-                                  [
-                                    "Cancel",
-                                    () => act(`tasks/${t.id}/cancel`),
-                                  ] as [string, () => void],
-                                ]
-                              : []),
-                            ...(["failed", "cancelled"].includes(t.state)
-                              ? [
-                                  [
-                                    "Retry",
-                                    () => act(`tasks/${t.id}/retry`),
-                                  ] as [string, () => void],
-                                ]
-                              : []),
-                          ]}
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </Table>
-              )}
-            </section>
-          )}
-          {tab === "Alerts" && (
-            <section className="panel">
-              {!state.alerts.length ? (
-                <Empty title="No alerts recorded">
-                  Faults and recoveries will be kept here.
-                </Empty>
-              ) : (
-                state.alerts.map((a) => (
-                  <div
-                    className={"alert-row " + (a.closed ? "resolved" : "")}
-                    key={a.id}
-                  >
-                    <span className="alert-mark" />
-                    <div>
-                      <div>
-                        <strong>{a.code.replaceAll("-", " ")}</strong>
-                        <Badge tone={a.closed ? "neutral" : "warning"}>
-                          {a.closed ? "Closed" : a.seen ? "Read" : "Open"}
-                        </Badge>
-                      </div>
-                      <p>{a.message}</p>
-                      <small>
-                        First {when(a.first)} · Last {when(a.last)}
-                        {a.closed && ` · Closed ${when(a.closed)}`}
-                      </small>
-                    </div>
-                    <div className="row-buttons">
-                      {!a.seen && (
-                        <button
-                          onClick={() =>
-                            act(
-                              `alerts/${a.id}/read`,
-                              undefined,
-                              "POST",
-                              "Marked read",
-                            )
-                          }
-                        >
-                          Mark read
-                        </button>
-                      )}
-                      {!a.closed && (
-                        <button
-                          onClick={() =>
-                            act(
-                              `alerts/${a.id}/close`,
-                              undefined,
-                              "POST",
-                              "Closed",
-                            )
-                          }
-                        >
-                          Close
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-            </section>
-          )}
-          <footer>
-            <span>JETYET / NETWORK CONTROL</span>
-            <span>Hysteria 2 · mihomo</span>
-          </footer>
         </div>
       </main>
-      {modal && (
-        <div
-          className="modal-overlay"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setModal(null);
-          }}
-        >
-          {modal}
-        </div>
-      )}
+      {modal}
       {toast && (
         <div className="toast" role="status">
           <Check size={17} />

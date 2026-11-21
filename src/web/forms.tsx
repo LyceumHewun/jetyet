@@ -1,7 +1,32 @@
-import { ArrowUpRight, Network } from "lucide-react";
+import {
+  ArrowUpRight,
+  FileCode2,
+  Moon,
+  Network,
+  Radio,
+  Server,
+  Sun,
+  Users,
+} from "lucide-react";
 import { useState, type InputHTMLAttributes } from "react";
-import { api } from "./client";
-import { Badge, Confirm, Dialog, Field } from "./components";
+import { api, fmt } from "./client";
+import {
+  Badge,
+  Button,
+  Checkbox,
+  Chip,
+  ChipPicker,
+  Confirm,
+  DateTimePicker,
+  Field,
+  Input,
+  Modal,
+  SegmentedControl,
+  Select,
+  Stage,
+  SwitchPill,
+  TextArea,
+} from "./components";
 import type { Row, State } from "./types";
 
 function toDatetimeLocal(iso: string | null | undefined): string {
@@ -28,74 +53,82 @@ function inferQuotaUnit(limit: unknown): string {
   }
   return "GiB";
 }
-export function Login({ onLogin }: { onLogin: (name: string) => void }) {
+export function Login({
+  onLogin,
+  theme = "light",
+  onToggleTheme,
+}: {
+  onLogin: (name: string) => void;
+  theme?: "light" | "dark";
+  onToggleTheme?: () => void;
+}) {
   const [name, setName] = useState("admin"),
     [password, setPassword] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   return (
     <div className="login-page">
-      <div className="login-intro">
-        <span className="brand">
-          <span className="brand-symbol">
-            <Network size={22} />
-          </span>
-          jetyet.
-        </span>
-        <div>
-          <div className="eyebrow">YOUR PRIVATE INFRASTRUCTURE</div>
-          <h1>
-            A quiet place
-            <br />
-            to run your network.
-          </h1>
-          <p>
-            Manage your hosts. Share your connections.
-            <br />
-            Keep access in your hands.
-          </p>
-        </div>
-        <small>HYSTERIA 2 / MIHOMO</small>
-      </div>
-      <div className="login-form">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            setBusy(true);
-            setError("");
-            api("login", "POST", { username: name, password })
-              .then((x) => onLogin(x.username))
-              .catch((e) => setError(e.message))
-              .finally(() => setBusy(false));
-          }}
+      {onToggleTheme && (
+        <button
+          aria-label={
+            theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
+          }
+          className="icon-button login-theme-toggle"
+          onClick={onToggleTheme}
+          title={theme === "dark" ? "Light mode" : "Dark mode"}
+          type="button"
         >
-          <span className="eyebrow">ADMINISTRATOR ACCESS</span>
-          <h2>Welcome back.</h2>
-          <p>Sign in to your network workspace.</p>
-          <Field label="Username">
-            <input
-              autoComplete="username"
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </Field>
-          <Field label="Password">
-            <input
-              autoComplete="current-password"
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </Field>
-          {error && <p className="form-error">{error}</p>}
-          <button className="primary" disabled={busy}>
-            {busy ? "Signing in…" : "Sign in"}
-            <ArrowUpRight size={16} />
-          </button>
-          <small>Credentials are managed in your server configuration.</small>
-        </form>
+          {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+        </button>
+      )}
+      <div className="login-wrap">
+        <div className="login-brand">
+          <span className="brand">
+            <span className="brand-symbol">
+              <Network size={22} />
+            </span>
+            jetyet<span className="brand-period">.</span>
+          </span>
+        </div>
+        <div className="login-card">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              setBusy(true);
+              setError("");
+              api("login", "POST", { username: name, password })
+                .then((x) => onLogin(x.username))
+                .catch((e) => setError(e.message))
+                .finally(() => setBusy(false));
+            }}
+          >
+            <h2>Sign in</h2>
+            <p>Sign in to your network workspace.</p>
+            <Field label="Username">
+              <Input
+                autoComplete="username"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </Field>
+            <Field label="Password">
+              <Input
+                autoComplete="current-password"
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </Field>
+            {error && <p className="form-error">{error}</p>}
+            <Button variant="primary" type="submit" disabled={busy}>
+              {busy ? "Signing in…" : "Sign in"}
+              <ArrowUpRight size={16} />
+            </Button>
+            <small>Credentials are managed in your server configuration.</small>
+          </form>
+        </div>
       </div>
     </div>
   );
@@ -112,18 +145,27 @@ export function QuotaFields({
   const factor = unit === "GB" ? 1e9 : unit === "TiB" ? 1024 ** 4 : 1024 ** 3;
   const reset = value.reset;
   return (
-    <fieldset>
-      <legend>Traffic allowance</legend>
+    <div className="studio-card">
+      <div className="studio-card-head">
+        <h2>Traffic allowance</h2>
+        <SegmentedControl
+          value={value.direction}
+          options={[
+            ["both", "Both"],
+            ["out", "Out"],
+            ["in", "In"],
+          ]}
+          onChange={(direction) => onChange({ ...value, direction })}
+        />
+      </div>
       <div className="form-grid">
-        <Field
-          label="Limit"
-          hint="Empty means unlimited. Zero blocks all counted traffic."
-        >
+        <Field label="Limit" hint="Empty = unlimited · 0 = block">
           <div className="input-combo">
-            <input
+            <Input
               type="number"
               min="0"
               step="any"
+              placeholder="Unlimited"
               value={value.limit === null ? "" : value.limit / factor}
               onChange={(e) =>
                 onChange({
@@ -135,34 +177,31 @@ export function QuotaFields({
                 })
               }
             />
-            <select value={unit} onChange={(e) => setUnit(e.target.value)}>
-              <option>GiB</option>
-              <option>TiB</option>
-              <option>GB</option>
-            </select>
+            <Select
+              compact
+              value={unit}
+              options={[
+                { value: "GiB", label: "GiB" },
+                { value: "TiB", label: "TiB" },
+                { value: "GB", label: "GB" },
+              ]}
+              onChange={setUnit}
+            />
           </div>
         </Field>
-        <Field
-          label="Counted direction"
-          hint="Directions are from the VPS perspective."
-        >
-          <select
-            value={value.direction}
-            onChange={(e) => onChange({ ...value, direction: e.target.value })}
-          >
-            <option value="both">Outbound + inbound</option>
-            <option value="out">Outbound only</option>
-            <option value="in">Inbound only</option>
-          </select>
-        </Field>
-        <Field label="Reset policy">
-          <select
+        <Field label="Reset cycle">
+          <SegmentedControl
+            fullWidth
             value={reset.kind}
-            onChange={(e) =>
+            options={[
+              ["monthly", "Monthly"],
+              ["interval", "Every N days"],
+            ]}
+            onChange={(k) =>
               onChange({
                 ...value,
                 reset:
-                  e.target.value === "monthly"
+                  k === "monthly"
                     ? { kind: "monthly", day: 1, hour: 0 }
                     : {
                         kind: "interval",
@@ -171,15 +210,12 @@ export function QuotaFields({
                       },
               })
             }
-          >
-            <option value="monthly">Fixed monthly date</option>
-            <option value="interval">Every N days</option>
-          </select>
+          />
         </Field>
         {reset.kind === "monthly" ? (
           <>
             <Field label="Day of month">
-              <input
+              <Input
                 type="number"
                 min="1"
                 max="31"
@@ -193,8 +229,8 @@ export function QuotaFields({
                 }
               />
             </Field>
-            <Field label="Hour (Hong Kong)">
-              <input
+            <Field label="Hour (HKT)">
+              <Input
                 type="number"
                 min="0"
                 max="23"
@@ -210,8 +246,8 @@ export function QuotaFields({
           </>
         ) : (
           <>
-            <Field label="Interval in days">
-              <input
+            <Field label="Interval (days)">
+              <Input
                 type="number"
                 min="1"
                 max="3650"
@@ -226,16 +262,15 @@ export function QuotaFields({
               />
             </Field>
             <Field label="Anchor (UTC)">
-              <input
-                type="datetime-local"
-                required
+              <DateTimePicker
                 value={toDatetimeLocal(reset.anchor)}
-                onChange={(e) =>
+                allowClear={false}
+                onChange={(val) =>
                   onChange({
                     ...value,
                     reset: {
                       ...reset,
-                      anchor: fromDatetimeLocal(e.target.value) ?? "",
+                      anchor: fromDatetimeLocal(val) ?? "",
                     },
                   })
                 }
@@ -244,7 +279,7 @@ export function QuotaFields({
           </>
         )}
       </div>
-    </fieldset>
+    </div>
   );
 }
 
@@ -326,7 +361,7 @@ export function EntityForm({
     extra?: InputHTMLAttributes<HTMLInputElement>,
   ) => (
     <Field label={label} hint={hint}>
-      <input
+      <Input
         type={type}
         value={data[key] ?? ""}
         onChange={(e) =>
@@ -339,184 +374,272 @@ export function EntityForm({
       />
     </Field>
   );
+  const entityTag =
+    kind === "hosts" ? "VPS" : kind === "nodes" ? "Node" : "User";
+  const formId = `entity-form-${kind}`;
+  const selectedHost =
+    kind === "nodes"
+      ? state.hosts.find((h) => h.id === data.hostId)?.name || "Unassigned"
+      : "";
   return (
-    <Dialog
-      title={`${row ? "Edit" : "Add"} ${kind === "hosts" ? "VPS" : kind === "nodes" ? "node" : "subscription user"}`}
+    <Stage
+      title={
+        row
+          ? data.name || row.name
+          : `New ${kind === "hosts" ? "VPS" : kind === "nodes" ? "node" : "user"}`
+      }
+      tag={row ? `Edit ${entityTag}` : `Create ${entityTag}`}
       onClose={onClose}
-      wide
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="primary"
+            disabled={busy}
+            form={formId}
+            type="submit"
+          >
+            {busy ? "Saving…" : row ? "Save changes" : `Create ${entityTag}`}
+          </button>
+        </>
+      }
     >
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (
-            kind !== "nodes" &&
-            data.quota?.reset?.kind === "interval" &&
-            !Number.isFinite(Date.parse(data.quota.reset.anchor || ""))
-          ) {
-            setError("Anchor (UTC) must be a valid date and time.");
-            return;
-          }
-          setBusy(true);
-          setError("");
-          onSave(data)
-            .catch((e) => setError(e.message))
-            .finally(() => setBusy(false));
-        }}
-      >
-        <div className="dialog-body form-body">
-          <div className="form-grid">
-            {input("name", "Display name")}
-            {kind === "hosts" && (
-              <>
-                {input("address", "SSH address")}
-                {input("port", "SSH port", "number")}
-                {input("username", "SSH username")}
-                <Field label="Authentication">
-                  <select
-                    value={data.authType}
-                    onChange={(e) => set("authType", e.target.value)}
-                  >
-                    <option value="key">Private key</option>
-                    <option value="password">Password</option>
-                  </select>
-                </Field>
-                <Field
-                  label={
-                    data.authType === "key" ? "Private key" : "SSH password"
-                  }
-                  hint={
-                    row
-                      ? "Leave empty to retain the current credential."
-                      : undefined
-                  }
-                >
-                  {data.authType === "key" ? (
-                    <textarea
-                      rows={4}
-                      value={data.credential}
-                      onChange={(e) => set("credential", e.target.value)}
-                      required={!row}
-                    />
-                  ) : (
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={data.credential}
-                      onChange={(e) => set("credential", e.target.value)}
-                      required={!row}
-                    />
+      <div className="studio-grid">
+        <aside className="studio-preview">
+          <div className="studio-card preview-card">
+            <span className="kpi-label">LIVE PREVIEW</span>
+            <div className="entity-card-head">
+              <span className="host-icon">
+                {kind === "hosts" ? (
+                  <Server size={16} />
+                ) : kind === "nodes" ? (
+                  <Radio size={16} />
+                ) : (
+                  <Users size={16} />
+                )}
+              </span>
+              <div className="entity-title">
+                <strong className="preview-name">
+                  {data.name || `Untitled ${entityTag}`}
+                </strong>
+                <small className="mono">
+                  {kind === "users"
+                    ? data.note || "No note"
+                    : `${data.address || "0.0.0.0"}:${data.port || 22}`}
+                </small>
+              </div>
+              <Badge tone={data.enabled ? "good" : "neutral"}>
+                {data.enabled ? "Enabled" : "Disabled"}
+              </Badge>
+            </div>
+            <div className="preview-meta">
+              {kind === "hosts" && (
+                <>
+                  <span className="chip mono">
+                    {data.username || "root"} · {data.authType}
+                  </span>
+                  <span className="chip mono">
+                    {data.quota?.limit === null
+                      ? "∞ Unlimited"
+                      : fmt(data.quota.limit)}
+                  </span>
+                </>
+              )}
+              {kind === "nodes" && (
+                <>
+                  <span className="chip">{selectedHost}</span>
+                  {data.hopping && (
+                    <span className="chip mono">UDP {data.hopping}</span>
                   )}
-                </Field>
-                {data.authType === "key" &&
-                  input("passphrase", "Key passphrase", "password")}
-                {!row && (
-                  <>
-                    {input("initialIn", "Initial inbound bytes", "number")}
-                    {input("initialOut", "Initial outbound bytes", "number")}
-                  </>
-                )}
-              </>
-            )}
-            {kind === "nodes" && (
-              <>
-                <Field label="VPS">
-                  <select
-                    value={data.hostId}
-                    onChange={(e) => set("hostId", e.target.value)}
-                    required
-                    disabled={!!row}
-                  >
-                    <option value="">Select trusted VPS</option>
-                    {state.hosts
-                      .filter(
-                        (h) =>
-                          h.fingerprint &&
-                          (h.id === data.hostId ||
-                            !state.nodes.some((n) => n.hostId === h.id)),
-                      )
-                      .map((h) => (
-                        <option key={h.id} value={h.id}>
-                          {h.name}
-                        </option>
-                      ))}
-                  </select>
-                </Field>
-                {input("address", "Advertised IP address")}
-                {input("port", "UDP listen port", "number", undefined, {
-                  min: 1,
-                  max: 65535,
-                  step: 1,
-                })}
-                {input(
-                  "hopping",
-                  "Hopping range",
-                  "text",
-                  "Optional, e.g. 20000-50000. Open this UDP range in your provider firewall.",
-                )}
-                {input(
-                  "hopInterval",
-                  "Hop interval (seconds)",
-                  "number",
-                  undefined,
-                  { min: 5, step: 1 },
-                )}
-                {input(
-                  "upMbps",
-                  "Client upload hint (Mbps)",
-                  "number",
-                  undefined,
-                  { min: 0, step: 1 },
-                )}
-                {input(
-                  "downMbps",
-                  "Client download hint (Mbps)",
-                  "number",
-                  undefined,
-                  { min: 0, step: 1 },
-                )}
-                <p className="form-note full">
-                  Native Hysteria 2 · self-signed certificate · certificate
-                  verification skipped. Network parameter changes require an
-                  explicit reapply operation.
-                </p>
-              </>
-            )}
-            {kind === "users" && (
-              <>
-                {input("note", "Note")}
-                <Field
-                  label="Expires (UTC)"
-                  hint="Leave empty for no expiration."
-                >
-                  <input
-                    type="datetime-local"
-                    value={toDatetimeLocal(data.expires)}
-                    onChange={(e) =>
-                      set("expires", fromDatetimeLocal(e.target.value))
-                    }
-                  />
-                </Field>
-              </>
-            )}
-            <label className="check-field">
-              <input
-                type="checkbox"
+                </>
+              )}
+              {kind === "users" && (
+                <>
+                  <span className="chip mono">
+                    {data.nodeIds?.length || 0} nodes
+                  </span>
+                  <span className="chip mono">
+                    {data.templateIds?.length || 0} templates
+                  </span>
+                  <span className="chip mono">
+                    {data.quota?.limit === null
+                      ? "∞ Unlimited"
+                      : fmt(data.quota.limit)}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+          {kind === "nodes" && (
+            <div className="form-note">
+              Native Hysteria 2 · self-signed cert. Network changes require a
+              reapply operation.
+            </div>
+          )}
+        </aside>
+        <form
+          id={formId}
+          className="studio-stack"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (
+              kind !== "nodes" &&
+              data.quota?.reset?.kind === "interval" &&
+              !Number.isFinite(Date.parse(data.quota.reset.anchor || ""))
+            ) {
+              setError("Anchor (UTC) must be a valid date and time.");
+              return;
+            }
+            setBusy(true);
+            setError("");
+            onSave(data)
+              .catch((e) => setError(e.message))
+              .finally(() => setBusy(false));
+          }}
+        >
+          <div className="studio-card">
+            <div className="studio-card-head">
+              <h2>{kind === "users" ? "Profile" : "Connection"}</h2>
+              <SwitchPill
                 checked={data.enabled}
-                onChange={(e) => set("enabled", e.target.checked)}
+                onChange={(next) => set("enabled", next)}
               />
-              Enabled
-            </label>
+            </div>
+            <div className="form-grid">
+              {input("name", "Display name")}
+              {kind === "hosts" && (
+                <>
+                  {input("address", "SSH address")}
+                  {input("port", "SSH port", "number")}
+                  {input("username", "SSH username")}
+                  <Field label="Authentication">
+                    <SegmentedControl
+                      fullWidth
+                      value={data.authType}
+                      options={[
+                        ["key", "Private key"],
+                        ["password", "Password"],
+                      ]}
+                      onChange={(t) => set("authType", t)}
+                    />
+                  </Field>
+                  <div className="full">
+                    <Field
+                      label={
+                        data.authType === "key" ? "Private key" : "SSH password"
+                      }
+                      hint={
+                        row
+                          ? "Leave empty to retain current credential."
+                          : undefined
+                      }
+                    >
+                      {data.authType === "key" ? (
+                        <TextArea
+                          rows={4}
+                          value={data.credential}
+                          onChange={(e) => set("credential", e.target.value)}
+                          required={!row}
+                        />
+                      ) : (
+                        <Input
+                          type="password"
+                          autoComplete="new-password"
+                          value={data.credential}
+                          onChange={(e) => set("credential", e.target.value)}
+                          required={!row}
+                        />
+                      )}
+                    </Field>
+                  </div>
+                  {data.authType === "key" && (
+                    <div className="full">
+                      {input("passphrase", "Key passphrase", "password")}
+                    </div>
+                  )}
+                  {!row && (
+                    <>
+                      {input("initialIn", "Initial inbound bytes", "number")}
+                      {input("initialOut", "Initial outbound bytes", "number")}
+                    </>
+                  )}
+                </>
+              )}
+              {kind === "nodes" && (
+                <>
+                  <Field label="VPS">
+                    <Select
+                      value={data.hostId}
+                      disabled={!!row}
+                      placeholder="Select trusted VPS"
+                      options={state.hosts
+                        .filter(
+                          (h) =>
+                            h.fingerprint &&
+                            (h.id === data.hostId ||
+                              !state.nodes.some((n) => n.hostId === h.id)),
+                        )
+                        .map((h) => ({ value: h.id, label: h.name }))}
+                      onChange={(v) => set("hostId", v)}
+                    />
+                  </Field>
+                  {input("address", "Advertised IP / domain")}
+                  {input("port", "UDP listen port", "number", undefined, {
+                    min: 1,
+                    max: 65535,
+                    step: 1,
+                  })}
+                  {input(
+                    "hopping",
+                    "Hopping range",
+                    "text",
+                    "e.g. 20000-50000",
+                  )}
+                  {input(
+                    "hopInterval",
+                    "Hop interval (sec)",
+                    "number",
+                    undefined,
+                    { min: 5, step: 1 },
+                  )}
+                  {input("upMbps", "Upload hint (Mbps)", "number", undefined, {
+                    min: 0,
+                    step: 1,
+                  })}
+                  {input(
+                    "downMbps",
+                    "Download hint (Mbps)",
+                    "number",
+                    undefined,
+                    { min: 0, step: 1 },
+                  )}
+                </>
+              )}
+              {kind === "users" && (
+                <>
+                  {input("note", "Note")}
+                  <Field label="Expires (UTC)" hint="Empty = never">
+                    <DateTimePicker
+                      value={toDatetimeLocal(data.expires)}
+                      placeholder="Never expires"
+                      onChange={(val) => set("expires", fromDatetimeLocal(val))}
+                    />
+                  </Field>
+                </>
+              )}
+            </div>
           </div>
           {kind !== "nodes" && (
             <QuotaFields value={data.quota} onChange={(q) => set("quota", q)} />
           )}
           {kind === "users" && (
-            <>
-              <fieldset>
-                <legend>Authorized nodes</legend>
-                <button
-                  type="button"
-                  className="text-button"
+            <div className="studio-card">
+              <div className="studio-card-head">
+                <h2>Access Matrix</h2>
+                <Button
+                  variant="text"
                   onClick={() =>
                     set(
                       "nodeIds",
@@ -524,103 +647,71 @@ export function EntityForm({
                     )
                   }
                 >
-                  Select current nodes
-                </button>
-                <div className="check-grid">
-                  {state.nodes
+                  Select all nodes
+                </Button>
+              </div>
+              <div className="matrix-section">
+                <span className="kpi-label">AUTHORIZED NODES</span>
+                <ChipPicker
+                  options={state.nodes
                     .filter((n) => !n.deleting)
-                    .map((n) => (
-                      <label key={n.id} className="check-field">
-                        <input
-                          type="checkbox"
-                          checked={data.nodeIds.includes(n.id)}
-                          onChange={(e) =>
-                            set(
-                              "nodeIds",
-                              e.target.checked
-                                ? [...data.nodeIds, n.id]
-                                : data.nodeIds.filter(
-                                    (id: string) => id !== n.id,
-                                  ),
-                            )
-                          }
-                        />
-                        {n.name}
-                      </label>
-                    ))}
-                </div>
-                {!state.nodes.length && (
-                  <small>No nodes yet. You can assign them later.</small>
-                )}
-              </fieldset>
-              <fieldset>
-                <legend>Available templates</legend>
-                <div className="check-grid">
-                  {state.templates
+                    .map((n) => ({ id: n.id, label: n.name }))}
+                  selected={data.nodeIds}
+                  emptyText="No nodes yet."
+                  onToggle={(id) =>
+                    set(
+                      "nodeIds",
+                      data.nodeIds.includes(id)
+                        ? data.nodeIds.filter((x: string) => x !== id)
+                        : [...data.nodeIds, id],
+                    )
+                  }
+                />
+              </div>
+              <div className="matrix-section">
+                <span className="kpi-label">TEMPLATES</span>
+                <ChipPicker
+                  options={state.templates
                     .filter((t) => t.published)
-                    .map((t) => (
-                      <label key={t.id} className="check-field">
-                        <input
-                          type="checkbox"
-                          checked={data.templateIds.includes(t.id)}
-                          onChange={(e) => {
-                            const checked = e.target.checked;
-                            setData((prev) => {
-                              const nextTemplateIds = checked
-                                ? prev.templateIds.includes(t.id)
-                                  ? prev.templateIds
-                                  : [...prev.templateIds, t.id]
-                                : prev.templateIds.filter(
-                                    (id: string) => id !== t.id,
-                                  );
-                              const nextDefault = !checked
-                                ? prev.defaultTemplate === t.id
-                                  ? nextTemplateIds[0] || ""
-                                  : prev.defaultTemplate
-                                : prev.defaultTemplate || t.id;
-                              return {
-                                ...prev,
-                                templateIds: nextTemplateIds,
-                                defaultTemplate: nextDefault,
-                              };
-                            });
-                          }}
-                        />
-                        {t.name}
-                      </label>
-                    ))}
-                </div>
-                <Field label="Default template">
-                  <select
-                    value={data.defaultTemplate}
-                    onChange={(e) => set("defaultTemplate", e.target.value)}
-                    required
-                  >
-                    <option value="">Choose template</option>
-                    {state.templates
-                      .filter((t) => data.templateIds.includes(t.id))
-                      .map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                  </select>
-                </Field>
-              </fieldset>
-            </>
+                    .map((t) => ({ id: t.id, label: t.name }))}
+                  selected={data.templateIds}
+                  emptyText="No published templates."
+                  onToggle={(id) => {
+                    setData((prev) => {
+                      const active = prev.templateIds.includes(id);
+                      const nextTemplateIds = active
+                        ? prev.templateIds.filter((x: string) => x !== id)
+                        : [...prev.templateIds, id];
+                      const nextDefault = active
+                        ? prev.defaultTemplate === id
+                          ? nextTemplateIds[0] || ""
+                          : prev.defaultTemplate
+                        : prev.defaultTemplate || id;
+                      return {
+                        ...prev,
+                        templateIds: nextTemplateIds,
+                        defaultTemplate: nextDefault,
+                      };
+                    });
+                  }}
+                />
+              </div>
+              <Field label="Default template">
+                <Select
+                  value={data.defaultTemplate}
+                  placeholder="Choose template"
+                  options={state.templates
+                    .filter((t) => data.templateIds.includes(t.id))
+                    .map((t) => ({ value: t.id, label: t.name }))}
+                  onChange={(v) => set("defaultTemplate", v)}
+                />
+              </Field>
+            </div>
           )}
           {error && <p className="form-error">{error}</p>}
-        </div>
-        <div className="dialog-footer">
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="primary" disabled={busy}>
-            {busy ? "Saving…" : "Save changes"}
-          </button>
-        </div>
-      </form>
-    </Dialog>
+        </form>
+      </div>
+    </Stage>
   );
 }
 
@@ -639,8 +730,9 @@ export function OperationForm({
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   return (
-    <Dialog
-      title={`${kind === "command" ? "Generate deployment command" : kind} · ${node.name}`}
+    <Modal
+      title={node.name}
+      tag={kind === "command" ? "Deploy command" : kind}
       onClose={onClose}
     >
       <form
@@ -652,43 +744,39 @@ export function OperationForm({
             .finally(() => setBusy(false));
         }}
       >
-        <div className="dialog-body">
-          <p>
-            Service changes may interrupt all users on this node. Configuration
-            is preserved before replacement.
+        <div className="modal-body">
+          <p className="muted">
+            Service changes may interrupt active connections on this node.
           </p>
           <Field label="Target Hysteria 2 version">
-            <input
+            <Input
               value={version}
               required
               pattern="v2\.\d+\.\d+"
-              placeholder="v2.x.y"
+              placeholder="v2.6.1"
               onChange={(e) => setVersion(e.target.value)}
             />
           </Field>
           {kind === "reapply" && (
             <p className="form-note">
-              Explicitly replaces remote configuration with platform settings,
-              including any manual edits. Inspect the configuration drift before
-              proceeding.
+              Replaces remote configuration with platform settings, including
+              manual edits.
             </p>
           )}
           {error && <p className="form-error">{error}</p>}
         </div>
-        <div className="dialog-footer">
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="primary" disabled={busy}>
+        <div className="modal-foot">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={busy}>
             {busy
               ? "Working…"
               : kind === "command"
                 ? "Generate command"
                 : "Queue operation"}
-          </button>
+          </Button>
         </div>
       </form>
-    </Dialog>
+    </Modal>
   );
 }
 
@@ -709,7 +797,7 @@ export function Correction({
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   return (
-    <Dialog title="Correct current-period usage" onClose={onClose}>
+    <Modal title={host.name} tag="Usage correction" onClose={onClose}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -719,20 +807,22 @@ export function Correction({
             .finally(() => setBusy(false));
         }}
       >
-        <div className="dialog-body">
-          {(["inbound", "outbound"] as const).map((k) => (
-            <Field key={k} label={`${k} bytes`}>
-              <input
-                type="number"
-                min="0"
-                required
-                value={v[k]}
-                onChange={(e) => setV({ ...v, [k]: Number(e.target.value) })}
-              />
-            </Field>
-          ))}
+        <div className="modal-body">
+          <div className="form-grid">
+            {(["inbound", "outbound"] as const).map((k) => (
+              <Field key={k} label={`${k} bytes`}>
+                <Input
+                  type="number"
+                  min="0"
+                  required
+                  value={v[k]}
+                  onChange={(e) => setV({ ...v, [k]: Number(e.target.value) })}
+                />
+              </Field>
+            ))}
+          </div>
           <Field label="Reason">
-            <input
+            <Input
               required
               value={v.reason}
               onChange={(e) => setV({ ...v, reason: e.target.value })}
@@ -740,16 +830,14 @@ export function Correction({
           </Field>
           {error && <p className="form-error">{error}</p>}
         </div>
-        <div className="dialog-footer">
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="primary" disabled={busy}>
+        <div className="modal-foot">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={busy}>
             Apply correction
-          </button>
+          </Button>
         </div>
       </form>
-    </Dialog>
+    </Modal>
   );
 }
 
@@ -778,14 +866,9 @@ export function ForceRemove({
         Remote cleanup will be recorded as unverified. Running services may
         remain on the server.
       </p>
-      <label className="check-field">
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={(e) => setChecked(e.target.checked)}
-        />
+      <Checkbox checked={checked} onChange={setChecked}>
         The host is destroyed, or I will handle remote services independently.
-      </label>
+      </Checkbox>
     </Confirm>
   );
 }
@@ -807,7 +890,8 @@ export function TemplateEditor({
     [userId, setUserId] = useState(state.users[0]?.id || ""),
     [preview, setPreview] = useState(""),
     [error, setError] = useState(""),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [confirmDelete, setConfirmDelete] = useState(false);
   const save = async () => {
     if (id) {
       await api(`templates/${id}`, "PUT", { name, body });
@@ -841,92 +925,110 @@ export function TemplateEditor({
     }
   };
   return (
-    <Dialog
-      title={template ? "Edit template" : "New template"}
+    <Stage
+      title={name || (template ? "Edit template" : "New template")}
+      tag="Template Studio"
       onClose={onClose}
-      wide
+      actions={
+        <>
+          {id && (
+            <Button
+              variant="danger-text"
+              disabled={busy}
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete
+            </Button>
+          )}
+          <Button disabled={busy || !name} onClick={() => void action("save")}>
+            Save draft
+          </Button>
+          <Button
+            disabled={busy || !userId || !name}
+            onClick={() => void action("preview")}
+          >
+            Validate & preview
+          </Button>
+          <Button
+            variant="primary"
+            disabled={busy || !userId || !name || !preview}
+            onClick={() => void action("publish")}
+          >
+            {busy ? "Working…" : "Publish"}
+          </Button>
+        </>
+      }
     >
-      <div className="dialog-body">
-        <Field label="Template name">
-          <input value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
-        <p className="muted">
-          Liquid data only. Available: proxies, choices, user.name. Use the yaml
-          and indent filters. File loading and scripts are disabled.
-        </p>
-        <textarea
-          className="template-source"
-          spellCheck={false}
-          rows={18}
-          value={body}
-          onChange={(e) => {
-            setBody(e.target.value);
-            setPreview("");
+      {confirmDelete && (
+        <Confirm
+          title={`Delete ${name || "template"}?`}
+          action="Delete"
+          danger
+          onClose={() => setConfirmDelete(false)}
+          onConfirm={async () => {
+            await api(`templates/${id}`, "DELETE");
+            await refresh();
+            setConfirmDelete(false);
+            onClose();
           }}
-        />
-        <Field label="Preview as user">
-          <select
-            value={userId}
+        >
+          <p>Only unassigned templates can be deleted.</p>
+        </Confirm>
+      )}
+      {error && <p className="form-error">{error}</p>}
+      <div className="ide-grid">
+        <div className="studio-card ide-pane">
+          <div className="studio-card-head">
+            <Input
+              className="ide-name-input"
+              placeholder="Template name…"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <Chip mono>Liquid · YAML</Chip>
+          </div>
+          <TextArea
+            className="template-source ide-editor"
+            spellCheck={false}
+            rows={22}
+            value={body}
             onChange={(e) => {
-              setUserId(e.target.value);
+              setBody(e.target.value);
               setPreview("");
             }}
-          >
-            <option value="">Choose user</option>
-            {state.users.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        {!state.users.length && (
-          <small>
-            Create a user with the built-in template before publishing a custom
-            template.
-          </small>
-        )}
-        {error && <p className="form-error">{error}</p>}
-        {preview && (
-          <>
-            <Badge tone="good">Validated · credentials hidden</Badge>
-            <pre className="code-output">{preview}</pre>
-          </>
-        )}
+          />
+        </div>
+        <div className="studio-card ide-pane">
+          <div className="studio-card-head">
+            <div className="ide-preview-bar">
+              <FileCode2 size={15} className="muted" />
+              <Select
+                value={userId}
+                placeholder="Preview as user…"
+                options={state.users.map((u) => ({
+                  value: u.id,
+                  label: u.name,
+                }))}
+                onChange={(v) => {
+                  setUserId(v);
+                  setPreview("");
+                }}
+              />
+            </div>
+            {preview && <Badge tone="good">Validated</Badge>}
+          </div>
+          {preview ? (
+            <pre className="code-output ide-output">{preview}</pre>
+          ) : (
+            <div className="ide-empty">
+              <p className="muted">
+                Click <strong>Validate & preview</strong> to render output for
+                the selected user.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
-      <div className="dialog-footer">
-        {id && (
-          <button
-            className="danger-text"
-            disabled={busy}
-            onClick={() => {
-              if (confirm("Delete this unassigned template?"))
-                void api(`templates/${id}`, "DELETE")
-                  .then(refresh)
-                  .then(onClose)
-                  .catch((e) => setError(e.message));
-            }}
-          >
-            Delete
-          </button>
-        )}
-        <button disabled={busy || !name} onClick={() => void action("save")}>
-          Save draft
-        </button>
-        <button
-          disabled={busy || !userId || !name}
-          onClick={() => void action("preview")}
-        >
-          Validate & preview
-        </button>
-        <button
-          className="primary"
-          disabled={busy || !userId || !name || !preview}
-          onClick={() => void action("publish")}
-        >
-          {busy ? "Working…" : "Publish"}
-        </button>
-      </div>
-    </Dialog>
+    </Stage>
   );
 }

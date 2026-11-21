@@ -9,7 +9,14 @@ import {
   YAxis,
 } from "recharts";
 import { api, when } from "./client";
-import { Dialog, Empty, Field } from "./components";
+import {
+  DateTimePicker,
+  Empty,
+  Field,
+  RingMeter,
+  SegmentedControl,
+  Stage,
+} from "./components";
 import type { Row } from "./types";
 type HistorySnapshot = {
   entityId: string;
@@ -129,44 +136,43 @@ export function History({
       : null,
     incompleteCustom = range === "custom" && (!custom.start || !custom.end);
   return (
-    <Dialog title={`${entity.name} · history`} onClose={onClose} wide>
-      <div className="dialog-body" aria-busy={loading}>
-        <div className="range-tabs">
-          {[
-            ["24", "24 hours"],
-            ["168", "7 days"],
-            ["720", "30 days"],
+    <Stage
+      title={entity.name}
+      tag="Telemetry"
+      subtitle={entity.address ? `${entity.address}${entity.port ? ":" + entity.port : ""}` : undefined}
+      onClose={onClose}
+      actions={
+        <SegmentedControl
+          value={range}
+          options={[
+            ["24", "24h"],
+            ["168", "7d"],
+            ["720", "30d"],
             ["custom", "Custom"],
-          ].map(([v, label]) => (
-            <button
-              className={range === v ? "selected" : ""}
-              key={v}
-              onClick={() => setRange(v)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+          ]}
+          onChange={setRange}
+        />
+      }
+    >
+      <div className="telemetry-stack" aria-busy={loading}>
         {range === "custom" && (
-          <div className="form-grid">
-            <Field label="Start (UTC)">
-              <input
-                type="datetime-local"
-                value={custom.start}
-                onChange={(e) =>
-                  setCustom((prev) => ({ ...prev, start: e.target.value }))
-                }
-              />
-            </Field>
-            <Field label="End (UTC)">
-              <input
-                type="datetime-local"
-                value={custom.end}
-                onChange={(e) =>
-                  setCustom((prev) => ({ ...prev, end: e.target.value }))
-                }
-              />
-            </Field>
+          <div className="studio-card">
+            <div className="form-grid">
+              <Field label="Start (UTC)">
+                <DateTimePicker
+                  value={custom.start}
+                  onChange={(start) =>
+                    setCustom((prev) => ({ ...prev, start }))
+                  }
+                />
+              </Field>
+              <Field label="End (UTC)">
+                <DateTimePicker
+                  value={custom.end}
+                  onChange={(end) => setCustom((prev) => ({ ...prev, end }))}
+                />
+              </Field>
+            </div>
           </div>
         )}
         {error && (
@@ -175,140 +181,239 @@ export function History({
           </p>
         )}
         {entity.kind === "host" && (
-          <div className="history-stats">
-            <span>
-              Observed availability{" "}
-              <strong>
-                {availability === null ? "—" : availability.toFixed(2) + "%"}
-              </strong>
-            </span>
-            <span>
-              Monitoring coverage{" "}
-              <strong>{current ? coverage.toFixed(1) + "%" : "—"}</strong>
-            </span>
-            <span>
-              Host uptime{" "}
-              <strong>
-                {entity.uptime
-                  ? Math.floor(entity.uptime / 86400) +
-                    "d " +
-                    Math.floor((entity.uptime % 86400) / 3600) +
-                    "h"
-                  : "—"}
-              </strong>
-            </span>
+          <div className="telemetry-kpis">
+            <div className="studio-card telemetry-kpi-card">
+              <RingMeter
+                percent={availability ?? 0}
+                size={60}
+                tone={
+                  availability === null
+                    ? "accent"
+                    : availability >= 95
+                      ? "good"
+                      : availability >= 80
+                        ? "warning"
+                        : "danger"
+                }
+                label="Availability"
+              />
+              <div>
+                <span className="kpi-label">AVAILABILITY</span>
+                <strong className="telemetry-big">
+                  {availability === null ? "—" : availability.toFixed(2) + "%"}
+                </strong>
+              </div>
+            </div>
+            <div className="studio-card telemetry-kpi-card">
+              <RingMeter
+                percent={current ? coverage : 0}
+                size={60}
+                tone="accent"
+                label="Coverage"
+              />
+              <div>
+                <span className="kpi-label">COVERAGE</span>
+                <strong className="telemetry-big">
+                  {current ? coverage.toFixed(1) + "%" : "—"}
+                </strong>
+              </div>
+            </div>
+            <div className="studio-card telemetry-kpi-card">
+              <div>
+                <span className="kpi-label">HOST UPTIME</span>
+                <strong className="telemetry-big mono">
+                  {entity.uptime
+                    ? Math.floor(entity.uptime / 86400) +
+                      "d " +
+                      Math.floor((entity.uptime % 86400) / 3600) +
+                      "h"
+                    : "—"}
+                </strong>
+              </div>
+            </div>
           </div>
         )}
         {loading ? (
-          <p className="muted">Loading history…</p>
+          <div className="studio-card">
+            <p className="muted">Loading telemetry…</p>
+          </div>
         ) : !current ? (
           !error &&
           incompleteCustom && (
-            <p className="muted">
-              Enter start and end timestamps to load history.
-            </p>
+            <div className="studio-card">
+              <p className="muted">
+                Enter start and end timestamps to load history.
+              </p>
+            </div>
           )
         ) : (
           <>
-            <h3>Traffic (MiB{unitSuffix})</h3>
-            {!samples.length ? (
-              <Empty title="No observations in this range">
-                Unknown periods are not recorded as host downtime.
-              </Empty>
-            ) : (
-              <div className="chart">
-                <ResponsiveContainer width="100%" height={230}>
-                  <AreaChart
-                    data={samples.map((p) => ({
-                      ...p,
-                      time: when(p.at),
-                      inMiB: p.inbound / 1024 ** 2,
-                      outMiB: p.outbound / 1024 ** 2,
-                    }))}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis
-                      dataKey="time"
-                      tick={{ fontSize: 10 }}
-                      minTickGap={60}
-                    />
-                    <YAxis tick={{ fontSize: 10 }} width={45} />
-                    <Tooltip />
-                    <Area
-                      dataKey="outMiB"
-                      name={`Outbound MiB${unitSuffix}`}
-                      stroke="var(--accent)"
-                      fill="var(--accent-soft)"
-                    />
-                    <Area
-                      dataKey="inMiB"
-                      name={`Inbound MiB${unitSuffix}`}
-                      stroke="var(--good)"
-                      fill="var(--good-soft)"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+            <div
+              className={
+                entity.kind === "host" && samples.some((p) => p.cpu !== null)
+                  ? "charts-grid"
+                  : ""
+              }
+            >
+              <section className="panel">
+                <div className="panel-heading compact">
+                  <h2>Traffic (MiB{unitSuffix})</h2>
+                </div>
+                <div className="chart-pad">
+                  {!samples.length ? (
+                    <Empty title="No observations">
+                      Unknown periods are not recorded as downtime.
+                    </Empty>
+                  ) : (
+                    <div className="chart">
+                      <ResponsiveContainer width="100%" height={260}>
+                        <AreaChart
+                          data={samples.map((p) => ({
+                            ...p,
+                            time: when(p.at),
+                            inMiB: p.inbound / 1024 ** 2,
+                            outMiB: p.outbound / 1024 ** 2,
+                          }))}
+                        >
+                          <CartesianGrid
+                            stroke="var(--border)"
+                            strokeDasharray="3 3"
+                            vertical={false}
+                          />
+                          <XAxis
+                            dataKey="time"
+                            stroke="var(--border)"
+                            tick={{ fontSize: 10, fill: "var(--muted)" }}
+                            minTickGap={60}
+                          />
+                          <YAxis
+                            stroke="var(--border)"
+                            tick={{ fontSize: 10, fill: "var(--muted)" }}
+                            width={45}
+                          />
+                          <Tooltip
+                            contentStyle={{
+                              background: "var(--surface)",
+                              border: "1px solid var(--border)",
+                              borderRadius: "6px",
+                              color: "var(--ink)",
+                              fontSize: "12px",
+                            }}
+                            labelStyle={{ color: "var(--muted)" }}
+                          />
+                          <Area
+                            dataKey="outMiB"
+                            name={`Outbound MiB${unitSuffix}`}
+                            stroke="var(--accent)"
+                            fill="var(--accent-soft)"
+                          />
+                          <Area
+                            dataKey="inMiB"
+                            name={`Inbound MiB${unitSuffix}`}
+                            stroke="var(--good)"
+                            fill="var(--good-soft)"
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+              </section>
+              {entity.kind === "host" &&
+                samples.some((p) => p.cpu !== null) && (
+                  <section className="panel">
+                    <div className="panel-heading compact">
+                      <h2>Resource utilization (%)</h2>
+                    </div>
+                    <div className="chart-pad">
+                      <div className="chart">
+                        <ResponsiveContainer width="100%" height={260}>
+                          <AreaChart
+                            data={samples.map((p) => ({
+                              ...p,
+                              time: when(p.at),
+                            }))}
+                          >
+                            <CartesianGrid
+                              stroke="var(--border)"
+                              strokeDasharray="3 3"
+                              vertical={false}
+                            />
+                            <XAxis
+                              dataKey="time"
+                              stroke="var(--border)"
+                              tick={{ fontSize: 10, fill: "var(--muted)" }}
+                              minTickGap={60}
+                            />
+                            <YAxis
+                              domain={[0, 100]}
+                              stroke="var(--border)"
+                              tick={{ fontSize: 10, fill: "var(--muted)" }}
+                              width={35}
+                            />
+                            <Tooltip
+                              contentStyle={{
+                                background: "var(--surface)",
+                                border: "1px solid var(--border)",
+                                borderRadius: "6px",
+                                color: "var(--ink)",
+                                fontSize: "12px",
+                              }}
+                              labelStyle={{ color: "var(--muted)" }}
+                            />
+                            <Area
+                              dataKey="cpu"
+                              name="CPU mean"
+                              stroke="var(--accent)"
+                              fill="var(--accent-soft)"
+                            />
+                            <Area
+                              dataKey="cpu_max"
+                              name="CPU max"
+                              stroke="var(--warning)"
+                              fill="none"
+                            />
+                            <Area
+                              dataKey="memory"
+                              name="Memory mean"
+                              stroke="var(--good)"
+                              fill="none"
+                            />
+                            <Area
+                              dataKey="disk"
+                              name="Disk mean"
+                              stroke="var(--muted)"
+                              fill="none"
+                            />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </section>
+                )}
+            </div>
+            <section className="panel">
+              <div className="panel-heading compact">
+                <h2>Events</h2>
+                <span className="count">{events.length}</span>
               </div>
-            )}
-            {entity.kind === "host" && samples.some((p) => p.cpu !== null) && (
-              <>
-                <h3>Resource utilization (%)</h3>
-                <div className="chart">
-                  <ResponsiveContainer width="100%" height={200}>
-                    <AreaChart
-                      data={samples.map((p) => ({ ...p, time: when(p.at) }))}
-                    >
-                      <XAxis
-                        dataKey="time"
-                        tick={{ fontSize: 10 }}
-                        minTickGap={60}
-                      />
-                      <YAxis domain={[0, 100]} width={35} />
-                      <Tooltip />
-                      <Area
-                        dataKey="cpu"
-                        name="CPU mean"
-                        stroke="var(--accent)"
-                        fill="var(--accent-soft)"
-                      />
-                      <Area
-                        dataKey="cpu_max"
-                        name="CPU max"
-                        stroke="var(--warning)"
-                        fill="none"
-                      />
-                      <Area
-                        dataKey="memory"
-                        name="Memory mean"
-                        stroke="var(--good)"
-                        fill="none"
-                      />
-                      <Area
-                        dataKey="disk"
-                        name="Disk mean"
-                        stroke="var(--muted)"
-                        fill="none"
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              </>
-            )}
-            <h3>Accounting & operation events</h3>
-            {events.length ? (
-              events.map((e: Row) => (
-                <div className="event-line" key={e.id}>
-                  <strong>{e.type}</strong>
-                  <small>{when(e.at)}</small>
-                  <pre>{e.data}</pre>
-                </div>
-              ))
-            ) : (
-              <p className="muted">No events in this range.</p>
-            )}
+              <div className="events-pad">
+                {events.length ? (
+                  events.map((e: Row) => (
+                    <div className="event-line" key={e.id}>
+                      <strong>{e.type}</strong>
+                      <small className="mono">{when(e.at)}</small>
+                      <pre>{e.data}</pre>
+                    </div>
+                  ))
+                ) : (
+                  <p className="muted">No events in this range.</p>
+                )}
+              </div>
+            </section>
           </>
         )}
       </div>
-    </Dialog>
+    </Stage>
   );
 }
