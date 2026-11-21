@@ -370,6 +370,16 @@ describe("authorization and templates", () => {
     );
     expect(await denied.json()).toEqual({ ok: false });
   });
+  test("subscription downloads without a mihomo binary", async () => {
+    const { user } = fixture();
+    s.config.mihomoBinary = join(dir, "missing-mihomo");
+    const app = createApp(s);
+    const response = await app.request(
+      `/sub/${s.secrets(user.id).subscriptionToken}`,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("203.0.113.1");
+  });
   test("revoked nodes disappear immediately without stale fallback", () => {
     const { node, user } = fixture();
     const before = render(s, user, defaultTemplate);

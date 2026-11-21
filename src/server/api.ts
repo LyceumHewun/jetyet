@@ -170,7 +170,7 @@ export function createApp(s: Store) {
       validated.add(h);
     }
   }
-  app.get("/sub/:token", async (c) => {
+  app.get("/sub/:token", (c) => {
     const rawToken = c.req.param("token");
     const row = s.db
       .query<{ entity: string }, [string, string]>(
@@ -196,7 +196,6 @@ export function createApp(s: Store) {
     let text: string;
     try {
       text = render(s, u, template.body);
-      await checked(text);
     } catch (err) {
       return c.text(
         err instanceof Error ? err.message : "Subscription validation failed",

@@ -4,7 +4,7 @@ A personal Hysteria 2 control plane for your VPS hosts and friends' mihomo subsc
 
 ## Run locally
 
-Requirements: Bun 1.3.5 or newer. Remote management also needs reachable Debian/Ubuntu VPS hosts with root or passwordless sudo, Python 3, curl, OpenSSL, iproute2, util-linux (`flock`) and systemd. Native binary deployment currently supports amd64 and arm64. Port hopping requires iptables and ip6tables. Install the official Hysteria 2 executable and mihomo executable on the management server for end-to-end node probes and subscription validation; configure their paths.
+Requirements: Bun 1.3.5 or newer. Remote management also needs reachable Debian/Ubuntu VPS hosts with root or passwordless sudo, Python 3, curl, OpenSSL, iproute2, util-linux (`flock`) and systemd. Native binary deployment currently supports amd64 and arm64. Port hopping requires iptables and ip6tables. Install Hysteria 2 for end-to-end node probes and mihomo for template validation on the management server. Configure both executable paths.
 
 ```sh
 bun install --frozen-lockfile
@@ -84,7 +84,7 @@ proxies:
 {{ proxies | yaml | indent: 2 }}
 ```
 
-Publish a **complete** configuration, including DNS, proxy groups and rules. Choose a user for a credential-redacted preview; publication validates all assigned users using mihomo. The built-in template uses `DIRECT` when no authorized nodes remain. Every generated subscription is structurally checked and its exact content is validated by mihomo before it is served; old credentials or revoked nodes are never served as a fallback. Keep the mihomo executable available on Web.
+Save drafts while editing, including incomplete configurations. Preview and publication use mihomo for validation, and publication checks every assigned user's configuration. Publish a **complete** configuration, including DNS, proxy groups and rules. The built-in template uses `DIRECT` when no authorized nodes remain. Subscription downloads render the published template using current authorizations and credentials and check the resulting structure in-process.
 
 ## Development checks
 

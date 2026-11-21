@@ -173,12 +173,13 @@ The proportion of expected reachability observations actually performed during a
 - Rotating VPN credentials invalidates the previous credentials; the user must refresh their subscription to obtain working configurations.
 - **Subscription Templates** can define complete client configurations, including rules, groups, and DNS settings, with the platform supplying authorized node data and user-specific credentials.
 - Templates render data and do not execute arbitrary scripts.
+- Administrators can save incomplete template drafts for later editing. Drafts become available to subscribers only after successful publication.
 - Publishing a template requires a user-specific preview and successful configuration validation; previews hide credentials by default.
 - Invalid configuration syntax or references to nonexistent node groups block publication and leave the current valid template active.
 - Subscription output is a complete, directly usable mihomo configuration rather than a fragment requiring local merging.
 - The built-in default template includes DNS settings, proxy groups, and routing rules; custom templates must also produce complete configurations.
 - Templates use dynamic authorized node collections and must handle empty groups according to explicit validity rules.
-- Generated subscriptions are validated after node membership changes; if no valid configuration can be rendered, retrieval returns a clear error rather than serving stale configurations containing revoked nodes or obsolete credentials.
+- Client compatibility validation belongs to template authoring. Subscription retrieval renders the published template with current node authorizations and credentials, checks the generated structure, and returns an error if it cannot produce a structurally valid configuration.
 - Multiple **Subscription Templates** may target the same output format.
 - Administrators assign each **Subscription User** a set of available templates and a default template.
 - Users obtain configurations through the corresponding subscription links; selecting a template does not alter node authorization or traffic allowances.
