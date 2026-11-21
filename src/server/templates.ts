@@ -14,6 +14,25 @@ const engine = new Liquid({
 });
 const credentialField =
   /(?:^|[-_])(?:password|passwd|uuid|token|secret|username|authentication|auth|authorization|key|cookie|psk)(?:$|[-_])|^(?:api|private|access)key$/i;
+
+function isCredentialField(key: string) {
+  return credentialField.test(key.replace(/([a-z0-9])([A-Z])/g, "$1-$2"));
+}
+
+function redactQueryCredentials(value: string) {
+  return value.replace(
+    /([?&])([^=&#\s]+)=[^&#\s]+/g,
+    (match, delimiter: string, key: string) => {
+      let decoded = key;
+      try {
+        decoded = decodeURIComponent(key);
+      } catch {
+        // Malformed escapes can still contain a recognizable credential key.
+      }
+      return isCredentialField(decoded) ? `${delimiter}${key}=REDACTED` : match;
+    },
+  );
+}
 const commaPayloadRules = new Set([
   "NOT",
   "OR",
@@ -71,23 +90,21 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
     if (typeof value === "string") {
       const renamed = names.get(value);
       if (renamed) return renamed;
-      return value
-        .replace(
-          /\/sub\/[a-zA-Z0-9_-]+|\/set-password#[a-zA-Z0-9_-]+/g,
-          "[REDACTED]",
-        )
-        .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1REDACTED@")
-        .replace(
-          /([?&](?:token|secret|password|key|auth)=)[^&#\s]+/gi,
-          "$1REDACTED",
-        );
+      return redactQueryCredentials(
+        value
+          .replace(
+            /\/sub\/[a-zA-Z0-9_-]+|\/set-password#[a-zA-Z0-9_-]+/g,
+            "[REDACTED]",
+          )
+          .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1REDACTED@"),
+      );
     }
     if (Array.isArray(value)) return value.map(redact);
     if (value && typeof value === "object")
       return Object.fromEntries(
         Object.entries(value).map(([key, item]) => [
           key,
-          credentialField.test(key)
+          isCredentialField(key)
             ? Array.isArray(item)
               ? []
               : "REDACTED"

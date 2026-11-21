@@ -586,7 +586,7 @@ describe("authorization and templates", () => {
 proxy-providers:
   example:
     type: http
-    url: socks5://proxy-user:proxy-password@provider.invalid/list
+    url: socks5://proxy-user:proxy-password@provider.invalid/list?%61pi_key=secret-query-value&accessToken=secret-query-value&source=fixture
     header:
       X-Api-Key: [secret-header-value]
 {% endif %}`;
@@ -601,6 +601,8 @@ proxy-providers:
     expect(simulatedText).not.toContain("203.0.113.1");
     expect(simulatedText).not.toContain("proxy-password");
     expect(simulatedText).not.toContain("secret-header-value");
+    expect(simulatedText).not.toContain("secret-query-value");
+    expect(simulatedText).toContain("source=fixture");
   });
 });
 describe("queue and encryption", () => {
