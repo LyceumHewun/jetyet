@@ -96,8 +96,10 @@ export const zhHans = {
     "默认使用 Brutal。更改会在部署或安装检测成功后发布到订阅。",
   "Adaptive performance tuning": "自适应性能调优",
   "Enable adaptive performance tuning": "启用自适应性能调优",
-  "Optional and off by default. Raises UDP socket buffers and creates swap on low-memory VPS when needed; existing changes stay if disabled later.":
-    "默认关闭的可选项。按需提升 UDP 套接字缓冲区并在低内存 VPS 上创建交换分区；后续禁用时保留已有系统更改。",
+  "Optional and off by default. May raise low UDP socket buffers and add swap on low-memory VPS when host conditions allow; applied changes stay if disabled later.":
+    "默认关闭的可选项。在主机条件允许时尝试提升过低的 UDP 套接字缓冲区并在低内存 VPS 上添加交换空间；后续禁用时已应用的更改会保留。",
+  "BBR requires Hysteria 2 v2.8.0 or later.":
+    "BBR 模式要求 Hysteria 2 v2.8.0 或更高版本。",
   "Adaptive tuning: On": "自适应调优：开启",
   "Adaptive tuning: Off": "自适应调优：关闭",
   "Adaptive tuning": "自适应调优",
@@ -584,6 +586,13 @@ export const zhHans = {
   "A node pending deletion cannot run operations":
     "无法在待删除的节点上执行操作",
   "An explicit version is required": "请指定版本",
+  "Specify an explicit Hysteria 2 version": "请明确指定 Hysteria 2 版本",
+  "BBR mode requires Hysteria 2 v2.8.0 or later":
+    "BBR 模式要求 Hysteria 2 v2.8.0 或更高版本",
+  "A verified VPS is required for manual installation":
+    "手动安装需要已验证的 VPS",
+  "Manual installation requires an HTTPS platform origin":
+    "手动安装需要平台使用 HTTPS 来源地址",
   "Invalid archive": "无效的归档类型",
   "Only failed or cancelled tasks can be retried": "只能重试失败或已取消的任务",
   "Unknown action": "未知操作",

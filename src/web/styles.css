@@ -3475,6 +3475,16 @@ body > .os-scrollbar.os-theme-jetyet {
 .deploy-options .field {
   margin-bottom: 0;
 }
+.field-readonly {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
 .deploy-command-box {
   display: grid;
   gap: var(--space-3);
@@ -3520,7 +3530,8 @@ body > .os-scrollbar.os-theme-jetyet {
   flex-wrap: wrap;
 }
 @media (pointer: coarse) {
-  .deploy-options .segmented-control button,
+  .deploy-options .ui-input,
+  .deploy-options .ui-select-trigger,
   .deploy-options .ui-checkbox,
   .deploy-command-head .copy-btn,
   .deploy-command-dialog .modal-foot button {

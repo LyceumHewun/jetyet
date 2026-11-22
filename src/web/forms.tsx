@@ -850,7 +850,15 @@ export function EntityForm({
               kind === "users"
                 ? { ...data, username: (data.username || "").trim() }
                 : kind === "nodes"
-                  ? (({ upMbps: _u, downMbps: _d, ...rest }) => rest)(data)
+                  ? {
+                      hostId: data.hostId,
+                      name: data.name,
+                      address: data.address,
+                      port: data.port,
+                      hopping: data.hopping,
+                      hopInterval: data.hopInterval,
+                      enabled: data.enabled,
+                    }
                   : data;
             onSave(payload)
               .catch((e) => setError(asUiError(e)))
@@ -1139,6 +1147,10 @@ export function OperationForm({
     [busy, setBusy] = useState(false),
     [error, setError] = useState<UiError>("");
   const versionId = useId();
+  const versionHintId = useId();
+  const congestionId = useId();
+  const congestionHintId = useId();
+  const showBbrMinimum = hasDeployOptions || congestion === "bbr";
 
   return (
     <Modal
@@ -1152,6 +1164,7 @@ export function OperationForm({
         onSubmit={(e) => {
           e.preventDefault();
           setBusy(true);
+          setError("");
           onSubmit({
             version,
             protocol: "hysteria2",
@@ -1172,18 +1185,28 @@ export function OperationForm({
             <Field
               label={translate("Target Hysteria 2 version")}
               htmlFor={versionId}
+              hint={
+                showBbrMinimum
+                  ? translate("BBR requires Hysteria 2 v2.8.0 or later.")
+                  : undefined
+              }
+              hintId={versionHintId}
             >
               <Input
                 id={versionId}
                 value={version}
                 required
                 pattern="v2\.\d+\.\d+"
-                placeholder="v2.6.1"
+                placeholder={congestion === "bbr" ? "v2.8.0" : "v2.6.1"}
+                aria-describedby={showBbrMinimum ? versionHintId : undefined}
                 autoFocus
                 autoCorrect="off"
                 autoCapitalize="none"
                 spellCheck={false}
-                onChange={(e) => setVersion(e.target.value)}
+                onChange={(e) => {
+                  setVersion(e.target.value);
+                  if (error) setError("");
+                }}
               />
             </Field>
             {hasDeployOptions && (
@@ -1192,33 +1215,34 @@ export function OperationForm({
                   label={translate("Protocol")}
                   hint={translate("Only Hysteria 2 is supported.")}
                 >
-                  <SegmentedControl
-                    fullWidth
-                    value="hysteria2"
-                    options={[["hysteria2", "Hysteria 2"]]}
-                    onChange={() => {}}
-                  />
+                  <p className="field-readonly">Hysteria 2</p>
                 </Field>
                 <Field
                   label={translate("Congestion control")}
+                  htmlFor={congestionId}
                   hint={translate(
                     "Brutal is the default. Changes publish to subscriptions after deployment or installation detection succeeds.",
                   )}
+                  hintId={congestionHintId}
                 >
-                  <SegmentedControl
-                    fullWidth
+                  <Select
+                    id={congestionId}
+                    aria-describedby={congestionHintId}
                     value={congestion}
                     options={[
-                      ["brutal", "Brutal"],
-                      ["bbr", "BBR"],
+                      { value: "brutal", label: "Brutal" },
+                      { value: "bbr", label: "BBR" },
                     ]}
-                    onChange={setCongestion}
+                    onChange={(v) => {
+                      setCongestion(v as "brutal" | "bbr");
+                      if (error) setError("");
+                    }}
                   />
                 </Field>
                 <Field
                   label={translate("Adaptive performance tuning")}
                   hint={translate(
-                    "Optional and off by default. Raises UDP socket buffers and creates swap on low-memory VPS when needed; existing changes stay if disabled later.",
+                    "Optional and off by default. May raise low UDP socket buffers and add swap on low-memory VPS when host conditions allow; applied changes stay if disabled later.",
                   )}
                 >
                   <Checkbox checked={tuning} onChange={setTuning}>
@@ -1235,7 +1259,11 @@ export function OperationForm({
               )}
             </p>
           )}
-          {error && <p className="form-error">{localizeError(error)}</p>}
+          {error && (
+            <p className="form-error" role="alert">
+              {localizeError(error)}
+            </p>
+          )}
         </ScrollArea>
         <div className="modal-foot">
           <Button onClick={onClose}>{translate("Cancel")}</Button>
