@@ -149,23 +149,27 @@ export async function runOperation(
       checkpoint(1, "Detecting platform-owned deployment");
       let actual = JSON.parse(await run(detectionScript));
       const detected = deploymentRequestSchema.safeParse(actual);
-      const curHost = s.get(h.id);
-      const curNode = s.get(n.id);
-      if (
-        !curHost ||
-        curHost.deleted ||
-        curHost.deleting ||
-        !curNode ||
-        curNode.deleted ||
-        curNode.deleting ||
-        curNode.hostId !== curHost.id
-      )
-        throw Error("Entity removed during detection");
+      const current = () => {
+        const host = s.get(t.host);
+        const node = s.get(n.id);
+        if (
+          !host ||
+          host.deleted ||
+          host.deleting ||
+          !node ||
+          node.deleted ||
+          node.deleting ||
+          node.hostId !== host.id
+        )
+          throw Error("Entity removed during detection");
+        return { node, active: Boolean(host.enabled && node.enabled) };
+      };
+      const planned = current();
       if (
         !detected.success ||
         !matchesDeployment(
           s,
-          curNode,
+          planned.node,
           actual,
           detected.data,
           detected.data.version,
@@ -173,14 +177,14 @@ export async function runOperation(
       )
         throw Error("Remote deployment does not match the planned node");
       const { version, ...options } = detected.data;
-      const wantActive = !!(curHost.enabled && curNode.enabled);
-      if (actual.active !== wantActive) {
+      const verifyState = async (wantActive: boolean) => {
+        if (actual.active === wantActive) return;
         await run(
           `set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl ${wantActive ? "start" : "stop"} jetyet-hysteria.service\n`,
         );
         actual = JSON.parse(await run(detectionScript));
         if (
-          !matchesDeployment(s, curNode, actual, options, version) ||
+          !matchesDeployment(s, planned.node, actual, options, version) ||
           actual.active !== wantActive
         )
           throw Error(
@@ -188,43 +192,34 @@ export async function runOperation(
               ? "Remote deployment failed to start with verified rules"
               : "Remote deployment failed to stop",
           );
-      }
-      const shouldStop = s.db
+      };
+      await verifyState(planned.active);
+      const beforePublish = current();
+      if (!matchesDeployment(s, beforePublish.node, actual, options, version))
+        throw Error("Planned node configuration changed during detection");
+      await verifyState(beforePublish.active);
+      s.db
         .transaction(() => {
-          const latestHost = s.get(h.id);
-          const latestNode = s.get(n.id);
+          const latest = current();
           if (
-            !latestHost ||
-            latestHost.deleted ||
-            latestHost.deleting ||
-            !latestNode ||
-            latestNode.deleted ||
-            latestNode.deleting ||
-            latestNode.hostId !== latestHost.id
+            !matchesDeployment(s, latest.node, actual, options, version) ||
+            actual.active !== latest.active
           )
-            throw Error("Entity removed during detection");
-          if (!matchesDeployment(s, latestNode, actual, options, version))
             throw Error("Planned node configuration changed during detection");
           s.put(
             "node",
             {
-              ...strip(latestNode),
+              ...strip(latest.node),
               ...options,
               status: "ready",
-              version: actual.version,
+              version,
               configHash: actual.configHash,
             },
             undefined,
-            latestNode.id,
+            latest.node.id,
           );
-          return !(latestHost.enabled && latestNode.enabled);
         })
         .immediate();
-      if (shouldStop && actual.active) {
-        await run(
-          "set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl stop jetyet-hysteria.service\n",
-        );
-      }
     } else if (t.kind === "host-state" || t.kind === "node-state") {
       const curHost = s.get(h.id);
       const curNode = p.nodeId
