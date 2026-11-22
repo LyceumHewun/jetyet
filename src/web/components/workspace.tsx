@@ -242,6 +242,14 @@ export function Modal({
   );
 }
 
+export function ModalBody({ children }: { children: ReactNode }) {
+  return (
+    <ScrollArea axis="y" className="modal-body">
+      <div className="modal-body-content">{children}</div>
+    </ScrollArea>
+  );
+}
+
 export function Confirm({
   title,
   children,
@@ -265,10 +273,10 @@ export function Confirm({
       tag={danger ? translate("Danger") : translate("Confirm")}
       onClose={onClose}
     >
-      <ScrollArea axis="y" className="modal-body">
+      <ModalBody>
         {children}
         {error && <p className="form-error">{localizeError(error)}</p>}
-      </ScrollArea>
+      </ModalBody>
       <div className="modal-foot">
         <button type="button" onClick={onClose}>
           {translate("Cancel")}
@@ -312,11 +320,11 @@ export function Code({
       onClose={onClose}
       wide
     >
-      <ScrollArea axis="y" className="modal-body">
+      <ModalBody>
         <ScrollArea className="code-output">
           <pre>{text}</pre>
         </ScrollArea>
-      </ScrollArea>
+      </ModalBody>
       <div className="modal-foot">
         <button
           type="button"

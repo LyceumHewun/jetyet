@@ -33,6 +33,7 @@ import {
   Field,
   Input,
   Modal,
+  ModalBody,
   Select,
   TextArea,
 } from "./components";
@@ -157,7 +158,7 @@ function CreatePersonalTemplateModal({
           }
         }}
       >
-        <ScrollArea axis="y" className="modal-body">
+        <ModalBody>
           <Field label={translate("Copy from published template")}>
             <Select
               value={sourceId}
@@ -191,7 +192,7 @@ function CreatePersonalTemplateModal({
               {localizeError(error)}
             </p>
           )}
-        </ScrollArea>
+        </ModalBody>
         <div className="modal-foot">
           <Button onClick={onClose} disabled={busy}>
             {translate("Cancel")}

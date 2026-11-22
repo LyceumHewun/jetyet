@@ -39,4 +39,13 @@ export {
   type ScrollAxis,
 } from "./Scrollbars";
 export { Select, type SelectOption } from "./Select";
-export { Actions, Code, Confirm, Empty, Modal, Stage, Table } from "./workspace";
+export {
+  Actions,
+  Code,
+  Confirm,
+  Empty,
+  Modal,
+  ModalBody,
+  Stage,
+  Table,
+} from "./workspace";

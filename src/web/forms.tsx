@@ -31,6 +31,7 @@ import {
   Field,
   Input,
   Modal,
+  ModalBody,
   SegmentedControl,
   Select,
   Stage,
@@ -1137,7 +1138,7 @@ export function OperationForm({
   const isVerified = node.status
     ? node.status !== "draft"
     : Boolean(node.version);
-  const [version, setVersion] = useState(node.version || ""),
+  const [version, setVersion] = useState(node.version || "v2.14.0"),
     [congestion, setCongestion] = useState<"brutal" | "bbr">(
       isVerified && node.congestion === "bbr" ? "bbr" : "brutal",
     ),
@@ -1175,7 +1176,7 @@ export function OperationForm({
             .finally(() => setBusy(false));
         }}
       >
-        <ScrollArea axis="y" className="modal-body">
+        <ModalBody>
           <p className="muted">
             {translate(
               "Service changes may interrupt active connections on this node.",
@@ -1197,7 +1198,6 @@ export function OperationForm({
                 value={version}
                 required
                 pattern="v2\.\d+\.\d+"
-                placeholder={congestion === "bbr" ? "v2.8.0" : "v2.6.1"}
                 aria-describedby={showBbrMinimum ? versionHintId : undefined}
                 autoFocus
                 autoCorrect="off"
@@ -1264,7 +1264,7 @@ export function OperationForm({
               {localizeError(error)}
             </p>
           )}
-        </ScrollArea>
+        </ModalBody>
         <div className="modal-foot">
           <Button onClick={onClose}>{translate("Cancel")}</Button>
           <Button variant="primary" type="submit" disabled={busy}>
@@ -1311,7 +1311,7 @@ export function Correction({
             .finally(() => setBusy(false));
         }}
       >
-        <ScrollArea axis="y" className="modal-body">
+        <ModalBody>
           <div className="form-grid">
             {(["inbound", "outbound"] as const).map((k) => (
               <Field
@@ -1339,7 +1339,7 @@ export function Correction({
             />
           </Field>
           {error && <p className="form-error">{localizeError(error)}</p>}
-        </ScrollArea>
+        </ModalBody>
         <div className="modal-foot">
           <Button onClick={onClose}>{translate("Cancel")}</Button>
           <Button variant="primary" type="submit" disabled={busy}>

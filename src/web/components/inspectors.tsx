@@ -5,7 +5,7 @@ import { useState } from "react";
 import { when } from "../client";
 import type { Row } from "../types";
 import { Badge, Button, Chip, CopyButton, SearchInput } from "./primitives";
-import { Modal } from "./workspace";
+import { Modal, ModalBody } from "./workspace";
 
 export type LinkItem = {
   id: string;
@@ -72,51 +72,49 @@ export function SubscriptionLinksModal({
       onClose={onClose}
       className="link-dialog"
     >
-      <ScrollArea axis="y" className="link-dialog-scroll">
-        <div className="link-dialog-content">
-          {defaultItem && (
-            <ul className="subscription-link-list">
-              <SubscriptionLinkRow item={defaultItem} />
-            </ul>
-          )}
+      <ModalBody>
+        {defaultItem && (
+          <ul className="subscription-link-list">
+            <SubscriptionLinkRow item={defaultItem} />
+          </ul>
+        )}
 
-          {templateItems.length > 0 && (
-            <section className="link-templates-block">
-              <div className="link-templates-bar">
-                <div className="chip-group">
-                  <h3>{translate("Templates")}</h3>
-                  <Chip mono>
-                    {q
-                      ? `${filtered.length}/${templateItems.length}`
-                      : templateItems.length}
-                  </Chip>
-                </div>
-                {templateItems.length > 3 && (
-                  <SearchInput
-                    value={query}
-                    onChange={setQuery}
-                    placeholder={translate(
-                      "Filter {0} templates…",
-                      templateItems.length,
-                    )}
-                  />
-                )}
+        {templateItems.length > 0 && (
+          <section className="link-templates-block">
+            <div className="link-templates-bar">
+              <div className="chip-group">
+                <h3>{translate("Templates")}</h3>
+                <Chip mono>
+                  {q
+                    ? `${filtered.length}/${templateItems.length}`
+                    : templateItems.length}
+                </Chip>
               </div>
-              {filtered.length ? (
-                <ul className="subscription-link-list">
-                  {filtered.map((item) => (
-                    <SubscriptionLinkRow key={item.id} item={item} />
-                  ))}
-                </ul>
-              ) : (
-                <p className="diff-empty muted">
-                  {translate("No templates matching “{0}”.", query)}
-                </p>
+              {templateItems.length > 3 && (
+                <SearchInput
+                  value={query}
+                  onChange={setQuery}
+                  placeholder={translate(
+                    "Filter {0} templates…",
+                    templateItems.length,
+                  )}
+                />
               )}
-            </section>
-          )}
-        </div>
-      </ScrollArea>
+            </div>
+            {filtered.length ? (
+              <ul className="subscription-link-list">
+                {filtered.map((item) => (
+                  <SubscriptionLinkRow key={item.id} item={item} />
+                ))}
+              </ul>
+            ) : (
+              <p className="diff-empty muted">
+                {translate("No templates matching “{0}”.", query)}
+              </p>
+            )}
+          </section>
+        )}
+      </ModalBody>
       <div className="modal-foot">
         <CopyButton
           text={allText}
@@ -172,7 +170,7 @@ export function DriftModal({
       onClose={onClose}
       wide
     >
-      <ScrollArea axis="y" className="modal-body">
+      <ModalBody>
         <div className="diff-grid">
           <div className="diff-pane">
             <div className="diff-pane-head">
@@ -225,7 +223,7 @@ export function DriftModal({
             )}
           </div>
         </div>
-      </ScrollArea>
+      </ModalBody>
       <div className="modal-foot">
         <Button
           onClick={() =>
@@ -275,7 +273,7 @@ export function LogsModal({
       onClose={onClose}
       wide
     >
-      <ScrollArea axis="y" className="modal-body">
+      <ModalBody>
         {logs.length ? (
           <div className="log-timeline mono">
             {logs.map((l, idx) => (
@@ -294,7 +292,7 @@ export function LogsModal({
             <span>{translate("No detailed log recorded.")}</span>
           </div>
         )}
-      </ScrollArea>
+      </ModalBody>
       <div className="modal-foot">
         <Button
           onClick={() =>
@@ -337,53 +335,51 @@ export function DeployCommandModal({
       onClose={onClose}
       className="link-dialog deploy-command-dialog"
     >
-      <ScrollArea axis="y" className="link-dialog-scroll">
-        <div className="link-dialog-content">
-          <div className="deploy-command-box">
-            <div className="deploy-command-head">
-              <div className="chip-group">
-                <Chip>Hysteria 2</Chip>
-                <Chip>{congestion === "bbr" ? "BBR" : "Brutal"}</Chip>
-                <Chip>
-                  {tuning
-                    ? translate("Adaptive tuning: On")
-                    : translate("Adaptive tuning: Off")}
-                </Chip>
-              </div>
-              <CopyButton
-                text={command}
-                label={translate("Copy command")}
-                ariaLabel={translate("Copy deploy command")}
-              />
-            </div>
-            <ScrollArea
-              axis="x"
-              className="deploy-command-scroll"
-              role="region"
-              aria-label={translate("Deploy command")}
-              tabIndex={0}
-            >
-              <code className="deploy-command-line">{command}</code>
-            </ScrollArea>
-          </div>
-          <div className="password-link-meta">
+      <ModalBody>
+        <div className="deploy-command-box">
+          <div className="deploy-command-head">
             <div className="chip-group">
-              <Badge tone="warning">{translate("Valid for 15 minutes")}</Badge>
-              {expiresAt && (
-                <Chip mono>
-                  {translate("Expires") + " "}
-                  {when(expiresAt)}
-                </Chip>
-              )}
+              <Chip>Hysteria 2</Chip>
+              <Chip>{congestion === "bbr" ? "BBR" : "Brutal"}</Chip>
+              <Chip>
+                {tuning
+                  ? translate("Adaptive tuning: On")
+                  : translate("Adaptive tuning: Off")}
+              </Chip>
             </div>
-            <p className="muted">
-              {translate(
-                "This command is bound to the selected options, expires in 15 minutes, and can be re-downloaded before expiry for retries. After running it on the VPS, select Detect installation to verify the deployment.",
-              )}
-            </p>
+            <CopyButton
+              text={command}
+              label={translate("Copy command")}
+              ariaLabel={translate("Copy deploy command")}
+            />
           </div>
+          <ScrollArea
+            axis="x"
+            className="deploy-command-scroll"
+            role="region"
+            aria-label={translate("Deploy command")}
+            tabIndex={0}
+          >
+            <code className="deploy-command-line">{command}</code>
+          </ScrollArea>
         </div>
-      </ScrollArea>
+        <div className="password-link-meta">
+          <div className="chip-group">
+            <Badge tone="warning">{translate("Valid for 15 minutes")}</Badge>
+            {expiresAt && (
+              <Chip mono>
+                {translate("Expires") + " "}
+                {when(expiresAt)}
+              </Chip>
+            )}
+          </div>
+          <p className="muted">
+            {translate(
+              "This command is bound to the selected options, expires in 15 minutes, and can be re-downloaded before expiry for retries. After running it on the VPS, select Detect installation to verify the deployment.",
+            )}
+          </p>
+        </div>
+      </ModalBody>
       <div className="modal-foot">
         <Button onClick={onDetect}>{translate("Detect installation")}</Button>
         <Button variant="primary" onClick={onClose}>
@@ -416,34 +412,32 @@ export function PasswordLinkModal({
       onClose={onClose}
       className="link-dialog"
     >
-      <ScrollArea axis="y" className="link-dialog-scroll">
-        <div className="link-dialog-content">
-          <div className="link-row is-featured">
-            <div className="link-row-name chip-group">
-              <strong>{userName}</strong>
-              {username && <span className="muted">@{username}</span>}
-              <Badge tone="good">{translate("Single-use")}</Badge>
-            </div>
-            <code className="link-row-url" title={url}>
-              {url}
-            </code>
-            <div className="link-card-actions">
-              <CopyButton text={url} label={translate("Copy link")} />
-            </div>
+      <ModalBody>
+        <div className="link-row is-featured">
+          <div className="link-row-name chip-group">
+            <strong>{userName}</strong>
+            {username && <span className="muted">@{username}</span>}
+            <Badge tone="good">{translate("Single-use")}</Badge>
           </div>
-          <div className="password-link-meta">
-            <Chip mono>
-              {translate("Expires") + " "}
-              {when(expires)}
-            </Chip>
-            <p className="muted">
-              {translate(
-                "Generating this link invalidated any prior unused link; existing password and sessions stay active until replaced.",
-              )}
-            </p>
+          <code className="link-row-url" title={url}>
+            {url}
+          </code>
+          <div className="link-card-actions">
+            <CopyButton text={url} label={translate("Copy link")} />
           </div>
         </div>
-      </ScrollArea>
+        <div className="password-link-meta">
+          <Chip mono>
+            {translate("Expires") + " "}
+            {when(expires)}
+          </Chip>
+          <p className="muted">
+            {translate(
+              "Generating this link invalidated any prior unused link; existing password and sessions stay active until replaced.",
+            )}
+          </p>
+        </div>
+      </ModalBody>
       <div className="modal-foot">
         <Button variant="primary" onClick={onClose}>
           {translate("Done")}
