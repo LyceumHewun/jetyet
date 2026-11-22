@@ -5,7 +5,7 @@ This document defines the visual design system and UI conventions for Jetyet (`s
 ## Layout
 
 - **Console Shell**: Top command bar (`max-width: 1360px` centered) with the brand on the left, 4-domain segmented view switcher (`Infra`, `Users`, `Templates`, `Activity`) in the center, and compact utility controls on the right. No left sidebar.
-- **Spatial In-Place Expand Bento**: Primary collections (`Infra` hosts+nodes and `Users`) render in a responsive spatial grid where clicking any card expands it full-width (`grid-column: 1 / -1`) in-place to reveal live inline telemetry charts, ring meters, and quick controls while sibling cards remain visible directly below. Default to expanding the first host in `Infra` for 0-click telemetry visibility.
+- **Spatial In-Place Expand Bento**: Primary collections (`Infra` hosts+nodes and `Users`) render in a responsive spatial grid where clicking any card expands it full-width (`grid-column: 1 / -1`) in-place to reveal live inline telemetry charts, ring meters, and quick controls while sibling cards remain visible directly below. Animate card resizing and repositioning with one view transition on expand and collapse. Honor reduced motion. Restore the last console view and both collections' expansion state from browser storage. Default to expanding the first host when no saved host is available, and preserve an explicit collapse.
 - **Full-Canvas `Stage` vs. Lightweight `Modal`**:
   - Use full-canvas `Stage` views (with top `← Back` bar, 2-column live-preview studios, or split IDE) for heavy/rich workflows: creating/editing entities (`EntityForm`), template editing (`TemplateEditor`), full telemetry (`History`), and archives. Never use slide-over drawers.
   - Use crisp flat `Modal` dialogs (`src/web/components/workspace.tsx`) for confirmations (`Confirm`, `ForceRemove`), notices, quick code/link/log inspection (`Code`), and lightweight input prompts (`Correction`, `OperationForm`), so the user keeps spatial context behind the overlay.
@@ -89,7 +89,7 @@ Always reference CSS custom properties defined in `src/web/styles.css` and suppo
 ## Typography, Spacing & Interactions
 
 - **Font Stacks**:
-  - `--font`: use the browser's default `sans-serif` in the English interface to preserve its original rendered typography. In Simplified Chinese, use Arial for Latin text followed by platform CJK sans-serif families such as PingFang SC, Microsoft YaHei, and Noto Sans CJK SC. The UI uses locally installed fonts.
+  - `--font`: use `"Space Grotesk Variable", sans-serif` for the English interface. Serve the Latin variable font with the app. In Simplified Chinese, use Arial for Latin text followed by platform CJK sans-serif families such as PingFang SC, Microsoft YaHei, and Noto Sans CJK SC.
   - `--mono`: `ui-monospace, "Cascadia Code", Consolas, monospace` for metrics, timestamps, addresses, URLs, logs, and template code. Add platform CJK fallbacks in the Simplified Chinese interface.
 - **Type Scale & Tokens**: Use `rem` tokens (`--text-2xs` `0.625rem` / 10px, `--text-xs` `0.6875rem` / 11px, `--text-sm` `0.75rem` / 12px, `--text-md` `0.8125rem` / 13px, `--text-base` `0.875rem` / 14px, `--text-lg` `0.9375rem` / 15px, `--text-xl` `1rem` / 16px, `--text-2xl` `1.25rem` / 20px, `--text-h1` `clamp(1.5rem, 2.5vw, 1.75rem)`) so typography respects browser root font-size preferences. Headings use `text-wrap: balance`; helper and guidance copy use `text-wrap: pretty`.
 - **UI Typography Usage**: Map every UI text role to an explicit font family, size token, and weight in `src/web/styles.css`:

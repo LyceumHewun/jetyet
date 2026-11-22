@@ -31,6 +31,7 @@ import {
   Field,
   Input,
   Modal,
+  ModalBody,
   SegmentedControl,
   Select,
   Stage,
@@ -1175,7 +1176,7 @@ export function OperationForm({
             .finally(() => setBusy(false));
         }}
       >
-        <ScrollArea axis="y" className="modal-body">
+        <ModalBody>
           <p className="muted">
             {translate(
               "Service changes may interrupt active connections on this node.",
@@ -1264,7 +1265,7 @@ export function OperationForm({
               {localizeError(error)}
             </p>
           )}
-        </ScrollArea>
+        </ModalBody>
         <div className="modal-foot">
           <Button onClick={onClose}>{translate("Cancel")}</Button>
           <Button variant="primary" type="submit" disabled={busy}>
@@ -1311,7 +1312,7 @@ export function Correction({
             .finally(() => setBusy(false));
         }}
       >
-        <ScrollArea axis="y" className="modal-body">
+        <ModalBody>
           <div className="form-grid">
             {(["inbound", "outbound"] as const).map((k) => (
               <Field
@@ -1339,7 +1340,7 @@ export function Correction({
             />
           </Field>
           {error && <p className="form-error">{localizeError(error)}</p>}
-        </ScrollArea>
+        </ModalBody>
         <div className="modal-foot">
           <Button onClick={onClose}>{translate("Cancel")}</Button>
           <Button variant="primary" type="submit" disabled={busy}>

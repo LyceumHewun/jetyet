@@ -1,4 +1,13 @@
 /* YunYoo-inspired minimalist flat theme · Light & Dark */
+@font-face {
+  font-family: "Space Grotesk Variable";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2")
+    format("woff2");
+}
+
 :root {
   color-scheme: light;
   --space-1: 4px;
@@ -40,7 +49,7 @@
   --scrollbar-thumb-hover: rgba(107, 114, 128, 0.58);
   --scrollbar-thumb-active: var(--accent);
   --scrollbar-track-hover: rgba(17, 24, 39, 0.04);
-  --font: sans-serif;
+  --font: "Space Grotesk Variable", sans-serif;
   --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
   --text-2xs: 0.625rem;
   --text-xs: 0.6875rem;
@@ -592,7 +601,23 @@ svg.spinning {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
-  animation: cardReveal 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+:root.spatial-transition {
+  view-transition-name: none;
+}
+.spatial-transition .spatial-grid > .spatial-card {
+  view-transition-name: match-element;
+}
+:root.spatial-transition::view-transition {
+  pointer-events: none;
+}
+:root.spatial-transition::view-transition-group(*) {
+  animation-duration: 220ms;
+  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+:root.spatial-transition::view-transition-image-pair(*) {
+  overflow: clip;
+  border-radius: var(--radius-lg);
 }
 .expanded-head {
   display: flex;
@@ -1692,13 +1717,16 @@ tr:last-child td {
   margin-top: 4px;
 }
 .modal-body {
-  padding: var(--space-5);
+  flex: 1 1 auto;
   overflow: auto;
   min-height: 0;
+  font-size: var(--text-md);
+}
+.modal-body-content {
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  font-size: var(--text-md);
 }
 .modal-foot {
   display: flex;
@@ -2689,7 +2717,7 @@ legend {
     padding: var(--space-4);
   }
   .dialog-body,
-  .modal-body,
+  .modal-body-content,
   .link-dialog-content {
     padding: var(--space-4);
   }
@@ -2735,16 +2763,6 @@ legend {
   }
   .expanded-head-right > button:not(.icon-button) {
     padding-inline: var(--space-2);
-  }
-}
-@keyframes cardReveal {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
   }
 }
 @keyframes stageIn {
@@ -2805,6 +2823,11 @@ legend {
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  :root.spatial-transition::view-transition-group(*),
+  :root.spatial-transition::view-transition-old(*),
+  :root.spatial-transition::view-transition-new(*) {
+    animation: none;
+  }
   * {
     animation: none !important;
     transition: none !important;
@@ -3347,19 +3370,6 @@ body > .os-scrollbar.os-theme-jetyet {
   --os-padding-perpendicular: 1px;
 }
 
-.modal-body[data-overlayscrollbars] {
-  flex: 1 1 auto;
-  min-height: 0;
-  padding: 0;
-}
-.modal-body[data-overlayscrollbars] > [data-overlayscrollbars-viewport],
-.modal-body[data-overlayscrollbars] > [data-overlayscrollbars-padding] > [data-overlayscrollbars-viewport] {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-5);
-}
-
 .action-popover[data-overlayscrollbars] {
   position: fixed;
   padding: 0;
@@ -3543,9 +3553,5 @@ body > .os-scrollbar.os-theme-jetyet {
   .login-toolbar {
     top: var(--space-3);
     right: var(--space-3);
-  }
-  .modal-body[data-overlayscrollbars] > [data-overlayscrollbars-viewport],
-  .modal-body[data-overlayscrollbars] > [data-overlayscrollbars-padding] > [data-overlayscrollbars-viewport] {
-    padding: var(--space-4);
   }
 }

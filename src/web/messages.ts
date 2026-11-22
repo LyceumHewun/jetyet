@@ -241,6 +241,7 @@ export const zhHans = {
   "Delete node": "删除节点",
   "SSH Trusted": "SSH 已受信",
   "Verify SSH": "验证 SSH",
+  "Verifying SSH…": "正在验证 SSH…",
   "Stale data": "数据已过时",
   Edit: "编辑",
   Collapse: "收起",
