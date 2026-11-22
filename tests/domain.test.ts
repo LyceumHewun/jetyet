@@ -80,6 +80,7 @@ function fixture() {
       status: "ready",
       port: 443,
       address: "203.0.113.1",
+      hopping: "",
     },
     { authSecret: token(), statsSecret: token(), probeToken: token() },
   );
@@ -692,6 +693,154 @@ describe("queue and encryption", () => {
   });
 });
 describe("detect operation and concurrent safety", () => {
+  test.each(["deploy", "detect"] as const)(
+    "%s preserves the published mode if the service cannot stop",
+    async (kind) => {
+      const { host, node } = fixture();
+      s.put(
+        "node",
+        { ...strip(node), enabled: kind === "detect", congestion: "brutal" },
+        undefined,
+        node.id,
+      );
+      const version = "v2.13.0";
+      const options = {
+        protocol: "hysteria2",
+        congestion: "bbr",
+        tuning: true,
+      } as const;
+      const tuningLog = "Adaptive tuning: existing swap preserved";
+      const hash = digest(serverConfig(s, node, options));
+      enqueue(
+        s,
+        host.id,
+        kind,
+        kind === "deploy"
+          ? { nodeId: node.id, version, ...options }
+          : { nodeId: node.id },
+      );
+      const task = claim(s, false, "ops")!;
+      let active = kind === "deploy";
+      await expect(
+        runOperation(s, task, async (script) => {
+          if (script.includes("systemctl start jetyet-hysteria.service")) {
+            active = true;
+            s.put(
+              "node",
+              { ...strip(s.get(node.id)!), enabled: false },
+              undefined,
+              node.id,
+            );
+            return "";
+          }
+          if (script.includes("systemctl stop jetyet-hysteria.service"))
+            throw Error("Unable to stop");
+          if (script !== detectionScript) return tuningLog;
+          return JSON.stringify({
+            ...options,
+            owner: "jetyet",
+            phase: "ready",
+            version,
+            actualVersion: version,
+            nodeId: node.id,
+            hostId: host.id,
+            address: node.address,
+            port: node.port,
+            hopping: node.hopping,
+            configHash: hash,
+            actualHash: hash,
+            active,
+          });
+        }),
+      ).rejects.toThrow("Unable to stop");
+      expect(s.get(node.id)?.congestion).toBe("brutal");
+      if (kind === "deploy")
+        expect(
+          s.db
+            .query<{ message: string }, [string]>(
+              "SELECT message FROM task_logs WHERE task=? ORDER BY id",
+            )
+            .all(task.id)
+            .map(({ message }) => message),
+        ).toContain(tuningLog);
+    },
+  );
+
+  test("manual install is retryable for 15 minutes and publishes BBR only after detection", async () => {
+    const { host, node, user } = fixture();
+    const app = createApp(s);
+    const post = (path: string, body: unknown, cookie = "") =>
+      app.request(path, {
+        method: "POST",
+        headers: { origin: s.config.origin, cookie },
+        body: JSON.stringify(body),
+      });
+    const login = await post("/api/login", {
+      username: "ADMIN",
+      password: "correct-password",
+    });
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const options = {
+      protocol: "hysteria2",
+      congestion: "bbr",
+      tuning: true,
+    } as const;
+    const version = "v2.13.0";
+    const route = `/api/nodes/${node.id}/command`;
+    expect((await post(route, { version, ...options })).status).toBe(401);
+    expect(
+      (await post(route, { version: "v2.7.1", ...options }, cookie)).status,
+    ).toBe(400);
+    const issued = await post(route, { version, ...options }, cookie);
+    expect(issued.status).toBe(200);
+    const { command, expiresAt } = await issued.json();
+    expect(expiresAt).toBe(new Date(now + 900000).toISOString());
+    expect(command).toContain('&& bash "$file"');
+    expect(command).not.toContain("\n");
+    const path = new URL(command.match(/https:\/\/[^']+/)[0]).pathname;
+    const download = await app.request(path);
+    expect(download.headers.get("cache-control")).toBe("no-store");
+    const script = await download.text();
+    expect(script).toContain("Adaptive tuning:");
+    expect(script).toContain(version);
+    expect(await (await app.request(path)).text()).toBe(script);
+    expect(render(s, user, defaultTemplate)).toContain("up: 1000");
+    setSystemTime(now + 900000);
+    expect((await app.request(path)).status).toBe(404);
+
+    const hash = digest(serverConfig(s, node, options));
+    const manifest = (installedVersion: string) =>
+      JSON.stringify({
+        ...options,
+        owner: "jetyet",
+        phase: "ready",
+        version: installedVersion,
+        actualVersion: installedVersion,
+        nodeId: node.id,
+        hostId: host.id,
+        address: node.address,
+        port: node.port,
+        hopping: node.hopping,
+        configHash: hash,
+        actualHash: hash,
+        active: true,
+      });
+    enqueue(s, host.id, "detect", { nodeId: node.id });
+    const unsupported = claim(s, false, "ops")!;
+    await expect(
+      runOperation(s, unsupported, async () => manifest("v2.7.1")),
+    ).rejects.toThrow("BBR mode requires Hysteria 2 v2.8.0 or later");
+    finish(s, unsupported, "failed");
+    expect(render(s, user, defaultTemplate)).toContain("up: 1000");
+
+    enqueue(s, host.id, "detect", { nodeId: node.id });
+    const task = claim(s, false, "ops")!;
+    await runOperation(s, task, async () => manifest(version));
+    expect(s.get(node.id)?.congestion).toBe("bbr");
+    expect(render(s, user, defaultTemplate)).not.toContain("up: 1000");
+    expect(render(s, user, defaultTemplate)).not.toContain("down: 1000");
+  });
+
   test("detect keeps disabled nodes stopped and re-verifies active state when starting", async () => {
     const { host, node } = fixture();
     const actualHash = digest(serverConfig(s, node));
@@ -703,6 +852,10 @@ describe("detect operation and concurrent safety", () => {
         actualVersion: "v2.6.5",
         nodeId: node.id,
         hostId: host.id,
+        address: node.address,
+        protocol: "hysteria2",
+        congestion: "brutal",
+        tuning: false,
         configHash: actualHash,
         actualHash,
         hopping: "20000-50000",
@@ -773,6 +926,10 @@ describe("detect operation and concurrent safety", () => {
         actualVersion: "v2.6.5",
         nodeId: node.id,
         hostId: host.id,
+        address: node.address,
+        protocol: "hysteria2",
+        congestion: "brutal",
+        tuning: false,
         configHash: actualHash,
         actualHash,
         hopping: "",
@@ -791,6 +948,7 @@ describe("detect operation and concurrent safety", () => {
     const t1 = claim(s, false, "ops")!;
     let detects = 0;
     const cmds: string[] = [];
+    let stopped = false;
     await runOperation(s, t1, async (script) => {
       cmds.push(script);
       if (script.includes("systemctl start")) {
@@ -803,9 +961,12 @@ describe("detect operation and concurrent safety", () => {
         enqueue(s, host.id, "node-state", { nodeId: node.id });
         return "";
       }
-      if (script.includes("systemctl stop")) return "";
+      if (script.includes("systemctl stop")) {
+        stopped = true;
+        return "";
+      }
       detects++;
-      return manifest(detects > 1);
+      return manifest(detects > 1 && !stopped);
     });
     finish(s, t1, "succeeded");
     expect(s.get(node.id)?.status).toBe("ready");

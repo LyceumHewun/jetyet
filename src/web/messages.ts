@@ -89,8 +89,27 @@ export const zhHans = {
   "UDP listen port": "UDP 监听端口",
   "Hopping range": "跳跃端口范围",
   "Hop interval (sec)": "端口跳跃间隔（秒）",
-  "Upload hint (Mbps)": "上传带宽提示（Mbps）",
-  "Download hint (Mbps)": "下载带宽提示（Mbps）",
+  Protocol: "协议",
+  "Only Hysteria 2 is supported.": "仅支持 Hysteria 2。",
+  "Congestion control": "拥塞控制",
+  "Brutal is the default. Changes publish to subscriptions after deployment or installation detection succeeds.":
+    "默认使用 Brutal。更改会在部署或安装检测成功后发布到订阅。",
+  "Adaptive performance tuning": "自适应性能调优",
+  "Enable adaptive performance tuning": "启用自适应性能调优",
+  "Optional and off by default. May raise low UDP socket buffers and add swap on low-memory VPS when host conditions allow; applied changes stay if disabled later.":
+    "默认关闭的可选项。在主机条件允许时尝试提升过低的 UDP 套接字缓冲区并在低内存 VPS 上添加交换空间；后续禁用时已应用的更改会保留。",
+  "BBR requires Hysteria 2 v2.8.0 or later.":
+    "BBR 模式要求 Hysteria 2 v2.8.0 或更高版本。",
+  "Adaptive tuning: On": "自适应调优：开启",
+  "Adaptive tuning: Off": "自适应调优：关闭",
+  "Adaptive tuning": "自适应调优",
+  "Run this single-line command on the VPS as root.":
+    "以 root 身份在 VPS 上运行此单行命令。",
+  "Copy command": "复制命令",
+  "Copy deploy command": "复制部署命令",
+  "Valid for 15 minutes": "15 分钟内有效",
+  "This command is bound to the selected options, expires in 15 minutes, and can be re-downloaded before expiry for retries. After running it on the VPS, select Detect installation to verify the deployment.":
+    "此命令已绑定所选配置，15 分钟内有效，过期前可重复下载用于重试。在 VPS 上执行后，请选择「检测安装」以验证部署。",
   "Sign-in username": "登录用户名",
   "ASCII letters, digits, . _ - (max 100)":
     "ASCII 字母、数字、点号、下划线或连字符，最多 100 个字符",
@@ -567,6 +586,13 @@ export const zhHans = {
   "A node pending deletion cannot run operations":
     "无法在待删除的节点上执行操作",
   "An explicit version is required": "请指定版本",
+  "Specify an explicit Hysteria 2 version": "请明确指定 Hysteria 2 版本",
+  "BBR mode requires Hysteria 2 v2.8.0 or later":
+    "BBR 模式要求 Hysteria 2 v2.8.0 或更高版本",
+  "A verified VPS is required for manual installation":
+    "手动安装需要已验证的 VPS",
+  "Manual installation requires an HTTPS platform origin":
+    "手动安装需要平台使用 HTTPS 来源地址",
   "Invalid archive": "无效的归档类型",
   "Only failed or cancelled tasks can be retried": "只能重试失败或已取消的任务",
   "Unknown action": "未知操作",
