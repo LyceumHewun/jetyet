@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useId,
   useState,
   type InputHTMLAttributes,
   type ReactNode,
@@ -655,8 +656,6 @@ export function EntityForm({
             port: 443,
             hopping: "",
             hopInterval: 30,
-            upMbps: 0,
-            downMbps: 0,
             enabled: true,
             ...row,
           }
@@ -850,7 +849,9 @@ export function EntityForm({
             const payload =
               kind === "users"
                 ? { ...data, username: (data.username || "").trim() }
-                : data;
+                : kind === "nodes"
+                  ? (({ upMbps: _u, downMbps: _d, ...rest }) => rest)(data)
+                  : data;
             onSave(payload)
               .catch((e) => setError(asUiError(e)))
               .finally(() => setBusy(false));
@@ -987,23 +988,6 @@ export function EntityForm({
                     undefined,
                     { min: 5, step: 1 },
                   )}
-                  {input(
-                    "upMbps",
-                    translate("Upload hint (Mbps)"),
-                    "number",
-                    undefined,
-                    {
-                      min: 0,
-                      step: 1,
-                    },
-                  )}
-                  {input(
-                    "downMbps",
-                    translate("Download hint (Mbps)"),
-                    "number",
-                    undefined,
-                    { min: 0, step: 1 },
-                  )}
                 </>
               )}
               {kind === "users" && (
@@ -1123,6 +1107,13 @@ export function EntityForm({
   );
 }
 
+export type NodeOperationPayload = {
+  version: string;
+  protocol: "hysteria2";
+  tuning: boolean;
+  congestion: "brutal" | "bbr";
+};
+
 export function OperationForm({
   node,
   kind,
@@ -1132,11 +1123,23 @@ export function OperationForm({
   node: Row;
   kind: string;
   onClose: () => void;
-  onSubmit: (v: string) => Promise<void>;
+  onSubmit: (payload: NodeOperationPayload) => Promise<void>;
 }) {
+  const hasDeployOptions = kind === "deploy" || kind === "command";
+  const isVerified = node.status
+    ? node.status !== "draft"
+    : Boolean(node.version);
   const [version, setVersion] = useState(node.version || ""),
+    [congestion, setCongestion] = useState<"brutal" | "bbr">(
+      isVerified && node.congestion === "bbr" ? "bbr" : "brutal",
+    ),
+    [tuning, setTuning] = useState<boolean>(
+      isVerified ? Boolean(node.tuning) : false,
+    ),
     [busy, setBusy] = useState(false),
     [error, setError] = useState<UiError>("");
+  const versionId = useId();
+
   return (
     <Modal
       title={node.name}
@@ -1149,7 +1152,12 @@ export function OperationForm({
         onSubmit={(e) => {
           e.preventDefault();
           setBusy(true);
-          onSubmit(version)
+          onSubmit({
+            version,
+            protocol: "hysteria2",
+            tuning,
+            congestion,
+          })
             .catch((e) => setError(asUiError(e)))
             .finally(() => setBusy(false));
         }}
@@ -1160,15 +1168,66 @@ export function OperationForm({
               "Service changes may interrupt active connections on this node.",
             )}
           </p>
-          <Field label={translate("Target Hysteria 2 version")}>
-            <Input
-              value={version}
-              required
-              pattern="v2\.\d+\.\d+"
-              placeholder="v2.6.1"
-              onChange={(e) => setVersion(e.target.value)}
-            />
-          </Field>
+          <div className="deploy-options">
+            <Field
+              label={translate("Target Hysteria 2 version")}
+              htmlFor={versionId}
+            >
+              <Input
+                id={versionId}
+                value={version}
+                required
+                pattern="v2\.\d+\.\d+"
+                placeholder="v2.6.1"
+                autoFocus
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                onChange={(e) => setVersion(e.target.value)}
+              />
+            </Field>
+            {hasDeployOptions && (
+              <>
+                <Field
+                  label={translate("Protocol")}
+                  hint={translate("Only Hysteria 2 is supported.")}
+                >
+                  <SegmentedControl
+                    fullWidth
+                    value="hysteria2"
+                    options={[["hysteria2", "Hysteria 2"]]}
+                    onChange={() => {}}
+                  />
+                </Field>
+                <Field
+                  label={translate("Congestion control")}
+                  hint={translate(
+                    "Brutal is the default. Changes publish to subscriptions after deployment or installation detection succeeds.",
+                  )}
+                >
+                  <SegmentedControl
+                    fullWidth
+                    value={congestion}
+                    options={[
+                      ["brutal", "Brutal"],
+                      ["bbr", "BBR"],
+                    ]}
+                    onChange={setCongestion}
+                  />
+                </Field>
+                <Field
+                  label={translate("Adaptive performance tuning")}
+                  hint={translate(
+                    "Optional and off by default. Raises UDP socket buffers and creates swap on low-memory VPS when needed; existing changes stay if disabled later.",
+                  )}
+                >
+                  <Checkbox checked={tuning} onChange={setTuning}>
+                    {translate("Enable adaptive performance tuning")}
+                  </Checkbox>
+                </Field>
+              </>
+            )}
+          </div>
           {kind === "reapply" && (
             <p className="form-note">
               {translate(

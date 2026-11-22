@@ -46,8 +46,8 @@ import {
   BrandWordmark,
   Button,
   Chip,
-  Code,
   Confirm,
+  DeployCommandModal,
   DriftModal,
   Empty,
   InlineTelemetry,
@@ -414,22 +414,29 @@ function App() {
         node={n}
         kind={kind}
         onClose={() => setModal(null)}
-        onSubmit={async (version) => {
+        onSubmit={async (payload) => {
           if (kind === "command") {
-            const result = await api(`nodes/${n.id}/command`, "POST", {
-              version,
-            });
+            const result = await api(`nodes/${n.id}/command`, "POST", payload);
             setModal(() => (
-              <Code
-                title={translate("Run on this VPS as root")}
-                text={result.script}
+              <DeployCommandModal
+                nodeName={n.name}
+                command={result.command || ""}
+                expiresAt={result.expiresAt || ""}
+                congestion={payload.congestion}
+                tuning={payload.tuning}
+                onDetect={() => {
+                  setModal(null);
+                  act(`nodes/${n.id}/operation`, { kind: "detect" });
+                }}
                 onClose={() => setModal(null)}
               />
             ));
           } else {
-            await run(() =>
-              api(`nodes/${n.id}/operation`, "POST", { kind, version }),
-            );
+            const body =
+              kind === "deploy"
+                ? { kind, ...payload }
+                : { kind, version: payload.version };
+            await run(() => api(`nodes/${n.id}/operation`, "POST", body));
             setModal(null);
           }
         }}
@@ -1087,12 +1094,24 @@ function App() {
                                           {node.hopping && (
                                             <Chip mono>UDP {node.hopping}</Chip>
                                           )}
-                                          {(node.upMbps > 0 ||
-                                            node.downMbps > 0) && (
-                                            <Chip mono>
-                                              ↑{node.upMbps}↓{node.downMbps}M
-                                            </Chip>
-                                          )}
+                                          {(node.version ||
+                                            (node.status &&
+                                              node.status !== "draft")) &&
+                                            node.congestion && (
+                                              <Chip>
+                                                {node.congestion === "bbr"
+                                                  ? "BBR"
+                                                  : "Brutal"}
+                                              </Chip>
+                                            )}
+                                          {(node.version ||
+                                            (node.status &&
+                                              node.status !== "draft")) &&
+                                            node.tuning && (
+                                              <Chip>
+                                                {translate("Adaptive tuning")}
+                                              </Chip>
+                                            )}
                                         </div>
                                       </div>
                                       <Button

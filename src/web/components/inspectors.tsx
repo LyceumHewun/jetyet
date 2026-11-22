@@ -312,6 +312,88 @@ export function LogsModal({
   );
 }
 
+export function DeployCommandModal({
+  nodeName,
+  command,
+  expiresAt,
+  congestion,
+  tuning,
+  onDetect,
+  onClose,
+}: {
+  nodeName: string;
+  command: string;
+  expiresAt: string;
+  congestion: "brutal" | "bbr";
+  tuning: boolean;
+  onDetect: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      title={nodeName}
+      tag={translate("Deploy command")}
+      subtitle={translate("Run this single-line command on the VPS as root.")}
+      onClose={onClose}
+      className="link-dialog deploy-command-dialog"
+    >
+      <ScrollArea axis="y" className="link-dialog-scroll">
+        <div className="link-dialog-content">
+          <div className="deploy-command-box">
+            <div className="deploy-command-head">
+              <div className="chip-group">
+                <Chip>Hysteria 2</Chip>
+                <Chip>{congestion === "bbr" ? "BBR" : "Brutal"}</Chip>
+                <Chip>
+                  {tuning
+                    ? translate("Adaptive tuning: On")
+                    : translate("Adaptive tuning: Off")}
+                </Chip>
+              </div>
+              <CopyButton
+                text={command}
+                label={translate("Copy command")}
+                ariaLabel={translate("Copy deploy command")}
+              />
+            </div>
+            <ScrollArea
+              axis="x"
+              className="deploy-command-scroll"
+              role="region"
+              aria-label={translate("Deploy command")}
+              tabIndex={0}
+            >
+              <code className="deploy-command-line">{command}</code>
+            </ScrollArea>
+          </div>
+          <div className="password-link-meta">
+            <div className="chip-group">
+              <Badge tone="warning">{translate("Valid for 15 minutes")}</Badge>
+              {expiresAt && (
+                <Chip mono>
+                  {translate("Expires") + " "}
+                  {when(expiresAt)}
+                </Chip>
+              )}
+            </div>
+            <p className="muted">
+              {translate(
+                "This command is bound to the selected options, expires in 15 minutes, and can be re-downloaded before expiry for retries. After running it on the VPS, select Detect installation to verify the deployment.",
+              )}
+            </p>
+          </div>
+        </div>
+      </ScrollArea>
+      <div className="modal-foot">
+        <Button onClick={onDetect}>{translate("Detect installation")}</Button>
+        <Button variant="primary" onClick={onClose}>
+          {translate("Done")}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
 export function PasswordLinkModal({
   userName,
   username,

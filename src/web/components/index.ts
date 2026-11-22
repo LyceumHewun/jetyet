@@ -2,6 +2,7 @@ export { BrandMark, BrandWordmark, type BrandMarkProps } from "./BrandMark";
 export { DateTimePicker } from "./DateTimePicker";
 export { InlineTelemetry } from "./InlineTelemetry";
 export {
+  DeployCommandModal,
   DriftModal,
   LogsModal,
   PasswordLinkModal,
