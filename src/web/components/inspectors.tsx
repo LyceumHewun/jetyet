@@ -5,7 +5,7 @@ import { useState } from "react";
 import { when } from "../client";
 import type { Row } from "../types";
 import { Badge, Button, Chip, CopyButton, SearchInput } from "./primitives";
-import { Modal } from "./workspace";
+import { Modal, ModalBody } from "./workspace";
 
 export type LinkItem = {
   id: string;
@@ -172,7 +172,7 @@ export function DriftModal({
       onClose={onClose}
       wide
     >
-      <ScrollArea axis="y" className="modal-body">
+      <ModalBody>
         <div className="diff-grid">
           <div className="diff-pane">
             <div className="diff-pane-head">
@@ -225,7 +225,7 @@ export function DriftModal({
             )}
           </div>
         </div>
-      </ScrollArea>
+      </ModalBody>
       <div className="modal-foot">
         <Button
           onClick={() =>
@@ -275,7 +275,7 @@ export function LogsModal({
       onClose={onClose}
       wide
     >
-      <ScrollArea axis="y" className="modal-body">
+      <ModalBody>
         {logs.length ? (
           <div className="log-timeline mono">
             {logs.map((l, idx) => (
@@ -294,7 +294,7 @@ export function LogsModal({
             <span>{translate("No detailed log recorded.")}</span>
           </div>
         )}
-      </ScrollArea>
+      </ModalBody>
       <div className="modal-foot">
         <Button
           onClick={() =>

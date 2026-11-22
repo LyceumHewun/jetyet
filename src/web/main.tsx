@@ -21,6 +21,7 @@ import {
   FileCode2,
   KeyRound,
   Link2,
+  LoaderCircle,
   LogOut,
   Moon,
   Plus,
@@ -36,7 +37,8 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { api, when } from "./client";
 import {
@@ -95,6 +97,30 @@ function replaceRoute(to: AppRoute) {
   }
 }
 
+let spatialTransition: ViewTransition | undefined;
+
+function transitionSpatialCards(update: () => void) {
+  if (
+    !document.startViewTransition ||
+    !CSS.supports("view-transition-name", "match-element") ||
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  ) {
+    update();
+    return;
+  }
+
+  const root = document.documentElement;
+  root.classList.add("spatial-transition");
+  const transition = document.startViewTransition(() => flushSync(update));
+  spatialTransition = transition;
+  const finish = () => {
+    if (spatialTransition !== transition) return;
+    spatialTransition = undefined;
+    root.classList.remove("spatial-transition");
+  };
+  void transition.finished.then(finish, finish);
+}
+
 const initial: State = {
   hosts: [],
   nodes: [],
@@ -112,6 +138,31 @@ const tabs = [
   ["Templates", FileCode2],
   ["Activity", Activity],
 ] as const;
+
+type ConsoleView = {
+  tab: (typeof tabs)[number][0];
+  expandedHost?: string | null;
+  expandedUser: string | null;
+};
+
+const consoleViewKey = "jetyet-console-view";
+
+function readConsoleView(): ConsoleView {
+  try {
+    const saved = JSON.parse(localStorage.getItem(consoleViewKey) ?? "null");
+    return {
+      tab: tabs.find(([tab]) => tab === saved?.tab)?.[0] ?? "Infra",
+      expandedHost:
+        saved?.expandedHost === null || typeof saved?.expandedHost === "string"
+          ? saved.expandedHost
+          : undefined,
+      expandedUser:
+        typeof saved?.expandedUser === "string" ? saved.expandedUser : null,
+    };
+  } catch {
+    return { tab: "Infra", expandedUser: null };
+  }
+}
 
 const credentialRotation = {
   subscription: {
@@ -257,24 +308,35 @@ function App() {
   useEffect(() => initDocumentScrollbars({ overflow: { x: "hidden" } }), []);
   const [stage, setStage] = useAppView(locale);
   const [modal, setModal] = useAppView(locale);
+  const [verifyingHostId, setVerifyingHostId] = useState<string | null>(null);
+  const verifyingHost = useRef(false);
+  const [consoleView, setConsoleView] = useState(readConsoleView);
+  const { tab, expandedHost, expandedUser } = consoleView;
+  const setTab = (tab: ConsoleView["tab"]) =>
+    setConsoleView((view) => ({ ...view, tab }));
+  const setExpandedHost = (expandedHost: string | null) =>
+    setConsoleView((view) => ({ ...view, expandedHost }));
+  const setExpandedUser = (expandedUser: string | null) =>
+    setConsoleView((view) => ({ ...view, expandedUser }));
   const [route, setRoute] = useState<AppRoute>(readRoute),
     [session, setSession] = useState<Session | null>(null),
     [initialPortal, setInitialPortal] = useState<PortalData | null>(null),
     [checking, setChecking] = useState(() => readRoute() !== "/set-password"),
     [state, setState] = useState<State>(initial),
-    [tab, setTab] = useState<(typeof tabs)[number][0]>("Infra"),
     [toast, setToast] = useState(""),
     [error, setError] = useState<UiError>(""),
     [search, setSearch] = useState(""),
-    [expandedHost, setExpandedHost] = useState<string | null | undefined>(
-      undefined,
-    ),
-    [expandedUser, setExpandedUser] = useState<string | null>(null),
     [inlineRange, setInlineRange] = useState("24"),
     [alertFilter, setAlertFilter] = useState<"all" | "open">("all"),
     [theme, setTheme] = useState<"light" | "dark">(() =>
       document.documentElement.dataset.theme === "dark" ? "dark" : "light",
     );
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(consoleViewKey, JSON.stringify(consoleView));
+    } catch {}
+  }, [consoleView]);
 
   useEffect(() => {
     const title =
@@ -302,11 +364,24 @@ function App() {
 
   const refresh = async () => {
     try {
-      const next = await api("state");
+      const next: State = await api("state");
       setState(next);
-      setExpandedHost((prev) =>
-        prev === undefined ? next.hosts?.[0]?.id || null : prev,
-      );
+      setConsoleView((view) => {
+        const expandedHost =
+          view.expandedHost === null ||
+          next.hosts.some((host) => host.id === view.expandedHost)
+            ? view.expandedHost
+            : next.hosts[0]?.id;
+        const expandedUser = next.users.some(
+          (user) => user.id === view.expandedUser,
+        )
+          ? view.expandedUser
+          : null;
+        return expandedHost === view.expandedHost &&
+          expandedUser === view.expandedUser
+          ? view
+          : { ...view, expandedHost, expandedUser };
+      });
       setError("");
     } catch (e) {
       setError(asUiError(e));
@@ -485,6 +560,10 @@ function App() {
   };
 
   const trust = async (h: Row) => {
+    if (verifyingHost.current) return;
+    verifyingHost.current = true;
+    setVerifyingHostId(h.id);
+    setError("");
     try {
       const result = await api(`hosts/${h.id}/fingerprint`, "POST");
       setModal(() => (
@@ -515,6 +594,9 @@ function App() {
       ));
     } catch (e) {
       setError(asUiError(e));
+    } finally {
+      verifyingHost.current = false;
+      setVerifyingHostId(null);
     }
   };
 
@@ -1001,9 +1083,20 @@ function App() {
                                       "trust-pill " +
                                       (h.fingerprint ? "trusted" : "verify")
                                     }
+                                    disabled={verifyingHostId !== null}
+                                    aria-busy={verifyingHostId === h.id}
                                     onClick={() => void trust(h)}
                                   >
-                                    {h.fingerprint ? (
+                                    {verifyingHostId === h.id ? (
+                                      <>
+                                        <LoaderCircle
+                                          size={13}
+                                          className="spinning"
+                                          aria-hidden="true"
+                                        />
+                                        {translate("Verifying SSH…")}
+                                      </>
+                                    ) : h.fingerprint ? (
                                       <>
                                         <ShieldCheck size={13} />
                                         {translate("SSH Trusted")}
@@ -1048,7 +1141,11 @@ function App() {
                                   <Actions items={hostActions} />
                                   <Button
                                     variant="icon"
-                                    onClick={() => setExpandedHost(null)}
+                                    onClick={() =>
+                                      transitionSpatialCards(() =>
+                                        setExpandedHost(null),
+                                      )
+                                    }
                                     aria-label={translate("Collapse")}
                                     title={translate("Collapse")}
                                   >
@@ -1162,13 +1259,22 @@ function App() {
                           <article
                             key={h.id}
                             className="spatial-card spatial-compact"
-                            onClick={() => setExpandedHost(h.id)}
+                            onClick={() =>
+                              transitionSpatialCards(() =>
+                                setExpandedHost(h.id),
+                              )
+                            }
                             role="button"
                             tabIndex={0}
                             onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
+                              if (
+                                e.target === e.currentTarget &&
+                                (e.key === "Enter" || e.key === " ")
+                              ) {
                                 e.preventDefault();
-                                setExpandedHost(h.id);
+                                transitionSpatialCards(() =>
+                                  setExpandedHost(h.id),
+                                );
                               }
                             }}
                           >
@@ -1396,7 +1502,11 @@ function App() {
                                   <Actions items={userActions} />
                                   <Button
                                     variant="icon"
-                                    onClick={() => setExpandedUser(null)}
+                                    onClick={() =>
+                                      transitionSpatialCards(() =>
+                                        setExpandedUser(null),
+                                      )
+                                    }
                                     aria-label={translate("Collapse")}
                                     title={translate("Collapse")}
                                   >
@@ -1479,13 +1589,22 @@ function App() {
                           <article
                             key={u.id}
                             className="spatial-card spatial-compact"
-                            onClick={() => setExpandedUser(u.id)}
+                            onClick={() =>
+                              transitionSpatialCards(() =>
+                                setExpandedUser(u.id),
+                              )
+                            }
                             role="button"
                             tabIndex={0}
                             onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
+                              if (
+                                e.target === e.currentTarget &&
+                                (e.key === "Enter" || e.key === " ")
+                              ) {
                                 e.preventDefault();
-                                setExpandedUser(u.id);
+                                transitionSpatialCards(() =>
+                                  setExpandedUser(u.id),
+                                );
                               }
                             }}
                           >
