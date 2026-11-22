@@ -1,0 +1,14 @@
+# Use the hostname from Jetyet's public HTTPS origin.
+network.example.com {
+	# These paths contain tokens. Omit them from access logs.
+	log
+	@sensitive path /sub/* /deploy/* /auth/hysteria/*
+	log_skip @sensitive
+
+	reverse_proxy 127.0.0.1:3000
+
+	# Return proxy errors without logging request URLs at the default runtime log level.
+	handle_errors {
+		respond "{err.status_text}" {err.status_code}
+	}
+}

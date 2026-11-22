@@ -35,23 +35,21 @@ Host and node configuration changes are deliberately separated: editing a node's
 
 ## Production
 
-Run on one Linux cloud server, without containers. Install Bun at `/usr/local/bin/bun`, Hysteria at `/usr/local/bin/hysteria`, and mihomo at `/usr/local/bin/mihomo`. Obtain binaries from their official projects for your architecture. Place this project, including dependencies, at `/opt/jetyet`.
+Run on a Linux server with systemd, sudo, rsync, and curl. Install Bun 1.3.5 or newer at `/usr/local/bin/bun`, Hysteria at `/usr/local/bin/hysteria`, and mihomo at `/usr/local/bin/mihomo`. Copy the official executable binaries for your architecture to those paths.
 
-```sh
-sudo useradd --system --home /var/lib/jetyet --shell /usr/sbin/nologin jetyet
-sudo install -d -o jetyet -g jetyet -m 700 /var/lib/jetyet /etc/jetyet
-# Create configuration interactively; use the public HTTPS origin.
-sudo -u jetyet env JETYET_CONFIG=/etc/jetyet/jetyet.config.json /usr/local/bin/bun run setup
-sudo cp deploy/jetyet-*.service /etc/systemd/system/
-sudo systemctl daemon-reload
-# Start Web first so plaintext configuration is converted before workers start.
-sudo systemctl start jetyet-web
-sudo systemctl enable --now jetyet-web jetyet-monitor jetyet-operations
+From a writable checkout on the server, run as your deployment user with sudo access:
+
+```bash
+bash deploy/install.sh
 ```
 
-Set the configuration's `database` to `/var/lib/jetyet/jetyet.sqlite` (the setup command otherwise defaults to a path relative to the configuration directory). The service account must be able to read `/opt/jetyet` and run the three binaries. The configuration directory must remain writable to permit atomic password replacement. The services have no local root privileges; root/passwordless sudo is required only on managed VPS hosts.
+The script installs locked dependencies, deploys the application to `/opt/jetyet`, and creates `/etc/jetyet/jetyet.config.json` interactively on first run. Enter the public HTTPS origin and accept `/var/lib/jetyet/jetyet.sqlite` for the SQLite database, or enter another file under `/var/lib/jetyet`. The script waits for Web to respond before starting the monitoring and operations workers.
 
-Use the HTTPS reverse proxy example in [deploy/nginx.conf](deploy/nginx.conf), adjusting the hostname and certificate paths. Web binds loopback by default. HTTPS protects login, subscription and installation downloads, and authentication callbacks. In every proxy or CDN in front of Jetyet, disable request-path logging for `/sub/`, `/deploy/`, and `/auth/hysteria/` because those paths contain secrets. Add the `/deploy/` logging exclusion to existing proxies before issuing manual installation links. Access the loopback-bound VPN Traffic Stats API over SSH.
+Rerun the script from an updated checkout to deploy changes. This restarts the services and reuses the existing configuration and database. If an existing configuration points outside `/var/lib/jetyet`, set its `database` field to the absolute production path before rerunning. If the old path contains data you need, stop all three services and migrate the SQLite database before changing the path. Keep its configuration and master key.
+
+Use [deploy/Caddyfile](deploy/Caddyfile) with Caddy 2.8 or newer, or use [deploy/nginx.conf](deploy/nginx.conf) with Nginx. Replace `network.example.com` with the hostname from Jetyet's public origin. For Caddy, add the site block to your active Caddyfile, point public DNS at the server, and allow inbound TCP ports 80 and 443 for automatic HTTPS. For Nginx, set the trusted certificate paths. Both examples proxy to the default Web listener at `127.0.0.1:3000`.
+
+HTTPS protects login, subscription and installation downloads, and authentication callbacks. In every proxy or CDN in front of Jetyet, disable request-path logging for `/sub/`, `/deploy/`, and `/auth/hysteria/` because those paths contain secrets. Keep Caddy debug logging disabled to avoid recording those URLs in runtime logs. Add the `/deploy/` logging exclusion to existing proxies before issuing manual installation links. Access the loopback-bound VPN Traffic Stats API over SSH.
 
 VPS nodes deliberately use IP addresses, self-signed certificates, and `skip-cert-verify: true`, as requested. This does **not** apply to the management domain or authentication callback certificate, which must be trusted. Skipping node certificate verification does not authenticate server identity.
 
