@@ -16,6 +16,15 @@ _Avoid_: Node when referring to the host itself.
 A VPN connection endpoint managed by the platform.
 _Avoid_: VPS when referring to a connection endpoint.
 
+**Manual Installation Link**:
+A temporary link issued by an **Administrator** to retrieve the installation script for a specific **Node** and its selected deployment options.
+
+**Adaptive Performance Tuning**:
+An optional deployment setting that uses the target **VPS** resources to choose network tuning and assess swap needs.
+
+**Node Congestion Control Mode**:
+The **Administrator**'s choice of Brutal or BBR for a **Node**, with Brutal selected by default.
+
 **Subscription**:
 A managed source of VPN client configurations published in supported output formats.
 
@@ -88,7 +97,7 @@ The proportion of expected reachability observations actually performed during a
 - Subscription-link tokens and VPN authentication tokens are independently generated credentials and can be rotated separately; VPN credentials alone do not grant subscription retrieval access.
 - The management interface displays each user's observed online client-instance counts per node; these are not deduplicated physical-device counts across nodes.
 - The platform imposes no device-count or simultaneous-connection limits.
-- Per-user speed limiting is outside the current scope; user controls cover traffic allowances and access authorization, while bandwidth parameters belong to node configuration.
+- Per-user speed limiting is outside the current scope; user controls cover traffic allowances and access authorization.
 - Deleting a **Subscription User** immediately revokes subscription retrieval and new-connection authentication, requests disconnection of existing sessions, and retains historical usage.
 - Incomplete remote disconnections remain pending cleanup rather than being reported as complete.
 - A deleted user's name may be reused, but the replacement receives a new identity and new tokens and does not inherit the deleted user's allowances or usage history.
@@ -155,6 +164,13 @@ The proportion of expected reachability observations actually performed during a
 - Since Hysteria 2 is the only currently supported protocol, each VPS currently hosts at most one managed node.
 - Each **Node** has its own VPN traffic statistics, attributed to the corresponding **Subscription Users**; its public-network traffic is also included in host-level VPS accounting.
 - Deployment supports either platform-operated SSH execution on a managed **VPS** or administrator execution of commands displayed by the platform.
+- A **Manual Installation Link** is valid for 15 minutes and can be reused within that period to retry installation with the same deployment options.
+- **Adaptive Performance Tuning** evaluates the target **VPS** during deployment in both the SSH and administrator-operated paths.
+- **Adaptive Performance Tuning** can add swap on a low-memory **VPS** with sufficient disk space and no existing swap. It leaves existing swap unchanged.
+- Disabling **Adaptive Performance Tuning** skips tuning in future deployments. The host keeps its applied buffer settings and swap when tuning is disabled or the **Node** is deleted.
+- A **Node**'s congestion control mode determines the managed server settings and how the node is rendered in subscriptions. Brutal mode supplies default upload and download bandwidth hints of 1,000 Mbps each. BBR mode omits both hints.
+- A **Node**'s subscription reflects its last verified congestion control mode.
+- Administrators do not manage Brutal bandwidth in the control panel. Clients may override the subscription defaults locally.
 - After administrator-operated deployment, the platform detects the deployed resources to populate their records; manual form entry alone is not the source of truth for node details.
 - Both deployment paths require platform-held SSH access to the **VPS** for detection, traffic collection, and ongoing management.
 - Managed VPN services must originate from the platform's standard deployment commands, whether executed by the platform or the administrator.
@@ -217,6 +233,9 @@ The proportion of expected reachability observations actually performed during a
 
 > **Dev:** "Does a traffic record describe a VPS or a Node?"
 > **Domain expert:** "We need both host-level and endpoint-level records; they are distinct concepts."
+
+> **Dev:** "Can I reuse a **Manual Installation Link** to install a different **Node**?"
+> **Domain expert:** "It belongs to one node and its selected options. You can reuse it to retry that installation within 15 minutes."
 
 ## Flagged ambiguities
 

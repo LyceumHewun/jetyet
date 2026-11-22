@@ -67,7 +67,11 @@
 - Generate one random VPN authentication token per subscription user, reused across that user's authorized nodes; do not maintain per-node userpass credential maps.
 - Token rotation takes effect for subsequent authentication requests on all nodes without remote credential deployment; kick existing user sessions separately.
 
-- Support Hysteria 2 nodes and mihomo subscription output.
+- Support Hysteria 2 nodes and mihomo subscription output. Show Hysteria 2 as the only protocol in the deployment form.
+- Offer Brutal and BBR as node congestion control modes, with Brutal selected by default. Render `up: 1000` and `down: 1000` in mihomo output for Brutal and omit them for BBR so the client uses its BBR controller.
+- Expose no Brutal bandwidth controls in the control panel and impose no server-side bandwidth cap. Clients can override the defaults locally.
+- BBR mode requires Hysteria 2 v2.8.0 or later. It ignores client bandwidth hints. After switching to BBR, refresh clients that still use the old Brutal subscription configuration.
+- Publish a changed congestion control mode to subscriptions only after the VPS reports the verified deployment. For manual installation, publish the change after Detect installation succeeds. A failed deployment or detection leaves the previously published mode in place.
 - Connect clients directly to the VPS IP address; a domain is not required.
 - Support IPv4, IPv6, and IPv6-only VPS hosts. Configure the SSH address separately from the node's advertised IP address.
 - Verify actual reachability during onboarding; the management host must have connectivity to the chosen address family.
@@ -86,8 +90,13 @@
 - SSH authentication supports private keys and passwords, with private keys preferred.
 - Managed hosts require root access or passwordless sudo for deployment and ongoing privileged management.
 - Preflight checks verify required privileges before making deployment changes; insufficient privileges block execution with an explanatory error.
-- For administrator-executed deployment, first create the VPS record and confirm SSH access, then generate commands specific to that VPS.
-- After executing those commands, the administrator selects detect-and-connect in the platform; SSH inspection verifies the deployed configuration before creating the node record.
+- Adaptive performance tuning is off by default. When enabled, both deployment paths inspect memory, configured swap, and free disk space on the target VPS. Create a swap file only on low-memory hosts that have no existing swap and have enough disk space. Preserve existing swap.
+- Use total memory reported by Linux to choose the tuning tier. Below 2 GiB, raise the receive and send UDP socket buffer limits to at least 8 MiB each. At 2 GiB or more, raise them to at least 16 MiB each. Preserve higher existing limits and use Hysteria's default QUIC receive windows and process priority.
+- On VPS hosts below 2 GiB with no existing swap, create a swap file the size of physical memory only if at least 2 GiB of disk space will remain after allocation. Skip swap creation at 2 GiB of RAM or more. Log the applied settings and reasons for skipped changes.
+- Disabling adaptive performance tuning skips it in future deployments. Preserve any UDP buffer changes and swap already applied to the VPS when tuning is disabled or the node is deleted.
+- For administrator-executed deployment, first create the VPS record and confirm SSH access. The platform shows a short shell command that retrieves the node-specific script over HTTPS and executes it on the target VPS.
+- The installation link is bound to the node and the options selected when it was issued, including version, performance tuning, and congestion control. It expires after 15 minutes and permits repeated downloads before expiry so the administrator can retry.
+- After running the command, the administrator selects Detect installation in the platform. SSH inspection verifies the deployment.
 - Do not introduce a separate deployment registration callback service.
 - Failed deployments retain execution progress and errors and support retry after inspecting the host's actual state.
 - Retries skip completed steps only when their results match the desired configuration.

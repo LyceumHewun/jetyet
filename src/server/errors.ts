@@ -31,5 +31,6 @@ export function safeError(s: Store, error: unknown) {
   }
   return message
     .replace(/\/auth\/hysteria\/[^\s"']+/g, "/auth/hysteria/[REDACTED]")
+    .replace(/\/deploy\/[\w-]{43}\.sh/g, "/deploy/[REDACTED]")
     .slice(0, 2000);
 }

@@ -30,6 +30,7 @@ const server = Bun.serve({
     "/favicon.svg": () => assetResponse(faviconSvgUrl, "image/svg+xml"),
     "/api/*": app.fetch,
     "/auth/*": app.fetch,
+    "/deploy/*": app.fetch,
     "/sub/*": app.fetch,
   },
   fetch() {

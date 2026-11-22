@@ -15,6 +15,7 @@ type SelectGroup = {
 
 export function Select({
   id,
+  "aria-describedby": ariaDescribedBy,
   value,
   options,
   onChange,
@@ -23,6 +24,7 @@ export function Select({
   compact = false,
 }: {
   id?: string;
+  "aria-describedby"?: string;
   value: string;
   options: (SelectOption | SelectGroup)[];
   onChange: (value: string) => void;
@@ -188,6 +190,7 @@ export function Select({
         disabled={disabled}
         role="combobox"
         aria-label={id ? undefined : (current?.label ?? placeholder)}
+        aria-describedby={ariaDescribedBy}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}

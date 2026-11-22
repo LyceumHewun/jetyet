@@ -97,10 +97,18 @@ export const nodeSchema = z.object({
       "Invalid port range",
     ),
   hopInterval: z.number().int().min(5).max(3600).default(30),
-  upMbps: z.number().int().min(0).max(100000).default(0),
-  downMbps: z.number().int().min(0).max(100000).default(0),
   enabled: z.boolean().default(true),
 });
+export const deploymentOptionsSchema = z.object({
+  protocol: z.literal("hysteria2"),
+  tuning: z.boolean(),
+  congestion: z.enum(["brutal", "bbr"]),
+});
+export const deploymentVersionSchema = z.string().regex(/^v2\.\d+\.\d+$/);
+export const deploymentRequestSchema = deploymentOptionsSchema.extend({
+  version: deploymentVersionSchema,
+});
+export type DeploymentOptions = z.infer<typeof deploymentOptionsSchema>;
 export const usernameSchema = z
   .string()
   .trim()

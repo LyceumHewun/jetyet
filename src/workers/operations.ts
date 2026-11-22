@@ -1,15 +1,50 @@
+import {
+  deploymentOptionsSchema,
+  deploymentRequestSchema,
+  deploymentVersionSchema,
+  type DeploymentOptions,
+} from "../shared/schemas";
 import { loadWorkerConfig } from "../server/config";
 import { digest } from "../server/crypto";
-import { storage, strip, type Store } from "../server/db";
+import { storage, strip, type Entity, type Store } from "../server/db";
 import {
   deploymentScript,
   detectionScript,
+  nodeDeploymentOptions,
   removeScript,
   serverConfig,
+  validateDeploymentVersion,
 } from "../server/deployment";
 import { safeError } from "../server/errors";
 import { execute, withHost } from "../server/ssh";
 import { beat, claim, finish, type Task } from "../server/tasks";
+
+function matchesDeployment(
+  s: Store,
+  node: Entity,
+  actual: Record<string, unknown>,
+  options: DeploymentOptions,
+  version: string,
+) {
+  const expectedHash = digest(serverConfig(s, node, options));
+  return (
+    actual.owner === "jetyet" &&
+    actual.phase === "ready" &&
+    actual.nodeId === node.id &&
+    actual.hostId === node.hostId &&
+    actual.address === node.address &&
+    actual.hopping === node.hopping &&
+    actual.port === node.port &&
+    actual.protocol === options.protocol &&
+    actual.congestion === options.congestion &&
+    actual.tuning === options.tuning &&
+    actual.version === version &&
+    typeof actual.actualVersion === "string" &&
+    actual.actualVersion.split(/[^\w.-]+/).includes(version) &&
+    actual.configHash === expectedHash &&
+    actual.actualHash === expectedHash
+  );
+}
 
 export async function runOperation(
   s: Store,
@@ -41,98 +76,43 @@ export async function runOperation(
   const execRemote = async (run: (script: string) => Promise<string>) => {
     if (["deploy", "upgrade", "reapply"].includes(t.kind)) {
       if (!n || n.deleted || n.deleting) throw Error("Node removed");
+      const version = deploymentVersionSchema.parse(p.version);
+      const options =
+        t.kind === "deploy"
+          ? deploymentOptionsSchema.parse(p)
+          : nodeDeploymentOptions(n);
       checkpoint(
         1,
         "Applying native Hysteria 2 deployment; existing connections may be interrupted",
       );
-      await run(deploymentScript(s, n, p.version, t.kind === "reapply"));
+      const output = await run(
+        deploymentScript(s, n, version, t.kind === "reapply", options),
+      );
+      for (const line of output.split("\n")) {
+        if (line.startsWith("Adaptive tuning: "))
+          checkpoint(1, safeError(s, Error(line)));
+      }
       checkpoint(2, "Verifying deployment");
-      const actual = JSON.parse(await run(detectionScript));
+      let actual = JSON.parse(await run(detectionScript));
       const curHost = s.get(h.id);
       const curNode = s.get(n.id);
       if (!curHost || curHost.deleted || !curNode || curNode.deleted)
         throw Error("Entity removed during deployment");
       if (
-        actual.nodeId !== curNode.id ||
-        actual.phase !== "ready" ||
-        !actual.actualVersion.includes(actual.version) ||
-        actual.actualHash !== digest(serverConfig(s, curNode)) ||
-        !actual.active
+        !matchesDeployment(s, curNode, actual, options, version) ||
+        actual.active !== true
       )
         throw Error("Deployed configuration verification failed");
-      s.put(
-        "node",
-        {
-          ...strip(curNode),
-          status: "ready",
-          version: actual.version,
-          configHash: actual.configHash,
-        },
-        undefined,
-        curNode.id,
-      );
       if (
         !curNode.enabled ||
         !curHost.enabled ||
         curNode.deleting ||
         curHost.deleting
-      )
+      ) {
         await run("set -e\nsystemctl stop jetyet-hysteria.service\n");
-    } else if (t.kind === "detect") {
-      if (!n || n.deleted || n.deleting)
-        throw Error("Plan a node before detection");
-      checkpoint(1, "Detecting platform-owned deployment");
-      let actual = JSON.parse(await run(detectionScript));
-      const curHost = s.get(h.id);
-      const curNode = s.get(n.id);
-      if (
-        !curHost ||
-        curHost.deleted ||
-        curHost.deleting ||
-        !curNode ||
-        curNode.deleted ||
-        curNode.deleting ||
-        curNode.hostId !== curHost.id
-      )
-        throw Error("Entity removed during detection");
-      const expectedHash = digest(serverConfig(s, curNode));
-      if (
-        actual.owner !== "jetyet" ||
-        actual.phase !== "ready" ||
-        typeof actual.version !== "string" ||
-        !actual.version ||
-        typeof actual.actualVersion !== "string" ||
-        !actual.actualVersion.includes(actual.version) ||
-        actual.nodeId !== curNode.id ||
-        actual.hostId !== curHost.id ||
-        actual.actualHash !== expectedHash
-      )
-        throw Error("Remote deployment does not match the planned node");
-      const wantActive = !!(curHost.enabled && curNode.enabled);
-      if (actual.active !== wantActive) {
-        await run(
-          `set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl ${wantActive ? "start" : "stop"} jetyet-hysteria.service\n`,
-        );
         actual = JSON.parse(await run(detectionScript));
-        if (
-          actual.owner !== "jetyet" ||
-          actual.phase !== "ready" ||
-          typeof actual.version !== "string" ||
-          !actual.version ||
-          typeof actual.actualVersion !== "string" ||
-          !actual.actualVersion.includes(actual.version) ||
-          actual.nodeId !== curNode.id ||
-          actual.hostId !== curHost.id ||
-          actual.actualHash !== expectedHash ||
-          actual.active !== wantActive
-        )
-          throw Error(
-            wantActive
-              ? "Remote deployment failed to start with verified rules"
-              : "Remote deployment failed to stop",
-          );
       }
-      const shouldStop = s.db
+      s.db
         .transaction(() => {
           const latestHost = s.get(h.id);
           const latestNode = s.get(n.id);
@@ -142,37 +122,106 @@ export async function runOperation(
             latestHost.deleting ||
             !latestNode ||
             latestNode.deleted ||
-            latestNode.deleting ||
-            latestNode.hostId !== latestHost.id
+            latestNode.deleting
           )
-            throw Error("Entity removed during detection");
+            throw Error("Entity removed during deployment");
           if (
-            actual.nodeId !== latestNode.id ||
-            actual.hostId !== latestHost.id ||
-            actual.actualHash !== digest(serverConfig(s, latestNode)) ||
-            (latestNode.hopping ?? "") !== (curNode.hopping ?? "") ||
-            latestNode.address !== curNode.address
+            !matchesDeployment(s, latestNode, actual, options, version) ||
+            actual.active !== Boolean(latestNode.enabled && latestHost.enabled)
           )
-            throw Error("Planned node configuration changed during detection");
+            throw Error("Deployed configuration verification failed");
           s.put(
             "node",
             {
               ...strip(latestNode),
+              ...options,
               status: "ready",
-              version: actual.version,
+              version,
               configHash: actual.configHash,
             },
             undefined,
             latestNode.id,
           );
-          return !(latestHost.enabled && latestNode.enabled);
         })
         .immediate();
-      if (shouldStop && actual.active) {
+    } else if (t.kind === "detect") {
+      if (!n || n.deleted || n.deleting)
+        throw Error("Plan a node before detection");
+      checkpoint(1, "Detecting platform-owned deployment");
+      let actual = JSON.parse(await run(detectionScript));
+      const detected = deploymentRequestSchema.safeParse(actual);
+      const current = () => {
+        const host = s.get(t.host);
+        const node = s.get(n.id);
+        if (
+          !host ||
+          host.deleted ||
+          host.deleting ||
+          !node ||
+          node.deleted ||
+          node.deleting ||
+          node.hostId !== host.id
+        )
+          throw Error("Entity removed during detection");
+        return { node, active: Boolean(host.enabled && node.enabled) };
+      };
+      const planned = current();
+      if (
+        !detected.success ||
+        !matchesDeployment(
+          s,
+          planned.node,
+          actual,
+          detected.data,
+          detected.data.version,
+        )
+      )
+        throw Error("Remote deployment does not match the planned node");
+      const { version, ...options } = detected.data;
+      validateDeploymentVersion(version, options);
+      const verifyState = async (wantActive: boolean) => {
+        if (actual.active === wantActive) return;
         await run(
-          "set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl stop jetyet-hysteria.service\n",
+          `set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl ${wantActive ? "start" : "stop"} jetyet-hysteria.service\n`,
         );
-      }
+        actual = JSON.parse(await run(detectionScript));
+        if (
+          !matchesDeployment(s, planned.node, actual, options, version) ||
+          actual.active !== wantActive
+        )
+          throw Error(
+            wantActive
+              ? "Remote deployment failed to start with verified rules"
+              : "Remote deployment failed to stop",
+          );
+      };
+      await verifyState(planned.active);
+      const beforePublish = current();
+      if (!matchesDeployment(s, beforePublish.node, actual, options, version))
+        throw Error("Planned node configuration changed during detection");
+      await verifyState(beforePublish.active);
+      s.db
+        .transaction(() => {
+          const latest = current();
+          if (
+            !matchesDeployment(s, latest.node, actual, options, version) ||
+            actual.active !== latest.active
+          )
+            throw Error("Planned node configuration changed during detection");
+          s.put(
+            "node",
+            {
+              ...strip(latest.node),
+              ...options,
+              status: "ready",
+              version,
+              configHash: actual.configHash,
+            },
+            undefined,
+            latest.node.id,
+          );
+        })
+        .immediate();
     } else if (t.kind === "host-state" || t.kind === "node-state") {
       const curHost = s.get(h.id);
       const curNode = p.nodeId

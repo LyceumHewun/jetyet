@@ -226,8 +226,7 @@ function proxies(s: Store, u: Entity, mode: RenderMode) {
       password: mode === "live" ? s.secrets(u.id).vpnToken : "REDACTED",
       "skip-cert-verify": true,
       udp: true,
-      ...(!simulated && n.upMbps ? { up: n.upMbps } : {}),
-      ...(!simulated && n.downMbps ? { down: n.downMbps } : {}),
+      ...(n.congestion === "bbr" ? {} : { up: 1000, down: 1000 }),
     };
   });
   return { rows, literalNames };
