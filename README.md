@@ -45,7 +45,15 @@ bash deploy/install.sh
 
 The script installs locked dependencies, deploys the application to `/opt/jetyet`, and creates `/etc/jetyet/jetyet.config.json` interactively on first run. Enter the public HTTPS origin and accept `/var/lib/jetyet/jetyet.sqlite` for the SQLite database, or enter another file under `/var/lib/jetyet`. The script waits for Web to respond before starting the monitoring and operations workers.
 
-Rerun the script from an updated checkout to deploy changes. This restarts the services and reuses the existing configuration and database. If an existing configuration points outside `/var/lib/jetyet`, set its `database` field to the absolute production path before rerunning. If the old path contains data you need, stop all three services and migrate the SQLite database before changing the path. Keep its configuration and master key.
+To update, run from the same Git checkout you used to install Jetyet:
+
+```bash
+bash deploy/update.sh
+```
+
+The update script pulls the current branch with `git pull --ff-only` and runs the installer after a successful pull. The installer reuses the existing configuration and database, synchronizes the updated application to `/opt/jetyet`, and restarts the services. The update script prints the deployed commit after the installer succeeds. If your checkout predates `deploy/update.sh`, pull once to get the script.
+
+If an existing configuration points outside `/var/lib/jetyet`, set its `database` field to the absolute production path before updating. If the old path contains data you need, stop all three services and migrate the SQLite database before changing the path. Keep its configuration and master key.
 
 Use [deploy/Caddyfile](deploy/Caddyfile) with Caddy 2.8 or newer, or use [deploy/nginx.conf](deploy/nginx.conf) with Nginx. Replace `network.example.com` with the hostname from Jetyet's public origin. For Caddy, add the site block to your active Caddyfile, point public DNS at the server, and allow inbound TCP ports 80 and 443 for automatic HTTPS. For Nginx, set the trusted certificate paths. Both examples proxy to the default Web listener at `127.0.0.1:3000`.
 
