@@ -723,7 +723,7 @@ describe("detect operation and concurrent safety", () => {
       let active = kind === "deploy";
       await expect(
         runOperation(s, task, async (script) => {
-          if (script.includes("systemctl start")) {
+          if (script.includes("systemctl start jetyet-hysteria.service")) {
             active = true;
             s.put(
               "node",
@@ -733,7 +733,8 @@ describe("detect operation and concurrent safety", () => {
             );
             return "";
           }
-          if (script.includes("systemctl stop")) throw Error("Unable to stop");
+          if (script.includes("systemctl stop jetyet-hysteria.service"))
+            throw Error("Unable to stop");
           if (script !== detectionScript) return tuningLog;
           return JSON.stringify({
             ...options,
