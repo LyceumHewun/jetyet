@@ -1,15 +1,49 @@
+import {
+  deploymentOptionsSchema,
+  deploymentRequestSchema,
+  deploymentVersionSchema,
+  type DeploymentOptions,
+} from "../shared/schemas";
 import { loadWorkerConfig } from "../server/config";
 import { digest } from "../server/crypto";
-import { storage, strip, type Store } from "../server/db";
+import { storage, strip, type Entity, type Store } from "../server/db";
 import {
   deploymentScript,
   detectionScript,
+  nodeDeploymentOptions,
   removeScript,
   serverConfig,
 } from "../server/deployment";
 import { safeError } from "../server/errors";
 import { execute, withHost } from "../server/ssh";
 import { beat, claim, finish, type Task } from "../server/tasks";
+
+function matchesDeployment(
+  s: Store,
+  node: Entity,
+  actual: Record<string, unknown>,
+  options: DeploymentOptions,
+  version: string,
+) {
+  const expectedHash = digest(serverConfig(s, node, options));
+  return (
+    actual.owner === "jetyet" &&
+    actual.phase === "ready" &&
+    actual.nodeId === node.id &&
+    actual.hostId === node.hostId &&
+    actual.address === node.address &&
+    actual.hopping === node.hopping &&
+    actual.port === node.port &&
+    actual.protocol === options.protocol &&
+    actual.congestion === options.congestion &&
+    actual.tuning === options.tuning &&
+    actual.version === version &&
+    typeof actual.actualVersion === "string" &&
+    actual.actualVersion.split(/[^\w.-]+/).includes(version) &&
+    actual.configHash === expectedHash &&
+    actual.actualHash === expectedHash
+  );
+}
 
 export async function runOperation(
   s: Store,
@@ -41,11 +75,22 @@ export async function runOperation(
   const execRemote = async (run: (script: string) => Promise<string>) => {
     if (["deploy", "upgrade", "reapply"].includes(t.kind)) {
       if (!n || n.deleted || n.deleting) throw Error("Node removed");
+      const version = deploymentVersionSchema.parse(p.version);
+      const options =
+        t.kind === "deploy"
+          ? deploymentOptionsSchema.parse(p)
+          : nodeDeploymentOptions(n);
       checkpoint(
         1,
         "Applying native Hysteria 2 deployment; existing connections may be interrupted",
       );
-      await run(deploymentScript(s, n, p.version, t.kind === "reapply"));
+      const output = await run(
+        deploymentScript(s, n, version, t.kind === "reapply", options),
+      );
+      for (const line of output.split("\n")) {
+        if (line.startsWith("Adaptive tuning: "))
+          checkpoint(1, safeError(s, line));
+      }
       checkpoint(2, "Verifying deployment");
       const actual = JSON.parse(await run(detectionScript));
       const curHost = s.get(h.id);
@@ -53,10 +98,7 @@ export async function runOperation(
       if (!curHost || curHost.deleted || !curNode || curNode.deleted)
         throw Error("Entity removed during deployment");
       if (
-        actual.nodeId !== curNode.id ||
-        actual.phase !== "ready" ||
-        !actual.actualVersion.includes(actual.version) ||
-        actual.actualHash !== digest(serverConfig(s, curNode)) ||
+        !matchesDeployment(s, curNode, actual, options, version) ||
         !actual.active
       )
         throw Error("Deployed configuration verification failed");
@@ -64,6 +106,7 @@ export async function runOperation(
         "node",
         {
           ...strip(curNode),
+          ...options,
           status: "ready",
           version: actual.version,
           configHash: actual.configHash,
@@ -83,6 +126,7 @@ export async function runOperation(
         throw Error("Plan a node before detection");
       checkpoint(1, "Detecting platform-owned deployment");
       let actual = JSON.parse(await run(detectionScript));
+      const detected = deploymentRequestSchema.safeParse(actual);
       const curHost = s.get(h.id);
       const curNode = s.get(n.id);
       if (
@@ -95,19 +139,18 @@ export async function runOperation(
         curNode.hostId !== curHost.id
       )
         throw Error("Entity removed during detection");
-      const expectedHash = digest(serverConfig(s, curNode));
       if (
-        actual.owner !== "jetyet" ||
-        actual.phase !== "ready" ||
-        typeof actual.version !== "string" ||
-        !actual.version ||
-        typeof actual.actualVersion !== "string" ||
-        !actual.actualVersion.includes(actual.version) ||
-        actual.nodeId !== curNode.id ||
-        actual.hostId !== curHost.id ||
-        actual.actualHash !== expectedHash
+        !detected.success ||
+        !matchesDeployment(
+          s,
+          curNode,
+          actual,
+          detected.data,
+          detected.data.version,
+        )
       )
         throw Error("Remote deployment does not match the planned node");
+      const { version, ...options } = detected.data;
       const wantActive = !!(curHost.enabled && curNode.enabled);
       if (actual.active !== wantActive) {
         await run(
@@ -115,15 +158,7 @@ export async function runOperation(
         );
         actual = JSON.parse(await run(detectionScript));
         if (
-          actual.owner !== "jetyet" ||
-          actual.phase !== "ready" ||
-          typeof actual.version !== "string" ||
-          !actual.version ||
-          typeof actual.actualVersion !== "string" ||
-          !actual.actualVersion.includes(actual.version) ||
-          actual.nodeId !== curNode.id ||
-          actual.hostId !== curHost.id ||
-          actual.actualHash !== expectedHash ||
+          !matchesDeployment(s, curNode, actual, options, version) ||
           actual.active !== wantActive
         )
           throw Error(
@@ -146,18 +181,13 @@ export async function runOperation(
             latestNode.hostId !== latestHost.id
           )
             throw Error("Entity removed during detection");
-          if (
-            actual.nodeId !== latestNode.id ||
-            actual.hostId !== latestHost.id ||
-            actual.actualHash !== digest(serverConfig(s, latestNode)) ||
-            (latestNode.hopping ?? "") !== (curNode.hopping ?? "") ||
-            latestNode.address !== curNode.address
-          )
+          if (!matchesDeployment(s, latestNode, actual, options, version))
             throw Error("Planned node configuration changed during detection");
           s.put(
             "node",
             {
               ...strip(latestNode),
+              ...options,
               status: "ready",
               version: actual.version,
               configHash: actual.configHash,

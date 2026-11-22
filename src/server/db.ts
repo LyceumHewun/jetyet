@@ -28,6 +28,7 @@ export function storage(config: Config) {
     CREATE INDEX IF NOT EXISTS portal_sessions_user ON portal_sessions(user);
     CREATE TABLE IF NOT EXISTS portal_passwords (user TEXT PRIMARY KEY REFERENCES entities(id), hash TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS portal_password_links (user TEXT PRIMARY KEY REFERENCES entities(id), hash TEXT UNIQUE NOT NULL, expires INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS deployment_links (hash TEXT PRIMARY KEY, node TEXT NOT NULL REFERENCES entities(id), request TEXT NOT NULL, revision TEXT NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS login_limits (key TEXT PRIMARY KEY, attempts INTEGER NOT NULL, reset INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS first_auth (node TEXT NOT NULL, user TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(node,user));
     CREATE TABLE IF NOT EXISTS token_index (hash TEXT PRIMARY KEY, entity TEXT NOT NULL, kind TEXT NOT NULL);

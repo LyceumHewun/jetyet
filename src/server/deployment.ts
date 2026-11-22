@@ -1,8 +1,33 @@
 import YAML from "yaml";
+import type { DeploymentOptions } from "../shared/schemas";
 import { digest } from "./crypto";
 import type { Entity, Store } from "./db";
+import { adaptiveTuningScript } from "./deployment-tuning";
 import { quote } from "./ssh";
-export function serverConfig(s: Store, n: Entity) {
+
+export function nodeDeploymentOptions(node: Entity): DeploymentOptions {
+  return {
+    protocol: "hysteria2",
+    congestion: node.congestion === "bbr" ? "bbr" : "brutal",
+    tuning: node.tuning === true,
+  };
+}
+
+export function validateDeploymentVersion(
+  version: string,
+  options: DeploymentOptions,
+) {
+  if (!/^v2\.\d+\.\d+$/.test(version))
+    throw Error("Specify an explicit Hysteria 2 version");
+  if (options.congestion === "bbr" && Number(version.split(".")[1]) < 8)
+    throw Error("BBR mode requires Hysteria 2 v2.8.0 or later");
+}
+
+export function serverConfig(
+  s: Store,
+  n: Entity,
+  options = nodeDeploymentOptions(n),
+) {
   const secret = s.secrets(n.id);
   return YAML.stringify({
     listen: ":" + n.port,
@@ -15,6 +40,9 @@ export function serverConfig(s: Store, n: Entity) {
       },
     },
     trafficStats: { listen: "127.0.0.1:9999", secret: secret.statsSecret },
+    ...(options.congestion === "bbr"
+      ? { congestion: { type: "bbr" }, ignoreClientBandwidth: true }
+      : {}),
   });
 }
 export function redactedConfig(text: string) {
@@ -39,11 +67,12 @@ export function deploymentScript(
   n: Entity,
   version: string,
   reapply = false,
+  options = nodeDeploymentOptions(n),
 ) {
-  if (!/^v2\.\d+\.\d+$/.test(version))
-    throw Error("Specify an explicit Hysteria version, such as v2.6.5");
-  const config = serverConfig(s, n),
+  validateDeploymentVersion(version, options);
+  const config = serverConfig(s, n, options),
     desiredHash = digest(config),
+    previousHash = digest(serverConfig(s, n)),
     manifest = JSON.stringify({
       owner: "jetyet",
       nodeId: n.id,
@@ -53,6 +82,7 @@ export function deploymentScript(
       version,
       hopping: n.hopping,
       port: n.port,
+      ...options,
       phase: "ready",
     });
   // Literal base64 payloads avoid interpolating user-controlled values as shell syntax.
@@ -68,17 +98,21 @@ flock -w 15 9 || { echo 'Another remote operation is still running' >&2; exit 1;
 case "$ID" in debian|ubuntu) ;; *) echo 'Debian or Ubuntu required' >&2; exit 1;; esac
 test -d /run/systemd/system
 for cmd in curl openssl python3 ss ip sha256sum cmp flock; do command -v "$cmd" >/dev/null || { echo "Missing dependency: $cmd" >&2; exit 1; }; done
-${n.hopping ? `if ! command -v iptables >/dev/null || ! command -v ip6tables >/dev/null; then
+${
+  n.hopping
+    ? `if ! command -v iptables >/dev/null || ! command -v ip6tables >/dev/null; then
   echo 'Installing iptables for port hopping'
   command -v apt-get >/dev/null || { echo 'Missing apt-get; cannot install port hopping dependencies' >&2; exit 1; }
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y iptables
 fi
 for cmd in iptables ip6tables; do command -v "$cmd" >/dev/null || { echo "Missing port hopping dependency after installation: $cmd" >&2; exit 1; }; done
-` : ""}
+`
+    : ""
+}
 if test -e /etc/jetyet/manifest.json; then
   python3 -c ${quote(`import json; m=json.load(open('/etc/jetyet/manifest.json')); assert m['owner']=='jetyet' and m['nodeId']=='${n.id}' and m['hostId']=='${n.hostId}', 'Foreign deployment'`)}
-  ${reapply ? "true" : `python3 -c ${quote(`import json,hashlib,os; m=json.load(open('/etc/jetyet/manifest.json')); p='/etc/jetyet/config.yaml'; assert (hashlib.sha256(open(p,'rb').read()).hexdigest() in [m['configHash'],m.get('previousConfigHash')] and m['configHash']=='${desiredHash}' if os.path.exists(p) else m.get('phase')=='installing'), 'Configuration drift: explicitly reapply platform configuration'`)}`}
+  ${reapply ? "true" : `python3 -c ${quote(`import json,hashlib,os; m=json.load(open('/etc/jetyet/manifest.json')); p='/etc/jetyet/config.yaml'; allowed=['${previousHash}','${desiredHash}']; hashes=[m['configHash']] if m['phase']=='ready' else allowed; assert (m['configHash'] in allowed and hashlib.sha256(open(p,'rb').read()).hexdigest() in hashes if os.path.exists(p) else m['phase']=='installing'), 'Configuration drift: explicitly reapply platform configuration'`)}`}
 else
   if test -e /etc/hysteria/config.yaml || systemctl is-active --quiet hysteria-server.service || test -e /etc/jetyet/config.yaml || command -v hysteria >/dev/null; then echo 'Existing unmanaged Hysteria installation; refusing overwrite' >&2; exit 1; fi
   if ss -H -lun | awk '{print $4}' | grep -Eq ':(${n.port}|9999)$'; then echo 'Port conflict' >&2; exit 1; fi
@@ -87,10 +121,10 @@ fi
 mkdir -p /etc/jetyet /usr/local/bin
 python3 -c ${quote(`import json,hashlib,os; m=json.loads(${JSON.stringify(manifest)}); m['phase']='installing'; p='/etc/jetyet/config.yaml'; m['previousConfigHash']=hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.exists(p) else None; old=json.load(open('/etc/jetyet/manifest.json')) if os.path.exists('/etc/jetyet/manifest.json') else None; m['configHash']=old['configHash'] if old and old.get('configHash') else m['configHash']; f=open('/etc/jetyet/manifest.json.next','w'); json.dump(m,f); f.close(); os.replace('/etc/jetyet/manifest.json.next','/etc/jetyet/manifest.json')`)}
 case "$(uname -m)" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) echo 'Supported architectures: amd64, arm64' >&2; exit 1;; esac
-if ! test -x /usr/local/bin/hysteria || ! /usr/local/bin/hysteria version | grep -Fq ${quote(version)}; then
+if ! test -x /usr/local/bin/hysteria || ! /usr/local/bin/hysteria version | grep -Fwq ${quote(version)}; then
   curl -fLsS --retry 2 --max-time 120 ${quote(`https://github.com/apernet/hysteria/releases/download/app/${version}/hysteria-linux-`)}"$arch" -o /usr/local/bin/hysteria.next
   chmod 755 /usr/local/bin/hysteria.next
-  /usr/local/bin/hysteria.next version | grep -F ${quote(version)} >/dev/null
+  /usr/local/bin/hysteria.next version | grep -Fw ${quote(version)} >/dev/null
   if test -f /usr/local/bin/hysteria; then cp /usr/local/bin/hysteria /usr/local/bin/hysteria.previous; fi
   mv /usr/local/bin/hysteria.next /usr/local/bin/hysteria
 fi
@@ -108,6 +142,7 @@ printf %s ${quote(Buffer.from(unit).toString("base64"))} | base64 -d > /etc/syst
 if test -f /etc/jetyet/hopping-remove.sh; then bash /etc/jetyet/hopping-remove.sh; fi
 rm -f /etc/jetyet/hopping-remove.sh /etc/jetyet/hopping-add.sh
 ${n.hopping ? hopScript(n) : ""}
+${options.tuning ? adaptiveTuningScript : ""}
 systemctl daemon-reload
 systemctl enable jetyet-hysteria.service >/dev/null
 systemctl restart jetyet-hysteria.service

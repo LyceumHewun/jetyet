@@ -1,13 +1,72 @@
 import { z } from "zod";
-import { nodeSchema } from "../../shared/schemas";
-import { token } from "../crypto";
-import { strip } from "../db";
-import { deploymentScript, redactedConfig, serverConfig } from "../deployment";
+import {
+  deploymentRequestSchema,
+  deploymentVersionSchema,
+  nodeSchema,
+} from "../../shared/schemas";
+import { digest, token } from "../crypto";
+import { strip, type Entity } from "../db";
+import {
+  deploymentScript,
+  nodeDeploymentOptions,
+  redactedConfig,
+  serverConfig,
+  validateDeploymentVersion,
+} from "../deployment";
+import { quote } from "../ssh";
 import { enqueue } from "../tasks";
 import { templateGroupNames } from "../templates";
 import type { Routes } from "./context";
 
-export function registerNodesRoutes({ app, s, entity, view, checked }: Routes) {
+export function registerNodesRoutes({ app, s, entity }: Routes) {
+  const revision = (n: Entity, host: Entity) =>
+    digest(
+      JSON.stringify([
+        serverConfig(s, n, {
+          protocol: "hysteria2",
+          tuning: false,
+          congestion: "brutal",
+        }),
+        n.address,
+        n.hopping,
+        host.fingerprint,
+      ]),
+    );
+
+  app.get("/deploy/:file", (c) => {
+    c.header("Cache-Control", "no-store");
+    const file = c.req.param("file");
+    if (!/^[\w-]{43}\.sh$/.test(file)) return c.notFound();
+    const link = s.db
+      .query<
+        { node: string; request: string; revision: string },
+        [string, number]
+      >(
+        "SELECT node, request, revision FROM deployment_links WHERE hash=? AND expires>?",
+      )
+      .get(digest(file.slice(0, -3)), Date.now());
+    if (!link) return c.notFound();
+    const n = s.get(link.node);
+    const h = n && s.get(n.hostId);
+    if (
+      !n ||
+      n.deleted ||
+      n.deleting ||
+      !h ||
+      h.deleted ||
+      h.deleting ||
+      !h.fingerprint ||
+      revision(n, h) !== link.revision
+    )
+      return c.notFound();
+
+    const { version, ...options } = deploymentRequestSchema.parse(
+      JSON.parse(link.request),
+    );
+    c.header("X-Content-Type-Options", "nosniff");
+    return c.text(deploymentScript(s, n, version, false, options));
+  });
+
   app.post("/api/nodes", async (c) => {
     const data = nodeSchema.parse(await c.req.json());
     const h = entity(data.hostId, "host");
@@ -53,27 +112,58 @@ export function registerNodesRoutes({ app, s, entity, view, checked }: Routes) {
     const n = entity(c.req.param("id"), "node");
     if (n.deleting)
       throw Error("A node pending deletion cannot run operations");
-    const { kind, version } = z
-      .object({
-        kind: z.enum(["deploy", "detect", "upgrade", "reapply"]),
-        version: z
-          .string()
-          .regex(/^v2\.\d+\.\d+$/)
-          .optional(),
-      })
+    const { kind, ...request } = z
+      .discriminatedUnion("kind", [
+        deploymentRequestSchema.extend({ kind: z.literal("deploy") }),
+        z.object({
+          kind: z.enum(["upgrade", "reapply"]),
+          version: deploymentVersionSchema,
+        }),
+        z.object({ kind: z.literal("detect") }),
+      ])
       .parse(await c.req.json());
-    if (kind !== "detect" && !version)
-      throw Error("An explicit version is required");
-    const id = enqueue(s, n.hostId, kind, { nodeId: n.id, version });
+    if ("version" in request)
+      validateDeploymentVersion(
+        request.version,
+        "congestion" in request ? request : nodeDeploymentOptions(n),
+      );
+    const id = enqueue(s, n.hostId, kind, { nodeId: n.id, ...request });
     return c.json({ id }, 202);
   });
 
   app.post("/api/nodes/:id/command", async (c) => {
     const n = entity(c.req.param("id"), "node");
-    const { version } = z
-      .object({ version: z.string().regex(/^v2\.\d+\.\d+$/) })
-      .parse(await c.req.json());
-    return c.json({ script: deploymentScript(s, n, version) });
+    const h = entity(n.hostId, "host");
+    if (n.deleting || h.deleting || !h.fingerprint)
+      throw Error("A verified VPS is required for manual installation");
+    const request = deploymentRequestSchema.parse(await c.req.json());
+    validateDeploymentVersion(request.version, request);
+    const origin = new URL(s.config.origin);
+    if (origin.protocol !== "https:")
+      throw Error("Manual installation requires an HTTPS platform origin");
+    const key = token();
+    const now = Date.now();
+    const expires = now + 15 * 60 * 1000;
+    s.db
+      .transaction(() => {
+        s.db.query("DELETE FROM deployment_links WHERE expires<=?").run(now);
+        s.db
+          .query("INSERT INTO deployment_links VALUES(?,?,?,?,?)")
+          .run(
+            digest(key),
+            n.id,
+            JSON.stringify(request),
+            revision(n, h),
+            expires,
+          );
+      })
+      .immediate();
+    const url = new URL(`/deploy/${key}.sh`, origin);
+    c.header("Cache-Control", "no-store");
+    return c.json({
+      command: `script=$(curl -fsS ${quote(url.href)}) && bash -c "$script"`,
+      expiresAt: new Date(expires).toISOString(),
+    });
   });
 
   app.get("/api/nodes/:id/drift", (c) => {
