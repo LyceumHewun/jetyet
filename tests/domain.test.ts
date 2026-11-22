@@ -705,15 +705,16 @@ describe("detect operation and concurrent safety", () => {
     const options = {
       protocol: "hysteria2",
       congestion: "bbr",
-      tuning: false,
+      tuning: true,
     } as const;
+    const tuningLog = "Adaptive tuning: existing swap preserved";
     const hash = digest(serverConfig(s, node, options));
     enqueue(s, host.id, "deploy", { nodeId: node.id, version, ...options });
     const task = claim(s, false, "ops")!;
     await expect(
       runOperation(s, task, async (script) => {
         if (script.includes("systemctl stop")) throw Error("Unable to stop");
-        if (script !== detectionScript) return "";
+        if (script !== detectionScript) return tuningLog;
         return JSON.stringify({
           ...options,
           owner: "jetyet",
@@ -732,6 +733,14 @@ describe("detect operation and concurrent safety", () => {
       }),
     ).rejects.toThrow("Unable to stop");
     expect(s.get(node.id)?.congestion).toBe("brutal");
+    expect(
+      s.db
+        .query<{ message: string }, [string]>(
+          "SELECT message FROM task_logs WHERE task=? ORDER BY id",
+        )
+        .all(task.id)
+        .map(({ message }) => message),
+    ).toContain(tuningLog);
   });
 
   test("manual install is retryable for 15 minutes and publishes BBR only after detection", async () => {
@@ -763,6 +772,8 @@ describe("detect operation and concurrent safety", () => {
     expect(issued.status).toBe(200);
     const { command, expiresAt } = await issued.json();
     expect(expiresAt).toBe(new Date(now + 900000).toISOString());
+    expect(command).toContain('&& bash "$file"');
+    expect(command).not.toContain("\n");
     const path = new URL(command.match(/https:\/\/[^']+/)[0]).pathname;
     const download = await app.request(path);
     expect(download.headers.get("cache-control")).toBe("no-store");

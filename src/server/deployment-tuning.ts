@@ -24,19 +24,20 @@ if resources=$(LC_ALL=C free -b) &&
   fi
 
   swap_file=/var/lib/jetyet.swap
-  swap_unit=var-lib-jetyet.swap
+  swap_unit=$(systemd-escape --path --suffix=swap "$swap_file")
+  unit_path="/etc/systemd/system/$swap_unit"
   if (( swap > 0 )) || findmnt --fstab --types swap --noheadings >/dev/null; then
     tuning_log 'existing swap preserved'
   elif (( ram >= 2147483648 )); then
     tuning_log 'swap skipped because RAM is at least 2 GiB'
-  elif [[ -e "$swap_file" || -L "$swap_file" || -e "/etc/systemd/system/$swap_unit" ]]; then
+  elif [[ -e "$swap_file" || -L "$swap_file" || -e "$unit_path" || -L "$unit_path" ]]; then
     tuning_log 'swap skipped because the managed path is already occupied'
   elif available=$(LC_ALL=C df -B1 --output=avail /var/lib | awk 'NR == 2 { print $1 }') &&
        [[ "$available" =~ ^[0-9]+$ ]] && (( available - ram >= 2147483648 )); then
     if swap_tmp=$(mktemp /var/lib/.jetyet-swap.XXXXXX); then
       if dd if=/dev/zero of="$swap_tmp" bs=1M iflag=count_bytes count="$ram" status=none &&
          mkswap "$swap_tmp" >/dev/null && mv -T "$swap_tmp" "$swap_file" &&
-         printf '[Swap]\nWhat=%s\n[Install]\nWantedBy=swap.target\n' "$swap_file" > "/etc/systemd/system/$swap_unit" &&
+         printf '[Swap]\nWhat=%s\n[Install]\nWantedBy=swap.target\n' "$swap_file" > "$unit_path" &&
          systemctl daemon-reload && systemctl start "$swap_unit"; then
         if systemctl enable "$swap_unit"; then
           tuning_log "created and enabled $ram bytes of swap"
@@ -44,7 +45,7 @@ if resources=$(LC_ALL=C free -b) &&
           tuning_log 'swap is active but could not be enabled at boot'
         fi
       else
-        rm -f "$swap_tmp" "$swap_file" "/etc/systemd/system/$swap_unit"
+        rm -f "$swap_tmp" "$swap_file" "$unit_path"
         systemctl daemon-reload || true
         tuning_log 'swap skipped because the host could not activate a swap file'
       fi

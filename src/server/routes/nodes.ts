@@ -159,9 +159,12 @@ export function registerNodesRoutes({ app, s, entity }: Routes) {
       })
       .immediate();
     const url = new URL(`/deploy/${key}.sh`, origin);
+    const install = `file=$(mktemp) || exit
+trap 'rm -f -- "$file"' EXIT
+curl -fsS "$1" -o "$file" && bash "$file"`.replaceAll("\n", "; ");
     c.header("Cache-Control", "no-store");
     return c.json({
-      command: `script=$(curl -fsS ${quote(url.href)}) && bash -c "$script"`,
+      command: `bash -c ${quote(install)} -- ${quote(url.href)}`,
       expiresAt: new Date(expires).toISOString(),
     });
   });

@@ -89,7 +89,7 @@ export async function runOperation(
       );
       for (const line of output.split("\n")) {
         if (line.startsWith("Adaptive tuning: "))
-          checkpoint(1, safeError(s, line));
+          checkpoint(1, safeError(s, Error(line)));
       }
       checkpoint(2, "Verifying deployment");
       let actual = JSON.parse(await run(detectionScript));
