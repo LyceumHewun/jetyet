@@ -94,6 +94,7 @@ function fixture() {
     "user",
     {
       name: "Friend",
+      username: "friend",
       enabled: true,
       quota,
       nodeIds: [node.id],
@@ -381,6 +382,16 @@ describe("authorization and templates", () => {
       `/sub/${s.secrets(user.id).subscriptionToken}`,
     );
     expect(response.status).toBe(200);
+    expect(response.headers.get("profile-title")).toBe(
+      `base64:${Buffer.from("Jetyet · friend").toString("base64")}`,
+    );
+    expect(response.headers.get("profile-web-page-url")).toBe(s.config.origin);
+    expect(response.headers.get("support-url")).toBe(
+      "https://github.com/LyceumHewun/jetyet",
+    );
+    expect(response.headers.get("content-disposition")).toBe(
+      "inline; filename*=UTF-8''Jetyet%20%C2%B7%20friend",
+    );
     expect(await response.text()).toContain("203.0.113.1");
   });
   test("subscription emits fields for the node's port and congestion modes", async () => {
@@ -566,7 +577,7 @@ describe("authorization and templates", () => {
     const app = createApp(s);
     const another = s.put(
       "user",
-      { ...strip(user), name: "Other" },
+      { ...strip(user), name: "Other", username: "other" },
       {
         vpnToken: token(),
         subscriptionToken: token(),

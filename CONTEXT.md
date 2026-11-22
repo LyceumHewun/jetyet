@@ -221,6 +221,7 @@ The proportion of expected reachability observations actually performed during a
 - **Subscription Users** can save incomplete **Personal Template** drafts and publish them after a redacted preview and successful validation. A draft or failed publication leaves the last published version active.
 - **Subscription Portal** previews hide real credentials, links containing credentials, and node names, addresses, and ports. Placeholder node data preserves group and routing relationships.
 - Selecting a template in the **Subscription Portal** changes the current preview and template-specific link. The default subscription link continues to use the administrator-assigned default template.
+- A **Subscription User**'s client-facing subscription title is `Jetyet · <sign-in username>` for every template.
 - Users obtain configurations through the corresponding subscription links; selecting a template does not alter node authorization or traffic allowances.
 - Temporarily unreachable or unhealthy nodes remain in subscription output; the platform displays their health state.
 - Administrator-disabled nodes and nodes no longer authorized for a user are excluded from that user's subscription output.

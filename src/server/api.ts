@@ -150,7 +150,15 @@ export function createApp(s: Store) {
     const use = usage(s, u);
     const upload = u.quota.direction === "out" ? 0 : use.inbound;
     const download = u.quota.direction === "in" ? 0 : use.outbound;
+    const title = `Jetyet · ${u.username}`;
     c.header("Content-Type", "text/yaml; charset=utf-8");
+    c.header("Profile-Title", `base64:${Buffer.from(title).toString("base64")}`);
+    c.header("Profile-Web-Page-Url", s.config.origin);
+    c.header("Support-Url", "https://github.com/LyceumHewun/jetyet");
+    c.header(
+      "Content-Disposition",
+      `inline; filename*=UTF-8''${encodeURIComponent(title)}`,
+    );
     c.header(
       "subscription-userinfo",
       `upload=${upload}; download=${download}; total=${u.quota.limit ?? 0}; expire=${u.expires ? Math.floor(Date.parse(u.expires) / 1000) : 0}`,
