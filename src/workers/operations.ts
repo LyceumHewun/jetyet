@@ -13,6 +13,7 @@ import {
   nodeDeploymentOptions,
   removeScript,
   serverConfig,
+  validateDeploymentVersion,
 } from "../server/deployment";
 import { safeError } from "../server/errors";
 import { execute, withHost } from "../server/ssh";
@@ -177,6 +178,7 @@ export async function runOperation(
       )
         throw Error("Remote deployment does not match the planned node");
       const { version, ...options } = detected.data;
+      validateDeploymentVersion(version, options);
       const verifyState = async (wantActive: boolean) => {
         if (actual.active === wantActive) return;
         await run(

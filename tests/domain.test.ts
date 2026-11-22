@@ -808,15 +808,13 @@ describe("detect operation and concurrent safety", () => {
     expect((await app.request(path)).status).toBe(404);
 
     const hash = digest(serverConfig(s, node, options));
-    enqueue(s, host.id, "detect", { nodeId: node.id });
-    const task = claim(s, false, "ops")!;
-    await runOperation(s, task, async () =>
+    const manifest = (installedVersion: string) =>
       JSON.stringify({
         ...options,
         owner: "jetyet",
         phase: "ready",
-        version,
-        actualVersion: version,
+        version: installedVersion,
+        actualVersion: installedVersion,
         nodeId: node.id,
         hostId: host.id,
         address: node.address,
@@ -825,8 +823,18 @@ describe("detect operation and concurrent safety", () => {
         configHash: hash,
         actualHash: hash,
         active: true,
-      }),
-    );
+      });
+    enqueue(s, host.id, "detect", { nodeId: node.id });
+    const unsupported = claim(s, false, "ops")!;
+    await expect(
+      runOperation(s, unsupported, async () => manifest("v2.7.1")),
+    ).rejects.toThrow("BBR mode requires Hysteria 2 v2.8.0 or later");
+    finish(s, unsupported, "failed");
+    expect(render(s, user, defaultTemplate)).toContain("up: 1000");
+
+    enqueue(s, host.id, "detect", { nodeId: node.id });
+    const task = claim(s, false, "ops")!;
+    await runOperation(s, task, async () => manifest(version));
     expect(s.get(node.id)?.congestion).toBe("bbr");
     expect(render(s, user, defaultTemplate)).not.toContain("up: 1000");
     expect(render(s, user, defaultTemplate)).not.toContain("down: 1000");
