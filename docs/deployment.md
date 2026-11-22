@@ -68,7 +68,7 @@
 - Token rotation takes effect for subsequent authentication requests on all nodes without remote credential deployment; kick existing user sessions separately.
 
 - Support Hysteria 2 nodes and mihomo subscription output. Show Hysteria 2 as the only protocol in the deployment form.
-- Offer Brutal and BBR as node congestion control modes, with Brutal selected by default. Render `up: 1000` and `down: 1000` in mihomo output for Brutal and omit them for BBR so the client uses its BBR controller.
+- Offer Brutal and BBR as node congestion control modes, with Brutal selected by default. The mihomo subscription renders `up: 1000` and `down: 1000` for Brutal. For BBR, it renders `bbr-profile: standard` and omits both bandwidth fields.
 - Expose no Brutal bandwidth controls in the control panel and impose no server-side bandwidth cap. Clients can override the defaults locally.
 - BBR mode requires Hysteria 2 v2.8.0 or later. It ignores client bandwidth hints. After switching to BBR, refresh clients that still use the old Brutal subscription configuration.
 - Publish a changed congestion control mode to subscriptions only after the VPS reports the verified deployment. For manual installation, publish the change after Detect installation succeeds. A failed deployment or detection leaves the previously published mode in place.
@@ -84,6 +84,7 @@
 - Do not require domain provisioning, ACME issuance, or automated public certificate renewal.
 - Port hopping is optional per node and disabled by default.
 - Administrators can configure a node's hopping port range; the platform manages corresponding server forwarding rules and subscription parameters together.
+- The mihomo subscription renders `ports` and `hop-interval` for hopping nodes, and `port` for single-port nodes.
 - Managed VPS hosts must run Debian or Ubuntu with systemd.
 - Before deployment, detect the host operating system and required capabilities; stop with an actionable reason when requirements are not met.
 - Other operating systems and service managers are outside the supported deployment scope.

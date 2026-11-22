@@ -9,6 +9,7 @@ import {
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import YAML from "yaml";
 import {
   addObservation,
   counted,
@@ -381,6 +382,41 @@ describe("authorization and templates", () => {
     );
     expect(response.status).toBe(200);
     expect(await response.text()).toContain("203.0.113.1");
+  });
+  test("subscription emits fields for the node's port and congestion modes", async () => {
+    const { node, user } = fixture();
+    const app = createApp(s);
+    const url = `/sub/${s.secrets(user.id).subscriptionToken}`;
+    const {
+      proxies: [single],
+    } = YAML.parse(await (await app.request(url)).text());
+    expect(single).toMatchObject({ port: 443, up: 1000, down: 1000 });
+    expect(single).not.toHaveProperty("ports");
+    expect(single).not.toHaveProperty("hop-interval");
+    expect(single).not.toHaveProperty("bbr-profile");
+
+    s.put(
+      "node",
+      {
+        ...strip(node),
+        hopping: "20000-50000",
+        hopInterval: 30,
+        congestion: "bbr",
+      },
+      undefined,
+      node.id,
+    );
+    const {
+      proxies: [hopping],
+    } = YAML.parse(await (await app.request(url)).text());
+    expect(hopping).toMatchObject({
+      ports: "20000-50000",
+      "hop-interval": 30,
+      "bbr-profile": "standard",
+    });
+    expect(hopping).not.toHaveProperty("port");
+    expect(hopping).not.toHaveProperty("up");
+    expect(hopping).not.toHaveProperty("down");
   });
   test("revoked nodes disappear immediately without stale fallback", () => {
     const { node, user } = fixture();

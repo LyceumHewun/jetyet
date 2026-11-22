@@ -216,17 +216,18 @@ function proxies(s: Store, u: Entity, mode: RenderMode) {
       name,
       type: "hysteria2",
       server: simulated ? `node-${i + 1}.invalid` : n.address,
-      port: simulated ? 443 : n.port,
       ...(!simulated && n.hopping
         ? {
             ports: n.hopping,
             "hop-interval": n.hopInterval,
           }
-        : {}),
+        : { port: simulated ? 443 : n.port }),
       password: mode === "live" ? s.secrets(u.id).vpnToken : "REDACTED",
       "skip-cert-verify": true,
       udp: true,
-      ...(n.congestion === "bbr" ? {} : { up: 1000, down: 1000 }),
+      ...(n.congestion === "bbr"
+        ? { "bbr-profile": "standard" }
+        : { up: 1000, down: 1000 }),
     };
   });
   return { rows, literalNames };
