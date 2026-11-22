@@ -80,6 +80,7 @@ function fixture() {
       status: "ready",
       port: 443,
       address: "203.0.113.1",
+      hopping: "",
     },
     { authSecret: token(), statsSecret: token(), probeToken: token() },
   );
@@ -746,6 +747,7 @@ describe("detect operation and concurrent safety", () => {
         hostId: host.id,
         address: node.address,
         port: node.port,
+        hopping: node.hopping,
         configHash: hash,
         actualHash: hash,
         active: true,
