@@ -693,6 +693,47 @@ describe("queue and encryption", () => {
   });
 });
 describe("detect operation and concurrent safety", () => {
+  test("SSH deploy preserves the published mode when stopping a disabled node fails", async () => {
+    const { host, node } = fixture();
+    s.put(
+      "node",
+      { ...strip(node), enabled: false, congestion: "brutal" },
+      undefined,
+      node.id,
+    );
+    const version = "v2.13.0";
+    const options = {
+      protocol: "hysteria2",
+      congestion: "bbr",
+      tuning: false,
+    } as const;
+    const hash = digest(serverConfig(s, node, options));
+    enqueue(s, host.id, "deploy", { nodeId: node.id, version, ...options });
+    const task = claim(s, false, "ops")!;
+    await expect(
+      runOperation(s, task, async (script) => {
+        if (script.includes("systemctl stop")) throw Error("Unable to stop");
+        if (script !== detectionScript) return "";
+        return JSON.stringify({
+          ...options,
+          owner: "jetyet",
+          phase: "ready",
+          version,
+          actualVersion: version,
+          nodeId: node.id,
+          hostId: host.id,
+          address: node.address,
+          port: node.port,
+          hopping: node.hopping,
+          configHash: hash,
+          actualHash: hash,
+          active: true,
+        });
+      }),
+    ).rejects.toThrow("Unable to stop");
+    expect(s.get(node.id)?.congestion).toBe("brutal");
+  });
+
   test("manual install is retryable for 15 minutes and publishes BBR only after detection", async () => {
     const { host, node, user } = fixture();
     const app = createApp(s);

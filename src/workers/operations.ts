@@ -92,35 +92,57 @@ export async function runOperation(
           checkpoint(1, safeError(s, line));
       }
       checkpoint(2, "Verifying deployment");
-      const actual = JSON.parse(await run(detectionScript));
+      let actual = JSON.parse(await run(detectionScript));
       const curHost = s.get(h.id);
       const curNode = s.get(n.id);
       if (!curHost || curHost.deleted || !curNode || curNode.deleted)
         throw Error("Entity removed during deployment");
       if (
         !matchesDeployment(s, curNode, actual, options, version) ||
-        !actual.active
+        actual.active !== true
       )
         throw Error("Deployed configuration verification failed");
-      s.put(
-        "node",
-        {
-          ...strip(curNode),
-          ...options,
-          status: "ready",
-          version: actual.version,
-          configHash: actual.configHash,
-        },
-        undefined,
-        curNode.id,
-      );
       if (
         !curNode.enabled ||
         !curHost.enabled ||
         curNode.deleting ||
         curHost.deleting
-      )
+      ) {
         await run("set -e\nsystemctl stop jetyet-hysteria.service\n");
+        actual = JSON.parse(await run(detectionScript));
+      }
+      s.db
+        .transaction(() => {
+          const latestHost = s.get(h.id);
+          const latestNode = s.get(n.id);
+          if (
+            !latestHost ||
+            latestHost.deleted ||
+            latestHost.deleting ||
+            !latestNode ||
+            latestNode.deleted ||
+            latestNode.deleting
+          )
+            throw Error("Entity removed during deployment");
+          if (
+            !matchesDeployment(s, latestNode, actual, options, version) ||
+            actual.active !== Boolean(latestNode.enabled && latestHost.enabled)
+          )
+            throw Error("Deployed configuration verification failed");
+          s.put(
+            "node",
+            {
+              ...strip(latestNode),
+              ...options,
+              status: "ready",
+              version,
+              configHash: actual.configHash,
+            },
+            undefined,
+            latestNode.id,
+          );
+        })
+        .immediate();
     } else if (t.kind === "detect") {
       if (!n || n.deleted || n.deleting)
         throw Error("Plan a node before detection");

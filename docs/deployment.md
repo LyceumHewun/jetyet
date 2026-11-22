@@ -70,6 +70,7 @@
 - Support Hysteria 2 nodes and mihomo subscription output. Show Hysteria 2 as the only protocol in the deployment form.
 - Offer Brutal and BBR as node congestion control modes, with Brutal selected by default. Render `up: 1000` and `down: 1000` in mihomo output for Brutal and omit them for BBR so the client uses its BBR controller.
 - Expose no Brutal bandwidth controls in the control panel and impose no server-side bandwidth cap. Clients can override the defaults locally.
+- BBR mode requires Hysteria 2 v2.8.0 or later. It ignores client bandwidth hints. After switching to BBR, refresh clients that still use the old Brutal subscription configuration.
 - Publish a changed congestion control mode to subscriptions only after the VPS reports the verified deployment. For manual installation, publish the change after Detect installation succeeds. A failed deployment or detection leaves the previously published mode in place.
 - Connect clients directly to the VPS IP address; a domain is not required.
 - Support IPv4, IPv6, and IPv6-only VPS hosts. Configure the SSH address separately from the node's advertised IP address.
