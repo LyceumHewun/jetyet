@@ -193,7 +193,9 @@ The proportion of expected reachability observations actually performed during a
 - A template-specific subscription URL always uses the selected template's type as its output format, regardless of the client User-Agent. An explicit format that conflicts with the selected template type returns HTTP 400.
 - A subscription URL can explicitly select its output format. The explicit selection takes precedence over client detection.
 - An automatic subscription URL selects the output format from the client User-Agent. If the client cannot be identified, the request returns HTTP 406 with guidance to use a format-specific URL.
-- The administrator's subscription links dialog and the **Subscription Portal** list the automatic URL first, then the fixed mihomo, sing-box, and Shadowrocket URLs. Template-specific URLs appear beside their templates. Each URL can be copied or shown as a **Subscription QR Code**.
+- The administrator's subscription links dialog lists the automatic URL before the fixed mihomo, sing-box, and Shadowrocket URLs.
+- The **Subscription Portal** shows the automatic URL and a Subscribe button. The button opens a dialog with a format selector, initially set to automatic detection, plus a copy action and **Subscription QR Code** for the selected URL.
+- Template-specific URLs appear beside their templates and can be copied or shown as a **Subscription QR Code**.
 - Selecting a different subscription output format does not create a separate user, credential identity, node entitlement, or allowance.
 - Manual or scheduled traffic resets automatically remove a **Subscription User**'s quota-based suspension.
 - Traffic resets do not override administrator-imposed suspension, VPS allowance exhaustion, or node authorization restrictions.
