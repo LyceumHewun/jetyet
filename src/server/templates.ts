@@ -131,6 +131,48 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
   }
   return YAML.stringify(redact(config));
 }
+function redactSingBoxPreview(
+  config: { outbounds: Record<string, any>[] },
+  literalNames: Map<string, string>,
+) {
+  const tags = new Set(config.outbounds.map((outbound) => outbound.tag));
+  const aliases = new Map<string, string>();
+  for (const outbound of config.outbounds) {
+    if (typeof outbound.tag !== "string" || !("server" in outbound)) continue;
+    const index = aliases.size + 1;
+    let tag = "Preview node " + index;
+    while (tags.has(tag)) tag += " (preview)";
+    tags.add(tag);
+    aliases.set(outbound.tag, tag);
+    outbound.tag = tag;
+    outbound.server = "node-" + index + ".invalid";
+    if ("server_port" in outbound) outbound.server_port = 443;
+    if ("server_ports" in outbound) outbound.server_ports = ["443:444"];
+    if (outbound.tls?.server_name) outbound.tls.server_name = outbound.server;
+  }
+  for (const [literal, simulated] of literalNames) {
+    if (aliases.has(simulated)) aliases.set(literal, aliases.get(simulated)!);
+  }
+  function replaceReferences(value: unknown, key = ""): unknown {
+    if (Array.isArray(value))
+      return value.map((item) => replaceReferences(item, key));
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value).map(([field, item]) => [
+          field,
+          replaceReferences(item, field),
+        ]),
+      );
+    if (
+      typeof value === "string" &&
+      ["outbounds", "outbound", "detour", "default", "final"].includes(key)
+    )
+      return aliases.get(value) ?? value;
+    return value;
+  }
+  return replaceReferences(config) as typeof config;
+}
+
 for (const name of ["include", "render", "layout", "extends"])
   engine.registerTag(name, {
     parse() {
@@ -295,7 +337,7 @@ export function render(
   if (Buffer.byteLength(text) > 1024 * 1024)
     throw Error("Rendered configuration is too large");
   if (format === "sing-box") {
-    const config = JSON.parse(text);
+    let config = JSON.parse(text);
     if (
       !Array.isArray(config?.outbounds) ||
       !Array.isArray(config?.inbounds) ||
@@ -305,6 +347,8 @@ export function render(
       throw Error(
         "A complete sing-box configuration requires inbounds, outbounds, DNS and routing",
       );
+    if (isPortalPreview(mode))
+      config = redactSingBoxPreview(config, literalNames);
     const tags = new Set<string>();
     for (const outbound of config.outbounds) {
       if (

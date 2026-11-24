@@ -90,7 +90,7 @@ proxies:
 {{ proxies | yaml | indent: 2 }}
 ```
 
-Save drafts while editing, including incomplete configurations. Publication checks the rendered configuration with the matching core. Set `mihomoBinary` and `singBoxBinary` to the management host's executable paths. Publish a **complete** configuration with DNS, outbound selection, and routing. Downloads require at least one eligible assigned node. Subscription downloads render the published template using current authorizations and credentials and check the resulting structure in-process.
+Save drafts while editing, including incomplete configurations. Publication checks the rendered configuration with the matching core. Set `mihomoBinary` and `singBoxBinary` to the management host's executable paths. Publish a **complete** configuration with DNS, outbound selection, and routing. Downloads require at least one eligible assigned node. After upgrading from a version with a single default template, open each existing subscription user and save their assignments with one default for each configuration format. Subscription downloads render the published template using current authorizations and credentials and check the resulting structure in-process.
 
 ## Development checks
 

@@ -236,11 +236,8 @@ export function registerPortalRoutes(
       draft.previewed !== digest(draft.draft)
     )
       throw new HttpError(409, "Preview the saved draft before publishing");
-    await validateCore(
-      s,
-      render(s, user, draft.draft, "admin-preview", draft.format),
-      draft.format,
-    );
+    const configuration = render(s, user, draft.draft, "live", draft.format);
+    await validateCore(s, configuration, draft.format);
     const published = s.db
       .transaction(() => {
         const currentUser = sessionUser(c);
@@ -249,7 +246,8 @@ export function registerPortalRoutes(
         if (
           t.draft !== draft.draft ||
           t.draftName !== draft.draftName ||
-          t.previewed !== draft.previewed
+          t.previewed !== draft.previewed ||
+          render(s, currentUser, t.draft, "live", t.format) !== configuration
         )
           throw new HttpError(409, "Preview the saved draft before publishing");
         return s.put(

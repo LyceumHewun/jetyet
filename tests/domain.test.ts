@@ -426,6 +426,20 @@ describe("authorization and templates", () => {
         },
       ]),
     });
+    const singBoxTemplate = s.get(user.defaultTemplates["sing-box"])!;
+    const literalSelector = singBoxTemplate.body.replace(
+      "{{ choices | json }}",
+      JSON.stringify([node.name]),
+    );
+    const preview = JSON.parse(
+      render(s, user, literalSelector, "assigned-preview", "sing-box"),
+    );
+    expect(
+      preview.outbounds.find(
+        (outbound: { tag: string }) => outbound.tag === "Proxy",
+      ).outbounds,
+    ).toEqual(["Preview node 1"]);
+    expect(JSON.stringify(preview)).not.toContain(node.address);
     const selected = path + "?template=" + template.id;
     expect(
       (await app.request(selected, shadowrocket)).headers.get("content-type"),
