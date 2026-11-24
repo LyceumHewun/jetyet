@@ -3671,9 +3671,6 @@ body > .os-scrollbar.os-theme-jetyet {
     inline-size: min(100%, 21.5rem, 48dvh);
     padding: var(--space-3);
   }
-  .qr-controls .qr-link {
-    margin-top: auto;
-  }
 }
 .qr-frame {
   padding: var(--space-2);
