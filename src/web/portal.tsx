@@ -35,6 +35,7 @@ import {
   Modal,
   ModalBody,
   QrCodeModal,
+  type QrCodeOption,
   Select,
   TemplateAuthoringHelp,
   TextArea,
@@ -290,6 +291,7 @@ export function SubscriptionPortal({
     label: string;
     tag?: string;
     url: string;
+    options?: QrCodeOption[];
   } | null>(null);
   const [templateLinks, setTemplateLinks] = useState<
     Record<string, string | null>
@@ -385,12 +387,6 @@ export function SubscriptionPortal({
   const personalTemplates = templates.filter((item) => item.personal);
   const publishedSources = templates.filter((item) => item.published);
   const selected = templates.find((item) => item.id === selectedId);
-  const defaultMihomo = templates.find(
-    (item) => item.id === portal?.defaultTemplates?.mihomo,
-  );
-  const defaultSingBox = templates.find(
-    (item) => item.id === portal?.defaultTemplates?.["sing-box"],
-  );
   const fallbackPinnedLink =
     portal?.defaultLink && selected?.published
       ? `${portal.defaultLink}?template=${encodeURIComponent(selected.id)}`
@@ -702,78 +698,50 @@ export function SubscriptionPortal({
                     </p>
                   </div>
                 </section>
-              ) : portal.defaultLink || portal.formats ? (
+              ) : portal.defaultLink ? (
                 <section className="studio-card portal-subscription">
-                  <div>
-                    <h2>{translate("Default subscription")}</h2>
-                    <p className="muted">
-                      {defaultMihomo && defaultSingBox
-                        ? translate(
-                            "Automatic link selects mihomo ({0}) or sing-box ({1}) by client, or use a fixed format link below.",
-                            defaultMihomo.name,
-                            defaultSingBox.name,
-                          )
-                        : translate(
-                            "Copy or scan the automatic link, or pick a fixed output format below.",
-                          )}
-                    </p>
-                  </div>
-                  {portal.defaultLink && (
-                    <PortalLink
-                      url={portal.defaultLink}
-                      label={translate("Default subscription")}
-                      description={translate("Automatic · Detects client")}
-                      primary
-                      allowOpen={false}
-                      onShowQr={() =>
+                  <h2>{translate("Default subscription")}</h2>
+                  <div className="portal-link">
+                    <div className="portal-link-value">
+                      <code title={portal.defaultLink}>
+                        {portal.defaultLink}
+                      </code>
+                    </div>
+                    <Button
+                      variant="primary"
+                      className="portal-subscribe-btn"
+                      onClick={() => {
+                        const options: QrCodeOption[] = [
+                          {
+                            value: "adaptive",
+                            label: translate("Adaptive"),
+                            url: portal.defaultLink!,
+                            tag: translate("Adaptive"),
+                          },
+                        ];
+                        for (const fmt of SUBSCRIPTION_FORMATS) {
+                          const url = portal.formats?.[fmt];
+                          if (url) {
+                            options.push({
+                              value: fmt,
+                              label: formatLabel(fmt),
+                              url,
+                              tag: formatLabel(fmt),
+                            });
+                          }
+                        }
                         setQrModal({
                           label: translate("Default subscription"),
-                          tag: translate("Automatic"),
+                          tag: translate("Adaptive"),
                           url: portal.defaultLink!,
-                        })
-                      }
-                    />
-                  )}
-                  {portal.formats && (
-                    <div className="portal-format-links">
-                      {SUBSCRIPTION_FORMATS.map((fmt) => {
-                        const url = portal.formats?.[fmt];
-                        if (!url) return null;
-                        const defaultTpl =
-                          fmt !== "shadowrocket"
-                            ? templates.find(
-                                (item) =>
-                                  item.id === portal.defaultTemplates?.[fmt],
-                              )
-                            : undefined;
-                        const description =
-                          fmt === "shadowrocket"
-                            ? translate("Shadowrocket · Hysteria 2 node list")
-                            : defaultTpl
-                              ? translate(
-                                  "{0} · Default: {1}",
-                                  formatLabel(fmt),
-                                  defaultTpl.name,
-                                )
-                              : formatLabel(fmt);
-                        return (
-                          <PortalLink
-                            key={fmt}
-                            url={url}
-                            label={formatLabel(fmt)}
-                            description={description}
-                            onShowQr={() =>
-                              setQrModal({
-                                label: formatLabel(fmt),
-                                tag: formatLabel(fmt),
-                                url,
-                              })
-                            }
-                          />
-                        );
-                      })}
-                    </div>
-                  )}
+                          options,
+                        });
+                      }}
+                    >
+                      <QrCode size={14} aria-hidden="true" />
+                      {translate("Subscribe")}
+                    </Button>
+                  </div>
                 </section>
               ) : (
                 <section className="portal-expired-banner" role="status">
@@ -1190,6 +1158,7 @@ export function SubscriptionPortal({
           title={qrModal.label}
           tag={qrModal.tag}
           url={qrModal.url}
+          options={qrModal.options}
           onClose={() => setQrModal(null)}
         />
       )}

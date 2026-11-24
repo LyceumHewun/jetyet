@@ -1,10 +1,18 @@
 import QRCode from "qrcode";
-import { useId, useMemo } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { t as translate } from "../i18n";
-import { Button, CopyButton } from "./primitives";
+import { Button, CopyButton, Field } from "./primitives";
+import { Select } from "./Select";
 import { Modal, ModalBody } from "./workspace";
 
 const QUIET_ZONE = 4;
+
+export type QrCodeOption = {
+  value: string;
+  label: string;
+  url: string;
+  tag?: string;
+};
 
 /**
  * Renders a scannable local SVG QR code for the exact subscription URL.
@@ -64,23 +72,43 @@ export function QrCodeSvg({
 }
 
 /**
- * Focused flat modal showing a scannable QR code for an exact HTTPS URL.
+ * Focused flat modal showing a scannable QR code for an exact HTTPS URL,
+ * with an optional format switcher backed by server-provided URLs.
  */
 export function QrCodeModal({
   title,
   tag,
   url,
+  options,
+  optionLabel = translate("Output format"),
   onClose,
 }: {
   title: string;
   tag?: string;
   url: string;
+  options?: QrCodeOption[];
+  optionLabel?: string;
   onClose: () => void;
 }) {
+  const selectId = useId();
+  const [selectedValue, setSelectedValue] = useState(
+    () => options?.[0]?.value ?? "",
+  );
+
+  useEffect(() => {
+    setSelectedValue(options?.[0]?.value ?? "");
+  }, [options, url]);
+
+  const activeOption =
+    options?.find((opt) => opt.value === selectedValue) ?? options?.[0];
+  const activeUrl = activeOption?.url ?? url;
+  const activeTag = activeOption?.tag ?? tag;
+  const qrLabel = activeOption ? `${title} · ${activeOption.label}` : title;
+
   return (
     <Modal
       title={title}
-      tag={tag ?? translate("Subscription QR Code")}
+      tag={activeTag ?? translate("Subscription QR Code")}
       subtitle={translate(
         "Scan this QR code with a compatible client to import the subscription URL.",
       )}
@@ -88,19 +116,37 @@ export function QrCodeModal({
       className="qr-dialog"
     >
       <ModalBody>
+        {options && options.length > 0 && (
+          <Field label={optionLabel} htmlFor={selectId}>
+            <Select
+              id={selectId}
+              value={activeOption?.value ?? ""}
+              options={options.map((opt) => ({
+                value: opt.value,
+                label: opt.label,
+              }))}
+              onChange={setSelectedValue}
+            />
+          </Field>
+        )}
         <figure className="qr-figure">
           <div className="qr-frame">
             <QrCodeSvg
-              value={url}
-              label={translate("Subscription QR code for {0}", title)}
+              value={activeUrl}
+              label={translate("Subscription QR code for {0}", qrLabel)}
               size={200}
             />
           </div>
-          <figcaption className="qr-caption mono">{url}</figcaption>
+          <figcaption className="qr-caption mono">{activeUrl}</figcaption>
         </figure>
       </ModalBody>
       <div className="modal-foot">
-        <CopyButton text={url} label={translate("Copy link")} variant="default" />
+        <CopyButton
+          key={activeUrl}
+          text={activeUrl}
+          label={translate("Copy link")}
+          variant="default"
+        />
         <Button variant="primary" onClick={onClose}>
           {translate("Done")}
         </Button>

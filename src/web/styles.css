@@ -2948,7 +2948,7 @@ legend {
   min-inline-size: 0;
 }
 .portal-subscription h2 {
-  margin-block-end: var(--space-1);
+  margin-block-end: 0;
 }
 .portal-traffic h2 {
   margin-block-end: 0;
@@ -3120,12 +3120,16 @@ legend {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.portal-link .copy-btn {
+.portal-link .copy-btn,
+.portal-link .portal-subscribe-btn {
   min-inline-size: 5.5rem;
   min-block-size: var(--action-height);
-  padding-inline: var(--space-2);
+  padding-inline: var(--space-3);
   font-size: var(--text-sm);
   white-space: nowrap;
+}
+.portal-link .copy-btn {
+  padding-inline: var(--space-2);
 }
 .portal-link .link-open-btn {
   inline-size: var(--action-height);
@@ -3155,7 +3159,11 @@ legend {
 @media (pointer: coarse) {
   .portal-picker .ui-select-trigger,
   .portal-link .copy-btn,
-  .portal-link .link-open-btn {
+  .portal-link .portal-subscribe-btn,
+  .portal-link .link-open-btn,
+  .qr-dialog .ui-select-trigger,
+  .qr-dialog .modal-foot button,
+  .qr-dialog .modal-foot .copy-btn {
     min-block-size: 44px;
   }
   .portal-link .link-open-btn {
@@ -3596,6 +3604,17 @@ body > .os-scrollbar.os-theme-jetyet {
 .qr-dialog {
   max-width: 24rem;
 }
+.qr-dialog .field {
+  margin-bottom: 0;
+}
+.qr-dialog .modal-foot {
+  flex-wrap: wrap;
+}
+.qr-dialog .modal-foot .copy-btn {
+  min-block-size: var(--action-height);
+  font-size: var(--text-md);
+  white-space: nowrap;
+}
 .qr-figure {
   margin: 0;
   display: grid;
@@ -3628,10 +3647,6 @@ body > .os-scrollbar.os-theme-jetyet {
   text-align: center;
   overflow-wrap: anywhere;
   user-select: all;
-}
-.portal-format-links {
-  display: grid;
-  gap: var(--space-2);
 }
 .portal-picker-row {
   display: flex;

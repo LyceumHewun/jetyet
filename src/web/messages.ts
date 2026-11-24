@@ -678,6 +678,9 @@ export const zhHans = {
   "Copy or scan the automatic link, or pick a fixed output format below.":
     "复制或扫描自动链接，或在下方选择固定输出格式。",
   "Automatic · Detects client": "自动识别 · 根据客户端匹配格式",
+  Subscribe: "订阅",
+  Adaptive: "自适应",
+  "Output format": "输出格式",
   "Shadowrocket · Hysteria 2 node list": "Shadowrocket · Hysteria 2 节点列表",
   "{0} · Default: {1}": "{0} · 默认：{1}",
   "No subscription links yet": "暂无可用订阅链接",
