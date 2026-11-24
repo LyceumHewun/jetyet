@@ -3609,6 +3609,18 @@ body > .os-scrollbar.os-theme-jetyet {
 .qr-dialog {
   max-width: 24rem;
 }
+.qr-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+.qr-controls {
+  display: grid;
+  gap: var(--space-4);
+  min-inline-size: 0;
+  align-content: start;
+}
 .qr-dialog .field {
   margin-bottom: 0;
 }
@@ -3629,6 +3641,16 @@ body > .os-scrollbar.os-theme-jetyet {
   display: grid;
   justify-items: center;
   gap: var(--space-3);
+  min-inline-size: 0;
+}
+@media (min-width: 40rem) {
+  .qr-dialog.qr-dialog-split {
+    max-width: 42rem;
+  }
+  .qr-layout {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    gap: var(--space-6);
+  }
 }
 .qr-frame {
   padding: var(--space-2);

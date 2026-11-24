@@ -178,6 +178,56 @@ export function QrCodeModal({
       )
     : undefined;
 
+  const hasControls =
+    templateSelectOptions.length > 0 || formatOptions.length > 0;
+
+  const controls = hasControls ? (
+    <div className="qr-controls">
+      {templateSelectOptions.length > 0 && (
+        <Field label={templateLabel} htmlFor={templateSelectId}>
+          <Select
+            id={templateSelectId}
+            value={activeTemplate?.value ?? ""}
+            options={templateSelectOptions}
+            onChange={setSelectedTemplateId}
+          />
+        </Field>
+      )}
+      {formatOptions.length > 0 && (
+        <Field
+          label={optionLabel}
+          htmlFor={selectId}
+          hint={formatLockHint}
+          hintId={formatLockHint ? formatHintId : undefined}
+        >
+          <Select
+            id={selectId}
+            aria-describedby={formatLockHint ? formatHintId : undefined}
+            value={activeOption?.value ?? effectiveFormat}
+            disabled={formatLocked}
+            options={formatOptions}
+            onChange={(next) => {
+              if (!formatLocked) setSelectedFormat(next);
+            }}
+          />
+        </Field>
+      )}
+    </div>
+  ) : null;
+
+  const figure = (
+    <figure className="qr-figure">
+      <div className="qr-frame">
+        <QrCodeSvg
+          value={activeUrl}
+          label={translate("Subscription QR code for {0}", qrLabel)}
+          size={200}
+        />
+      </div>
+      <figcaption className="qr-caption mono">{activeUrl}</figcaption>
+    </figure>
+  );
+
   return (
     <Modal
       title={title}
@@ -186,48 +236,17 @@ export function QrCodeModal({
         "Scan this QR code with a compatible client to import the subscription URL.",
       )}
       onClose={onClose}
-      className="qr-dialog"
+      className={hasControls ? "qr-dialog qr-dialog-split" : "qr-dialog"}
     >
       <ModalBody>
-        {templateSelectOptions.length > 0 && (
-          <Field label={templateLabel} htmlFor={templateSelectId}>
-            <Select
-              id={templateSelectId}
-              value={activeTemplate?.value ?? ""}
-              options={templateSelectOptions}
-              onChange={setSelectedTemplateId}
-            />
-          </Field>
-        )}
-        {formatOptions.length > 0 && (
-          <Field
-            label={optionLabel}
-            htmlFor={selectId}
-            hint={formatLockHint}
-            hintId={formatLockHint ? formatHintId : undefined}
-          >
-            <Select
-              id={selectId}
-              aria-describedby={formatLockHint ? formatHintId : undefined}
-              value={activeOption?.value ?? effectiveFormat}
-              disabled={formatLocked}
-              options={formatOptions}
-              onChange={(next) => {
-                if (!formatLocked) setSelectedFormat(next);
-              }}
-            />
-          </Field>
-        )}
-        <figure className="qr-figure">
-          <div className="qr-frame">
-            <QrCodeSvg
-              value={activeUrl}
-              label={translate("Subscription QR code for {0}", qrLabel)}
-              size={200}
-            />
+        {hasControls ? (
+          <div className="qr-layout">
+            {controls}
+            {figure}
           </div>
-          <figcaption className="qr-caption mono">{activeUrl}</figcaption>
-        </figure>
+        ) : (
+          figure
+        )}
       </ModalBody>
       <div className="modal-foot">
         <CopyButton
