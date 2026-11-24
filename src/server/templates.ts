@@ -268,7 +268,7 @@ export function seedTemplate(s: Store) {
   ]) {
     if (!s.list("template").some((t) => t.format === format && t.builtin))
       s.put("template", {
-        name: format === "mihomo" ? "Everyday (mihomo)" : "Everyday (sing-box)",
+        name: "Simple",
         body,
         published: true,
         format,
