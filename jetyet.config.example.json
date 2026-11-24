@@ -10,5 +10,6 @@
   },
   "probeUrl": "https://www.gstatic.com/generate_204",
   "hysteriaBinary": "/usr/local/bin/hysteria",
+  "singBoxBinary": "/usr/local/bin/sing-box",
   "mihomoBinary": "/usr/local/bin/mihomo"
 }

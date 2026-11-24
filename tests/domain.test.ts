@@ -4,6 +4,7 @@ import {
   describe,
   expect,
   setSystemTime,
+  spyOn,
   test,
 } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -58,6 +59,7 @@ beforeEach(() => {
     probeUrl: "https://example.com",
     hysteriaBinary: "hysteria",
     mihomoBinary: "mihomo",
+    singBoxBinary: "sing-box",
   } as Config);
 });
 afterEach(() => {
@@ -66,6 +68,8 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 function fixture() {
+  createApp(s);
+  const singBox = s.list("template").find((t) => t.format === "sing-box")!;
   const host = s.put("host", {
     name: "Host",
     enabled: true,
@@ -89,6 +93,7 @@ function fixture() {
     name: "Default",
     published: true,
     body: defaultTemplate,
+    format: "mihomo",
   });
   const user = s.put(
     "user",
@@ -98,8 +103,8 @@ function fixture() {
       enabled: true,
       quota,
       nodeIds: [node.id],
-      templateIds: [template.id],
-      defaultTemplate: template.id,
+      templateIds: [template.id, singBox.id],
+      defaultTemplates: { mihomo: template.id, "sing-box": singBox.id },
       expires: null,
     },
     { vpnToken: token(), subscriptionToken: token() },
@@ -279,7 +284,7 @@ describe("traffic integrity", () => {
         quota,
         nodeIds: [node.id],
         templateIds: user.templateIds,
-        defaultTemplate: user.defaultTemplate,
+        defaultTemplates: user.defaultTemplates,
         expires: null,
       },
       { vpnToken: token(), subscriptionToken: token() },
@@ -379,7 +384,7 @@ describe("authorization and templates", () => {
     s.config.mihomoBinary = join(dir, "missing-mihomo");
     const app = createApp(s);
     const response = await app.request(
-      `/sub/${s.secrets(user.id).subscriptionToken}`,
+      `/sub/${s.secrets(user.id).subscriptionToken}?format=mihomo`,
     );
     expect(response.status).toBe(200);
     expect(response.headers.get("profile-title")).toBe(
@@ -394,10 +399,46 @@ describe("authorization and templates", () => {
     );
     expect(await response.text()).toContain("203.0.113.1");
   });
+  test("negotiates subscriptions, honors templates, and refuses empty access", async () => {
+    const { user, node, template } = fixture();
+    const app = createApp(s);
+    const path = "/sub/" + s.secrets(user.id).subscriptionToken;
+    const shadowrocket = { headers: { "User-Agent": "Shadowrocket/1" } };
+    expect((await app.request(path)).status).toBe(406);
+    const list = await app.request(path, shadowrocket);
+    expect(list.headers.get("content-type")).toContain("text/plain");
+    expect(Buffer.from(await list.text(), "base64").toString()).toContain(
+      "@203.0.113.1:443/?insecure=1#Node",
+    );
+    const singBox = await app.request(path + "?format=sing-box", shadowrocket);
+    expect(singBox.headers.get("content-type")).toContain("application/json");
+    expect(await singBox.json()).toMatchObject({
+      outbounds: expect.arrayContaining([
+        {
+          type: "hysteria2",
+          tag: "Node",
+          server: "203.0.113.1",
+          server_port: 443,
+          password: s.secrets(user.id).vpnToken,
+          tls: { enabled: true, insecure: true },
+          up_mbps: 1000,
+          down_mbps: 1000,
+        },
+      ]),
+    });
+    const selected = path + "?template=" + template.id;
+    expect(
+      (await app.request(selected, shadowrocket)).headers.get("content-type"),
+    ).toContain("text/yaml");
+    expect((await app.request(selected + "&format=sing-box")).status).toBe(400);
+    s.put("node", { ...strip(node), enabled: false }, undefined, node.id);
+    for (const format of ["mihomo", "sing-box", "shadowrocket"])
+      expect((await app.request(path + "?format=" + format)).status).toBe(403);
+  });
   test("subscription emits fields for the node's port and congestion modes", async () => {
     const { node, user } = fixture();
     const app = createApp(s);
-    const url = `/sub/${s.secrets(user.id).subscriptionToken}`;
+    const url = `/sub/${s.secrets(user.id).subscriptionToken}?format=mihomo`;
     const {
       proxies: [single],
     } = YAML.parse(await (await app.request(url)).text());
@@ -640,7 +681,16 @@ describe("authorization and templates", () => {
     expect(text).toContain("Preview node 1");
     expect(text).not.toContain("203.0.113.1");
     expect(text).not.toContain(s.secrets(user.id).vpnToken);
-    expect((await request(root + "/publish", "POST")).status).toBe(200);
+    const spawn = Bun.spawn.bind(Bun);
+    const validate = spyOn(Bun, "spawn").mockImplementation(() =>
+      spawn([process.execPath, "-e", "process.exit(0)"]),
+    );
+    try {
+      expect((await request(root + "/publish", "POST")).status).toBe(200);
+      expect(validate).toHaveBeenCalledTimes(1);
+    } finally {
+      validate.mockRestore();
+    }
     expect(await (await subscription(user)).text()).toContain("203.0.113.1");
     expect((await subscription(another)).status).toBe(403);
     expect(
@@ -657,7 +707,7 @@ describe("authorization and templates", () => {
     ).toBe(200);
     expect((await request(root + "/preview", "POST")).status).toBe(422);
     expect((await subscription(user)).status).toBe(200);
-    expect((await subscription(user, "")).status).toBe(200);
+    expect((await subscription(user, "?format=mihomo")).status).toBe(200);
     const simulatedBody = `{% if nodes[0].server != 'node-1.invalid' %}invalid{% else %}${defaultTemplate}
 proxy-providers:
   example:

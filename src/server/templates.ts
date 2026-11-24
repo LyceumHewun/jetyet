@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
+import type { TemplateFormat } from "../shared/schemas";
+import { subscriptionNodes } from "./subscriptions";
 import type { Entity, Store } from "./db";
 const engine = new Liquid({
   strictVariables: true,
@@ -47,6 +49,32 @@ function ruleTarget(parts: string[]) {
   const type = parts[0].trim().toUpperCase();
   if (type === "MATCH") return 1;
   return commaPayloadRules.has(type) ? parts.length - 1 : 2;
+}
+
+function redact(value: unknown): unknown {
+  if (typeof value === "string") {
+    return redactQueryCredentials(
+      value
+        .replace(
+          /\/sub\/[a-zA-Z0-9_-]+|\/set-password#[a-zA-Z0-9_-]+/g,
+          "[REDACTED]",
+        )
+        .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1REDACTED@"),
+    );
+  }
+  if (Array.isArray(value)) return value.map(redact);
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        isCredentialField(key)
+          ? Array.isArray(item)
+            ? []
+            : "REDACTED"
+          : redact(item),
+      ]),
+    );
+  return value;
 }
 
 function redactPreview(text: string, literalNames: Map<string, string>) {
@@ -101,31 +129,6 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
       }
     }
   }
-  function redact(value: unknown): unknown {
-    if (typeof value === "string") {
-      return redactQueryCredentials(
-        value
-          .replace(
-            /\/sub\/[a-zA-Z0-9_-]+|\/set-password#[a-zA-Z0-9_-]+/g,
-            "[REDACTED]",
-          )
-          .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1REDACTED@"),
-      );
-    }
-    if (Array.isArray(value)) return value.map(redact);
-    if (value && typeof value === "object")
-      return Object.fromEntries(
-        Object.entries(value).map(([key, item]) => [
-          key,
-          isCredentialField(key)
-            ? Array.isArray(item)
-              ? []
-              : "REDACTED"
-            : redact(item),
-        ]),
-      );
-    return value;
-  }
   return YAML.stringify(redact(config));
 }
 for (const name of ["include", "render", "layout", "extends"])
@@ -137,6 +140,7 @@ for (const name of ["include", "render", "layout", "extends"])
       return "";
     },
   });
+engine.registerFilter("json", (value) => JSON.stringify(value));
 engine.registerFilter("yaml", (v) => YAML.stringify(v).trimEnd());
 export const defaultTemplate = `mixed-port: 7890
 mode: rule
@@ -170,14 +174,41 @@ engine.registerFilter("indent", (v, n) => {
     .map((l) => " ".repeat(width) + l)
     .join("\n");
 });
+const singBoxTemplate = `{
+  "log": {"level": "warn"},
+  "dns": {"servers": [{"type": "https", "tag": "cloudflare", "server": "1.1.1.1"}], "final": "cloudflare"},
+  "inbounds": [{"type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30"], "auto_route": true}],
+  "outbounds": [
+    {"type": "direct", "tag": "DIRECT"},
+    {"type": "selector", "tag": "Proxy", "outbounds": {{ choices | json }}}
+    {% for node in nodes %}, {{ node | json }}{% endfor %}
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "default_domain_resolver": "cloudflare",
+    "rules": [
+      {"action": "sniff"},
+      {"protocol": "dns", "action": "hijack-dns"},
+      {"ip_is_private": true, "outbound": "DIRECT"}
+    ],
+    "final": "Proxy"
+  }
+}`;
+
 export function seedTemplate(s: Store) {
-  if (!s.list("template").length)
-    s.put("template", {
-      name: "Everyday",
-      body: defaultTemplate,
-      published: true,
-      format: "mihomo",
-    });
+  for (const [format, body] of [
+    ["mihomo", defaultTemplate],
+    ["sing-box", singBoxTemplate],
+  ]) {
+    if (!s.list("template").some((t) => t.format === format && t.builtin))
+      s.put("template", {
+        name: "Everyday",
+        body,
+        published: true,
+        format,
+        builtin: true,
+      });
+  }
 }
 type RenderMode =
   "live" | "admin-preview" | "portal-preview" | "assigned-preview";
@@ -186,18 +217,13 @@ function isPortalPreview(mode: RenderMode) {
   return mode === "portal-preview" || mode === "assigned-preview";
 }
 
-function proxies(s: Store, u: Entity, mode: RenderMode) {
-  const nodes = s.list("node").filter(
-    (n) =>
-      u.nodeIds.includes(n.id) &&
-      n.enabled &&
-      !n.deleting &&
-      n.status !== "draft" &&
-      (() => {
-        const h = s.get(n.hostId);
-        return h && !h.deleted && h.enabled && !h.deleting;
-      })(),
-  );
+function proxies(
+  s: Store,
+  u: Entity,
+  mode: RenderMode,
+  format: TemplateFormat,
+) {
+  const nodes = subscriptionNodes(s, u);
   const names = new Set(nodes.map((n) => n.name));
   if (names.size !== nodes.length)
     throw Error("Authorized nodes have duplicate display names");
@@ -211,6 +237,23 @@ function proxies(s: Store, u: Entity, mode: RenderMode) {
         while (names.has(name)) name += " (simulated)";
         literalNames.set(n.name, name);
       }
+    }
+    if (format === "sing-box") {
+      return {
+        name,
+        tag: name,
+        type: "hysteria2",
+        server: simulated ? "node-" + (i + 1) + ".invalid" : n.address,
+        ...(n.hopping
+          ? {
+              server_ports: [n.hopping.replace("-", ":")],
+              hop_interval: n.hopInterval + "s",
+            }
+          : { server_port: simulated ? 443 : n.port }),
+        password: mode === "live" ? s.secrets(u.id).vpnToken : "REDACTED",
+        tls: { enabled: true, insecure: true },
+        ...(n.congestion === "bbr" ? {} : { up_mbps: 1000, down_mbps: 1000 }),
+      };
     }
     return {
       name,
@@ -237,18 +280,52 @@ export function render(
   u: Entity,
   body: string,
   mode: RenderMode = "live",
+  format: TemplateFormat = "mihomo",
 ) {
   if (/{%\s*(include|render|layout|extends)\b/i.test(body))
     throw Error("File and partial loading is not allowed");
-  const { rows: p, literalNames } = proxies(s, u, mode);
+  const { rows: p, literalNames } = proxies(s, u, mode, format);
+  const rows = format === "sing-box" ? p.map(({ name, ...row }) => row) : p;
   const text = engine.parseAndRenderSync(body, {
-    proxies: p,
+    proxies: rows,
     choices: p.length ? p.map((p) => p.name) : ["DIRECT"],
     user: { name: isPortalPreview(mode) ? "Subscriber" : u.name },
-    nodes: p,
+    nodes: rows,
   });
   if (Buffer.byteLength(text) > 1024 * 1024)
     throw Error("Rendered configuration is too large");
+  if (format === "sing-box") {
+    const config = JSON.parse(text);
+    if (
+      !Array.isArray(config?.outbounds) ||
+      !Array.isArray(config?.inbounds) ||
+      !config.dns ||
+      !config.route
+    )
+      throw Error(
+        "A complete sing-box configuration requires inbounds, outbounds, DNS and routing",
+      );
+    const tags = new Set<string>();
+    for (const outbound of config.outbounds) {
+      if (
+        typeof outbound?.tag !== "string" ||
+        !outbound.tag ||
+        tags.has(outbound.tag)
+      )
+        throw Error("Duplicate or missing outbound tag");
+      tags.add(outbound.tag);
+    }
+    for (const outbound of config.outbounds) {
+      if (
+        ["selector", "urltest"].includes(outbound.type) &&
+        (!Array.isArray(outbound.outbounds) ||
+          !outbound.outbounds.length ||
+          outbound.outbounds.some((tag: string) => !tags.has(tag)))
+      )
+        throw Error("Invalid sing-box outbound selection");
+    }
+    return mode === "live" ? text : JSON.stringify(redact(config), null, 2);
+  }
   const output = isPortalPreview(mode)
     ? redactPreview(text, literalNames)
     : text;
@@ -319,25 +396,31 @@ export function validateStructure(text: string) {
     }
   }
 }
-export async function validateMihomo(s: Store, text: string) {
-  const dir = await mkdtemp(join(tmpdir(), "jetyet-mihomo-"));
+export async function validateCore(
+  s: Store,
+  text: string,
+  format: TemplateFormat,
+) {
+  const dir = await mkdtemp(join(tmpdir(), "jetyet-template-"));
   try {
-    const path = join(dir, "config.yaml");
+    const path = join(dir, format === "mihomo" ? "config.yaml" : "config.json");
     await writeFile(path, text, { mode: 0o600 });
-    const child = Bun.spawn(
-      [s.config.mihomoBinary, "-t", "-d", dir, "-f", path],
-      { stdout: "pipe", stderr: "pipe" },
-    );
+    const args =
+      format === "mihomo"
+        ? [s.config.mihomoBinary, "-t", "-d", dir, "-f", path]
+        : [s.config.singBoxBinary, "check", "-c", path, "-D", dir];
+    let child;
+    try {
+      child = Bun.spawn(args, { cwd: dir, stdout: "ignore", stderr: "ignore" });
+    } catch {
+      throw Error(format + " validation core is unavailable");
+    }
     const timer = setTimeout(() => child.kill(), 15000);
-    const [code] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
-    clearTimeout(timer);
+    const code = await child.exited.finally(() => clearTimeout(timer));
     if (code !== 0)
       throw Error(
-        "mihomo configuration validation failed; check groups, rules and DNS settings.",
+        format +
+          " configuration validation failed; check groups, rules and DNS settings.",
       );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -345,7 +428,9 @@ export async function validateMihomo(s: Store, text: string) {
 }
 export function templateGroupNames(s: Store): Set<string> {
   const names = new Set<string>();
-  for (const t of s.list("template").filter((t) => t.published && t.body)) {
+  for (const t of s
+    .list("template")
+    .filter((t) => t.format === "mihomo" && t.published && t.body)) {
     try {
       const rendered = engine.parseAndRenderSync(t.body, {
         proxies: [],

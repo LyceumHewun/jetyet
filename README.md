@@ -1,10 +1,10 @@
 # Jetyet
 
-A personal Hysteria 2 control plane for your VPS hosts and friends' mihomo subscriptions. Bun and React, backed by SQLite, with native systemd-managed VPN services.
+A personal Hysteria 2 control plane for your VPS hosts and friends' VPN subscriptions. Bun and React, backed by SQLite, with native systemd-managed VPN services.
 
 ## Run locally
 
-Requirements: Bun 1.3.5 or newer. Remote management also needs reachable Debian/Ubuntu VPS hosts with root or passwordless sudo, Python 3, curl, OpenSSL, iproute2, util-linux (`flock`) and systemd. Native binary deployment currently supports amd64 and arm64. Port hopping requires iptables and ip6tables. Install Hysteria 2 for end-to-end node probes and mihomo for template validation on the management server. Configure both executable paths.
+Requirements: Bun 1.3.5 or newer. Remote management also needs reachable Debian/Ubuntu VPS hosts with root or passwordless sudo, Python 3, curl, OpenSSL, iproute2, util-linux (`flock`) and systemd. Native binary deployment currently supports amd64 and arm64. Port hopping requires iptables and ip6tables. Install Hysteria 2 for end-to-end node probes and mihomo and sing-box for template validation on the management server. Configure their executable paths.
 
 ```sh
 bun install --frozen-lockfile
@@ -29,13 +29,13 @@ The interface is English. Displayed dates and reset schedules use Asia/Hong_Kong
 2. Plan one Hysteria 2 node on that host, with an advertised IPv4 or IPv6 address. Choose an explicit Hysteria 2 version when deploying. Native deployment refuses unmanaged Hysteria installations and unknown configuration.
 3. Select **Deploy**, or **Show deploy command**, execute that sensitive script as root on the chosen VPS, then select **Detect installation**. Detection confirms the platform identity and configuration before enabling authentication. Allow the listen port and any hopping range in the provider firewall.
 4. Create subscription users, assign current nodes and published templates, and configure allowances, expiration and reset schedules. New nodes are never automatically assigned.
-5. Copy the user's subscription link into mihomo. Each user has independent subscription and VPN tokens. The built-in template is complete and needs no local merging.
+5. Copy or scan the user's HTTPS subscription link. The automatic link uses the client's User-Agent. Fixed links select mihomo YAML, sing-box JSON, or a Base64 Shadowrocket node list. Each user has independent subscription and VPN tokens.
 
 Host and node configuration changes are deliberately separated: editing a node's network settings records the desired settings; inspect configuration drift and choose **Reapply configuration** to apply them. Service changes and upgrades may interrupt connections. User permission, token and quota changes use HTTP authentication and `/kick`, without restarting the service.
 
 ## Production
 
-Run on a Linux server with systemd, sudo, rsync, and curl. Install Bun 1.3.5 or newer at `/usr/local/bin/bun`, Hysteria at `/usr/local/bin/hysteria`, and mihomo at `/usr/local/bin/mihomo`. Copy the official executable binaries for your architecture to those paths.
+Run on a Linux server with systemd, sudo, rsync, and curl. Install Bun 1.3.5 or newer at `/usr/local/bin/bun`, Hysteria at `/usr/local/bin/hysteria`, mihomo at `/usr/local/bin/mihomo`, and sing-box at `/usr/local/bin/sing-box` for template validation. Copy the official executable binaries for your architecture to those paths.
 
 From a writable checkout on the server, run as your deployment user with sudo access:
 
@@ -90,7 +90,7 @@ proxies:
 {{ proxies | yaml | indent: 2 }}
 ```
 
-Save drafts while editing, including incomplete configurations. Preview and publication use mihomo for validation, and publication checks every assigned user's configuration. Publish a **complete** configuration, including DNS, proxy groups and rules. The built-in template uses `DIRECT` when no authorized nodes remain. Subscription downloads render the published template using current authorizations and credentials and check the resulting structure in-process.
+Save drafts while editing, including incomplete configurations. Publication checks the rendered configuration with the matching core. Set `mihomoBinary` and `singBoxBinary` to the management host's executable paths. Publish a **complete** configuration with DNS, outbound selection, and routing. Downloads require at least one eligible assigned node. Subscription downloads render the published template using current authorizations and credentials and check the resulting structure in-process.
 
 ## Development checks
 

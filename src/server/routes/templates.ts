@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { templateFormatSchema } from "../../shared/schemas";
 import { digest } from "../crypto";
 import { strip } from "../db";
 import { render } from "../templates";
@@ -16,6 +17,7 @@ export function registerTemplatesRoutes({
       .object({
         name: z.string().trim().min(1).max(100),
         body: z.string().max(100000),
+        format: templateFormatSchema,
       })
       .parse(await c.req.json());
     return c.json(
@@ -24,7 +26,7 @@ export function registerTemplatesRoutes({
         body: "",
         draft: v.body,
         published: false,
-        format: "mihomo",
+        format: v.format,
       }),
       201,
     );
@@ -54,8 +56,14 @@ export function registerTemplatesRoutes({
         .object({ userId: z.uuid(), body: z.string().max(100000).optional() })
         .parse(await c.req.json());
     const u = entity(userId, "user");
-    const text = render(s, u, body ?? t.draft ?? t.body, "admin-preview");
-    await checked(text);
+    const text = render(
+      s,
+      u,
+      body ?? t.draft ?? t.body,
+      "admin-preview",
+      t.format,
+    );
+    await checked(text, t.format);
     s.event(t.id, "template.previewed", {
       userId,
       bodyHash: digest(body ?? t.draft ?? t.body),
@@ -85,7 +93,7 @@ export function registerTemplatesRoutes({
         .list("user")
         .filter((u) => u.templateIds.includes(t.id) && u.id !== userId),
     ])
-      await checked(render(s, recipient, body));
+      await checked(render(s, recipient, body, "live", t.format), t.format);
     const current = entity(t.id, "template");
     if (digest(current.draft ?? current.body) !== digest(body))
       throw Error("Draft changed during validation; preview and publish again");
@@ -101,13 +109,7 @@ export function registerTemplatesRoutes({
 
   app.delete("/api/templates/:id", (c) => {
     const t = entity(c.req.param("id"), "template");
-    if (
-      t.published &&
-      s.list("template").filter((t) => t.published).length === 1
-    )
-      throw Error(
-        "Keep at least one published template so new users can be created",
-      );
+    if (t.builtin) throw Error("Built-in templates cannot be deleted");
     if (s.list("user").some((u) => u.templateIds.includes(t.id)))
       throw Error("Template is still assigned to a user");
     s.db.query("UPDATE entities SET deleted=1 WHERE id=?").run(t.id);

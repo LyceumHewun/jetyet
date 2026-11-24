@@ -67,7 +67,7 @@
 - Generate one random VPN authentication token per subscription user, reused across that user's authorized nodes; do not maintain per-node userpass credential maps.
 - Token rotation takes effect for subsequent authentication requests on all nodes without remote credential deployment; kick existing user sessions separately.
 
-- Support Hysteria 2 nodes and mihomo subscription output. Show Hysteria 2 as the only protocol in the deployment form.
+- Support Hysteria 2 nodes and mihomo, sing-box, and Shadowrocket subscription output. Show Hysteria 2 as the only protocol in the deployment form.
 - Offer Brutal and BBR as node congestion control modes, with Brutal selected by default. The mihomo subscription renders `up: 1000` and `down: 1000` for Brutal. For BBR, it renders `bbr-profile: standard` and omits both bandwidth fields.
 - Expose no Brutal bandwidth controls in the control panel and impose no server-side bandwidth cap. Clients can override the defaults locally.
 - BBR mode requires Hysteria 2 v2.8.0 or later. It ignores client bandwidth hints. After switching to BBR, refresh clients that still use the old Brutal subscription configuration.

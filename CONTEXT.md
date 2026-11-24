@@ -28,8 +28,17 @@ The **Administrator**'s choice of Brutal or BBR for a **Node**, with Brutal sele
 **Subscription**:
 A managed source of VPN client configurations published in supported output formats.
 
+**Shadowrocket Subscription**:
+A subscription format that serves a Base64-encoded list of authorized Hysteria 2 node URIs, one URI per line before encoding.
+
+**Subscription QR Code**:
+A scannable representation of the original HTTPS subscription URL for the selected output format.
+
 **Subscription Template**:
-A customizable definition of a complete VPN client configuration, rendered with platform-generated user-specific node data.
+A customizable definition of a complete VPN client configuration for one Subscription Template Type, rendered with platform-generated user-specific node data.
+
+**Subscription Template Type**:
+The client configuration format a Subscription Template targets, either mihomo or sing-box.
 
 **Personal Template**:
 A **Subscription Template** created by a **Subscription User** for their own subscription.
@@ -153,7 +162,7 @@ The proportion of expected reachability observations actually performed during a
 - Administrators can disable a **VPS** without deleting it, stopping its VPN services and excluding its nodes from subscriptions while retaining SSH, monitoring, configuration, and history.
 - Re-enabling a VPS restores eligible services subject to VPS allowances, user allowances, explicit node suspension, and user node authorization.
 - The currently supported VPN protocol is **Hysteria 2** only; other protocols are not part of the current requirements.
-- **mihomo** is the current target client; built-in subscription output targets mihomo configuration format.
+- **mihomo** and **sing-box** are supported template types.
 - Each **VPS** and **Subscription User** independently selects its **Traffic Accounting Direction**.
 - Outbound (upload) means bytes sent by the VPS; inbound (download) means bytes received by the VPS.
 - **Subscription Users** default to counting both outbound and inbound traffic.
@@ -177,8 +186,14 @@ The proportion of expected reachability observations actually performed during a
 - Detection identifies the configuration and state of those deployments; adopting arbitrary pre-existing VPN services is outside the product scope.
 - Administrators explicitly assign an allowed set of **Nodes** to each **Subscription User**, with a select-all action available.
 - Subscription output, VPN credential provisioning, and actual connection authorization all follow the user's allowed node set.
+- A **Subscription User** with no assigned nodes cannot retrieve subscriptions in any output format.
+- If all assigned nodes are disabled, subscription retrieval is unavailable in every output format until an assigned node is enabled and eligible again.
 - Select-all assigns only nodes that currently exist; newly created nodes require explicit assignment and are not automatically shared.
 - Each **Subscription User** has one subscription entry point, one allowed node set, and one shared traffic allowance across output formats.
+- A template-specific subscription URL always uses the selected template's type as its output format, regardless of the client User-Agent. An explicit format that conflicts with the selected template type returns HTTP 400.
+- A subscription URL can explicitly select its output format. The explicit selection takes precedence over client detection.
+- An automatic subscription URL selects the output format from the client User-Agent. If the client cannot be identified, the request returns HTTP 406 with guidance to use a format-specific URL.
+- The administrator's subscription links dialog and the **Subscription Portal** list the automatic URL first, then the fixed mihomo, sing-box, and Shadowrocket URLs. Template-specific URLs appear beside their templates. Each URL can be copied or shown as a **Subscription QR Code**.
 - Selecting a different subscription output format does not create a separate user, credential identity, node entitlement, or allowance.
 - Manual or scheduled traffic resets automatically remove a **Subscription User**'s quota-based suspension.
 - Traffic resets do not override administrator-imposed suspension, VPS allowance exhaustion, or node authorization restrictions.
@@ -208,19 +223,21 @@ The proportion of expected reachability observations actually performed during a
 - **Subscription Templates** can define complete client configurations, including rules, groups, and DNS settings, with the platform supplying authorized node data and user-specific credentials.
 - Templates render data and do not execute arbitrary scripts.
 - Administrators can save incomplete template drafts for later editing. Drafts become available to subscribers only after successful publication.
-- Publishing a template requires a user-specific preview and successful configuration validation; previews hide credentials by default.
+- Publishing a template requires a user-specific preview and successful validation of the rendered configuration by the core for its **Subscription Template Type**. Previews hide credentials by default.
+- An unavailable validation core blocks operations that require it and reports the problem. Draft editing and retrieval of published subscriptions remain available.
 - Invalid configuration syntax or references to nonexistent node groups block publication and leave the current valid template active.
-- Subscription output is a complete, directly usable mihomo configuration rather than a fragment requiring local merging.
-- The built-in default template includes DNS settings, proxy groups, and routing rules; custom templates must also produce complete configurations.
+- Template-based subscription output is a complete, directly usable client configuration.
+- Each **Subscription Template Type** has a complete built-in template with DNS settings, outbound selection, and routing rules. Custom templates must also produce complete configurations.
+- When an administrator creates a **Subscription User**, the built-in template of each type is preselected as that type's default. The administrator can choose a different published template of the same type.
 - Templates use dynamic authorized node collections and must handle empty groups according to explicit validity rules.
 - Client compatibility validation belongs to template authoring. Subscription retrieval renders the published template with current node authorizations and credentials, checks the generated structure, and returns an error if it cannot produce a structurally valid configuration.
 - Multiple **Subscription Templates** may target the same output format.
-- Administrators assign each **Subscription User** a set of available templates and a default template.
+- Administrators assign each **Subscription User** a set of available templates and one default template per **Subscription Template Type**.
 - **Personal Templates** are available only to their creators for editing, preview, and subscription output. They are separate from administrator-assigned templates.
-- A new **Personal Template** starts as an independent draft copied from the selected published template. Later changes to the source do not affect the copy.
+- A new **Personal Template** can only be created as an independent draft copied from a published template and inherits its **Subscription Template Type**. Later changes to the source do not affect the copy.
 - **Subscription Users** can save incomplete **Personal Template** drafts and publish them after a redacted preview and successful validation. A draft or failed publication leaves the last published version active.
 - **Subscription Portal** previews hide real credentials, links containing credentials, and node names, addresses, and ports. Placeholder node data preserves group and routing relationships.
-- Selecting a template in the **Subscription Portal** changes the current preview and template-specific link. The default subscription link continues to use the administrator-assigned default template.
+- Selecting a template in the **Subscription Portal** changes the current preview and template-specific link. The default subscription link for each type uses the administrator-assigned default template of that type.
 - A **Subscription User**'s client-facing subscription title is `Jetyet · <sign-in username>` for every template.
 - Users obtain configurations through the corresponding subscription links; selecting a template does not alter node authorization or traffic allowances.
 - Temporarily unreachable or unhealthy nodes remain in subscription output; the platform displays their health state.

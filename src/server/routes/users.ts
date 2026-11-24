@@ -6,6 +6,7 @@ import { strip } from "../db";
 import { HttpError } from "../errors";
 import { issuePasswordLink, revokePortalAccess } from "../sign-in";
 import { kickUser } from "../tasks";
+import { formatLinks, subscriptionLink } from "../subscriptions";
 import type { Routes } from "./context";
 
 export function registerUsersRoutes({ app, s, entity, view, checked }: Routes) {
@@ -22,6 +23,12 @@ export function registerUsersRoutes({ app, s, entity, view, checked }: Routes) {
     for (const id of input.nodeIds)
       if (entity(id, "node").deleting)
         throw Error("A node pending deletion cannot be assigned");
+    for (const [format, id] of Object.entries(input.defaultTemplates))
+      if (entity(id, "template").format !== format)
+        throw new HttpError(
+          400,
+          "Default template must match its output format",
+        );
     for (const id of input.templateIds) {
       const t = entity(id, "template");
       if (!t.published) throw Error("Only published templates may be assigned");
@@ -92,9 +99,10 @@ export function registerUsersRoutes({ app, s, entity, view, checked }: Routes) {
 
   app.get("/api/users/:id/links", (c) => {
     const u = entity(c.req.param("id"), "user");
-    const base = `${s.config.origin}/sub/${s.secrets(u.id).subscriptionToken}`;
+    const base = subscriptionLink(s, u);
     return c.json({
       default: base,
+      formats: formatLinks(base),
       templates: u.templateIds.map((id: string) => ({
         id,
         url: base + "?template=" + id,
