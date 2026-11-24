@@ -891,10 +891,7 @@ export function EntityForm({
             setError("");
             const payload =
               kind === "users"
-                ? (() => {
-                    const { defaultTemplate: _legacy, ...rest } = data;
-                    return { ...rest, username: (data.username || "").trim() };
-                  })()
+                ? { ...data, username: (data.username || "").trim() }
                 : kind === "nodes"
                   ? {
                       hostId: data.hostId,

@@ -82,12 +82,14 @@ function PortalLink({
   label,
   description,
   primary = false,
+  allowOpen = true,
   onShowQr,
 }: {
   url: string;
   label: string;
   description?: string;
   primary?: boolean;
+  allowOpen?: boolean;
   onShowQr: () => void;
 }) {
   return (
@@ -111,16 +113,18 @@ function PortalLink({
         >
           <QrCode size={14} aria-hidden="true" />
         </Button>
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="icon-button link-open-btn"
-          aria-label={translate("Open {0}", label)}
-          title={translate("Open URL")}
-        >
-          <ExternalLink size={14} aria-hidden="true" />
-        </a>
+        {allowOpen && (
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="icon-button link-open-btn"
+            aria-label={translate("Open {0}", label)}
+            title={translate("Open URL")}
+          >
+            <ExternalLink size={14} aria-hidden="true" />
+          </a>
+        )}
       </div>
     </div>
   );
@@ -720,6 +724,7 @@ export function SubscriptionPortal({
                       label={translate("Default subscription")}
                       description={translate("Automatic · Detects client")}
                       primary
+                      allowOpen={false}
                       onShowQr={() =>
                         setQrModal({
                           label: translate("Default subscription"),

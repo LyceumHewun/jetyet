@@ -62,16 +62,18 @@ function SubscriptionLinkRow({
         >
           <QrCode size={14} aria-hidden="true" />
         </Button>
-        <a
-          href={item.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="icon-button link-open-btn"
-          title={translate("Open URL")}
-          aria-label={translate("Open {0}", item.label)}
-        >
-          <ExternalLink size={14} aria-hidden="true" />
-        </a>
+        {item.kind !== "auto" && (
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="icon-button link-open-btn"
+            title={translate("Open URL")}
+            aria-label={translate("Open {0}", item.label)}
+          >
+            <ExternalLink size={14} aria-hidden="true" />
+          </a>
+        )}
       </div>
       {qrOpen && (
         <div className="link-qr-panel">
