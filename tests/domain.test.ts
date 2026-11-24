@@ -405,6 +405,10 @@ describe("authorization and templates", () => {
     const path = "/sub/" + s.secrets(user.id).subscriptionToken;
     const shadowrocket = { headers: { "User-Agent": "Shadowrocket/1" } };
     expect((await app.request(path)).status).toBe(406);
+    const clash = await app.request(path, {
+      headers: { "User-Agent": "Clash.Meta/1" },
+    });
+    expect(clash.headers.get("content-type")).toContain("text/yaml");
     const list = await app.request(path, shadowrocket);
     expect(list.headers.get("content-type")).toContain("text/plain");
     expect(Buffer.from(await list.text(), "base64").toString()).toContain(

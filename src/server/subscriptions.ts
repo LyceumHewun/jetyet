@@ -9,7 +9,9 @@ export type SubscriptionFormat = (typeof subscriptionFormats)[number];
 
 export function clientFormat(agent: string): SubscriptionFormat | undefined {
   if (
-    /^(?:mihomo|clash(?:[ -](?:meta|verge))?|flclash)(?:[ /_-]|$)/i.test(agent)
+    /^(?:mihomo|clash(?:[ .-]?(?:meta|verge))?|flclash)(?:[ /_-]|$)/i.test(
+      agent,
+    )
   )
     return "mihomo";
   if (/^(?:sing-box|sfa|sfi|sfm|sft|sfd)(?:[ /_-]|$)/i.test(agent))

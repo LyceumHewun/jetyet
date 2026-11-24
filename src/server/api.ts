@@ -270,6 +270,7 @@ export function createApp(s: Store) {
         name: e.name,
         published: e.published,
         format: e.format,
+        builtin: Boolean(e.builtin),
         body: e.body,
         draft: e.draft,
       })),
