@@ -1,3 +1,4 @@
+import { ExternalLink } from "lucide-react";
 import QRCode from "qrcode";
 import { useEffect, useId, useMemo, useState } from "react";
 import { t as translate } from "../i18n";
@@ -181,7 +182,7 @@ export function QrCodeModal({
   const hasControls =
     templateSelectOptions.length > 0 || formatOptions.length > 0;
 
-  const urlLink = (
+  const compactUrlLink = (
     <a
       className="qr-link mono"
       href={activeUrl}
@@ -190,6 +191,19 @@ export function QrCodeModal({
       title={translate("Open URL")}
     >
       {activeUrl}
+    </a>
+  );
+
+  const splitUrlLink = (
+    <a
+      className="qr-link mono"
+      href={activeUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={translate("Open URL")}
+    >
+      <span className="qr-link-text">{activeUrl}</span>
+      <ExternalLink size={13} className="qr-link-icon" aria-hidden="true" />
     </a>
   );
 
@@ -226,7 +240,7 @@ export function QrCodeModal({
           />
         </Field>
       )}
-      {urlLink}
+      {splitUrlLink}
     </div>
   ) : null;
 
@@ -240,7 +254,7 @@ export function QrCodeModal({
         />
       </div>
       {!hasControls && (
-        <figcaption className="qr-caption">{urlLink}</figcaption>
+        <figcaption className="qr-caption">{compactUrlLink}</figcaption>
       )}
     </figure>
   );
