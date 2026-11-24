@@ -1,0 +1,2 @@
+export const PORTAL_PASSWORD_MIN_LENGTH = 6;
+export const PORTAL_PASSWORD_MAX_LENGTH = 1000;

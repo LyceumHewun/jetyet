@@ -581,9 +581,12 @@ describe("authorization and templates", () => {
     });
     expect((await post(path, { token: revoked })).status).toBe(403);
     expect((await post(path, { token: active })).status).toBe(200);
+    expect(
+      (await post(path, { token: active, password: "short" })).status,
+    ).toBe(400);
     const initial = await post(path, {
       token: active,
-      password: "first-portal-password",
+      password: "first6",
     });
     expect(initial.status).toBe(200);
     expect((await post(path, { token: active })).status).toBe(403);
@@ -614,7 +617,7 @@ describe("authorization and templates", () => {
       (
         await post("/api/login", {
           username: "friend",
-          password: "first-portal-password",
+          password: "first6",
         })
       ).status,
     ).toBe(401);
