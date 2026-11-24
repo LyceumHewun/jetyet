@@ -26,6 +26,7 @@ export {
   TextArea,
   type ButtonVariant,
 } from "./primitives";
+export { QrCodeModal, QrCodeSvg } from "./QrCode";
 export {
   initDocumentScrollbars,
   lockDocumentScroll,
@@ -39,6 +40,7 @@ export {
   type ScrollAxis,
 } from "./Scrollbars";
 export { Select, type SelectOption } from "./Select";
+export { TemplateAuthoringHelp } from "./TemplateAuthoringHelp";
 export {
   Actions,
   Code,

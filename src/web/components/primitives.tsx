@@ -355,7 +355,7 @@ export function ChipPicker({
   onToggle,
   emptyText = translate("None available."),
 }: {
-  options: { id: string; label: string }[];
+  options: { id: string; label: string; tag?: string }[];
   selected: string[];
   onToggle: (id: string) => void;
   emptyText?: string;
@@ -373,7 +373,8 @@ export function ChipPicker({
             onClick={() => onToggle(opt.id)}
           >
             {active && <Check size={13} />}
-            {opt.label}
+            <span>{opt.label}</span>
+            {opt.tag && <span className="pick-chip-tag mono">{opt.tag}</span>}
           </button>
         );
       })}

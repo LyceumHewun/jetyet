@@ -45,6 +45,8 @@
   --danger-soft: rgba(214, 57, 57, 0.12);
   --overlay: rgba(17, 24, 39, 0.45);
   --shadow: rgba(17, 24, 39, 0.1);
+  --qr-bg: #ffffff;
+  --qr-fg: #111827;
   --scrollbar-thumb: rgba(107, 114, 128, 0.36);
   --scrollbar-thumb-hover: rgba(107, 114, 128, 0.58);
   --scrollbar-thumb-active: var(--accent);
@@ -3548,5 +3550,180 @@ body > .os-scrollbar.os-theme-jetyet {
   .login-toolbar {
     top: var(--space-3);
     right: var(--space-3);
+  }
+}
+
+/* Subscription format links, local QR codes, chip tags, and template authoring help */
+.pick-chip-tag {
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--subtle);
+}
+.pick-chip.selected .pick-chip-tag {
+  background: var(--surface);
+  color: var(--accent);
+}
+.link-qr-btn {
+  inline-size: var(--utility-height);
+  block-size: var(--utility-height);
+  border: 1px solid transparent;
+}
+.link-qr-btn.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.link-qr-panel {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+.link-qr-meta {
+  flex: 1;
+  min-inline-size: 160px;
+  display: grid;
+  gap: var(--space-1);
+}
+.qr-dialog {
+  max-width: 24rem;
+}
+.qr-figure {
+  margin: 0;
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+}
+.qr-frame {
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--qr-bg);
+  display: inline-grid;
+  place-items: center;
+}
+.qr-svg {
+  display: block;
+  max-inline-size: 100%;
+  block-size: auto;
+}
+.qr-bg {
+  fill: var(--qr-bg);
+}
+.qr-fg {
+  fill: var(--qr-fg);
+}
+.qr-caption {
+  inline-size: 100%;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  text-align: center;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.portal-format-links {
+  display: grid;
+  gap: var(--space-2);
+}
+.portal-picker-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.portal-picker-row .portal-picker {
+  flex: 1 1 18rem;
+}
+.portal-template-badges {
+  padding-bottom: 4px;
+}
+.authoring-help {
+  padding: var(--space-3) var(--space-4);
+}
+.stage-body > .authoring-help {
+  margin-bottom: var(--space-4);
+}
+.authoring-help-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.authoring-help-title,
+.authoring-help-actions,
+.authoring-snippet-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.authoring-help-title strong {
+  font-size: var(--text-md);
+}
+.authoring-snippet-head {
+  justify-content: space-between;
+}
+.authoring-help-body {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.authoring-help-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+.authoring-help-section {
+  display: grid;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+.authoring-vars {
+  margin: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.authoring-vars > div {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+.authoring-vars dt {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--ink);
+}
+.authoring-vars dd {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  text-wrap: pretty;
+}
+.authoring-snippet {
+  max-height: 220px;
+}
+@media (max-width: 820px) {
+  .authoring-help-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (pointer: coarse) {
+  .link-qr-btn {
+    min-inline-size: 44px;
+    min-block-size: 44px;
   }
 }

@@ -8,12 +8,12 @@ import {
 import {
   AlertTriangle,
   Check,
-  Copy,
   ExternalLink,
   Eye,
   LogOut,
   Moon,
   Plus,
+  QrCode,
   Send,
   Sun,
   X,
@@ -34,10 +34,17 @@ import {
   Input,
   Modal,
   ModalBody,
+  QrCodeModal,
   Select,
+  TemplateAuthoringHelp,
   TextArea,
 } from "./components";
 import { PortalTrafficSection } from "./components/PortalTraffic";
+import {
+  formatLabel,
+  SUBSCRIPTION_FORMATS,
+  templateSyntaxLabel,
+} from "./labels";
 import type {
   PortalData,
   PortalTemplateDetail,
@@ -62,7 +69,9 @@ function isAbortError(err: unknown): boolean {
 function initialTemplateId(portal: PortalData | null) {
   if (!portal) return "";
   return (
-    portal.templates.find((item) => item.id === portal.defaultTemplate)?.id ??
+    portal.templates.find(
+      (item) => item.id === portal.defaultTemplates?.[item.format],
+    )?.id ??
     portal.templates[0]?.id ??
     ""
   );
@@ -73,11 +82,13 @@ function PortalLink({
   label,
   description,
   primary = false,
+  onShowQr,
 }: {
   url: string;
   label: string;
   description?: string;
   primary?: boolean;
+  onShowQr: () => void;
 }) {
   return (
     <div className="portal-link">
@@ -91,6 +102,15 @@ function PortalLink({
           ariaLabel={translate("Copy link for {0}", label)}
           variant={primary ? "primary" : "subtle"}
         />
+        <Button
+          variant="icon"
+          className="link-open-btn"
+          aria-label={translate("Show QR code for {0}", label)}
+          title={translate("Subscription QR Code")}
+          onClick={onShowQr}
+        >
+          <QrCode size={14} aria-hidden="true" />
+        </Button>
         <a
           href={url}
           target="_blank"
@@ -124,6 +144,7 @@ function CreatePersonalTemplateModal({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<UiError>("");
+  const selectedSource = sources.find((s) => s.id === sourceId);
 
   return (
     <Modal
@@ -159,16 +180,26 @@ function CreatePersonalTemplateModal({
         }}
       >
         <ModalBody>
-          <Field label={translate("Copy from published template")}>
+          <Field
+            label={translate("Copy from published template")}
+            hint={
+              selectedSource
+                ? translate(
+                    "Inherits format: {0}",
+                    formatLabel(selectedSource.format),
+                  )
+                : undefined
+            }
+          >
             <Select
               value={sourceId}
               disabled={busy}
               placeholder={translate("Select source template")}
               options={sources.map((s) => ({
                 value: s.id,
-                label: s.personal
-                  ? translate("{0} (Personal)", s.name)
-                  : s.name,
+                label: `${s.name} · ${formatLabel(s.format)}${
+                  s.personal ? ` (${translate("Personal")})` : ""
+                }`,
               }))}
               onChange={setSourceId}
             />
@@ -251,6 +282,14 @@ export function SubscriptionPortal({
   const [pendingDiscard, setPendingDiscard] = useState<PendingDiscard | null>(
     null,
   );
+  const [qrModal, setQrModal] = useState<{
+    label: string;
+    tag?: string;
+    url: string;
+  } | null>(null);
+  const [templateLinks, setTemplateLinks] = useState<
+    Record<string, string | null>
+  >({});
 
   const selectedIdRef = useRef(selectedId);
   const savedBodies = useRef(new Map<string, string>());
@@ -298,6 +337,7 @@ export function SubscriptionPortal({
       if (controller.signal.aborted) return;
       const body = detail.body ?? "";
       updateTemplate(detail);
+      setTemplateLinks((prev) => ({ ...prev, [detail.id]: detail.link }));
       savedBodies.current.set(item.id, body);
       showEditor(detail.name, body);
     } catch (err) {
@@ -341,21 +381,57 @@ export function SubscriptionPortal({
   const personalTemplates = templates.filter((item) => item.personal);
   const publishedSources = templates.filter((item) => item.published);
   const selected = templates.find((item) => item.id === selectedId);
-  const defaultTemplate = templates.find(
-    (item) => item.id === portal?.defaultTemplate,
+  const defaultMihomo = templates.find(
+    (item) => item.id === portal?.defaultTemplates?.mihomo,
   );
-  const pinnedLink =
+  const defaultSingBox = templates.find(
+    (item) => item.id === portal?.defaultTemplates?.["sing-box"],
+  );
+  const fallbackPinnedLink =
     portal?.defaultLink && selected?.published
       ? `${portal.defaultLink}?template=${encodeURIComponent(selected.id)}`
       : null;
+  const pinnedLink = selected?.published
+    ? selected.id in templateLinks
+      ? templateLinks[selected.id]
+      : fallbackPinnedLink
+    : null;
+
+  useEffect(() => {
+    if (
+      !portal ||
+      portal.expired ||
+      !selected?.published ||
+      selected.id in templateLinks
+    ) {
+      return;
+    }
+    const controller = new AbortController();
+    void api(
+      `portal/templates/${selected.id}`,
+      "GET",
+      undefined,
+      controller.signal,
+    )
+      .then((detail: PortalTemplateDetail) => {
+        if (controller.signal.aborted) return;
+        setTemplateLinks((prev) => ({ ...prev, [detail.id]: detail.link }));
+        if (detail.personal && typeof detail.body === "string") {
+          savedBodies.current.set(detail.id, detail.body);
+        }
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [portal, selected?.id, selected?.published, templateLinks]);
+
   const controlsDisabled = !!busyAction || editorLoading;
   const dirty =
     editing &&
     (draftName !== savedSnapshot.name || draftBody !== savedSnapshot.body);
 
   function updateTemplate(item: PortalTemplateSummary) {
-    const { id, name, personal, published, draft } = item;
-    const summary = { id, name, personal, published, draft };
+    const { id, name, format, personal, published, draft } = item;
+    const summary = { id, name, format, personal, published, draft };
     setPortal((current) => {
       if (!current) return current;
       const templates = current.templates.some((entry) => entry.id === id)
@@ -488,6 +564,11 @@ export function SubscriptionPortal({
         return;
       }
       updateTemplate(published);
+      setTemplateLinks((prev) => {
+        const next = { ...prev };
+        delete next[published.id];
+        return next;
+      });
       setPreviewedSaved(false);
       setToast("Personal template published");
     } catch (err) {
@@ -617,27 +698,90 @@ export function SubscriptionPortal({
                     </p>
                   </div>
                 </section>
-              ) : (
-                portal.defaultLink && (
-                  <section className="studio-card portal-subscription">
-                    <div>
-                      <h2>{translate("Default subscription")}</h2>
-                      <p className="muted">
-                        {defaultTemplate
-                          ? translate(
-                              "Uses {0}. Copy this link for your client.",
-                              defaultTemplate.name,
-                            )
-                          : translate("Copy this link for your client.")}
-                      </p>
-                    </div>
+              ) : portal.defaultLink || portal.formats ? (
+                <section className="studio-card portal-subscription">
+                  <div>
+                    <h2>{translate("Default subscription")}</h2>
+                    <p className="muted">
+                      {defaultMihomo && defaultSingBox
+                        ? translate(
+                            "Automatic link selects mihomo ({0}) or sing-box ({1}) by client, or use a fixed format link below.",
+                            defaultMihomo.name,
+                            defaultSingBox.name,
+                          )
+                        : translate(
+                            "Copy or scan the automatic link, or pick a fixed output format below.",
+                          )}
+                    </p>
+                  </div>
+                  {portal.defaultLink && (
                     <PortalLink
                       url={portal.defaultLink}
                       label={translate("Default subscription")}
+                      description={translate("Automatic · Detects client")}
                       primary
+                      onShowQr={() =>
+                        setQrModal({
+                          label: translate("Default subscription"),
+                          tag: translate("Automatic"),
+                          url: portal.defaultLink!,
+                        })
+                      }
                     />
-                  </section>
-                )
+                  )}
+                  {portal.formats && (
+                    <div className="portal-format-links">
+                      {SUBSCRIPTION_FORMATS.map((fmt) => {
+                        const url = portal.formats?.[fmt];
+                        if (!url) return null;
+                        const defaultTpl =
+                          fmt !== "shadowrocket"
+                            ? templates.find(
+                                (item) =>
+                                  item.id === portal.defaultTemplates?.[fmt],
+                              )
+                            : undefined;
+                        const description =
+                          fmt === "shadowrocket"
+                            ? translate("Shadowrocket · Hysteria 2 node list")
+                            : defaultTpl
+                              ? translate(
+                                  "{0} · Default: {1}",
+                                  formatLabel(fmt),
+                                  defaultTpl.name,
+                                )
+                              : formatLabel(fmt);
+                        return (
+                          <PortalLink
+                            key={fmt}
+                            url={url}
+                            label={formatLabel(fmt)}
+                            description={description}
+                            onShowQr={() =>
+                              setQrModal({
+                                label: formatLabel(fmt),
+                                tag: formatLabel(fmt),
+                                url,
+                              })
+                            }
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+              ) : (
+                <section className="portal-expired-banner" role="status">
+                  <AlertTriangle size={16} aria-hidden="true" />
+                  <div>
+                    <strong>{translate("No subscription links yet")}</strong>
+                    <p>
+                      {translate(
+                        "Subscription links appear once at least one active node is assigned to your account.",
+                      )}
+                    </p>
+                  </div>
+                </section>
               )}
 
               {traffic && <PortalTrafficSection traffic={traffic} />}
@@ -645,45 +789,73 @@ export function SubscriptionPortal({
               {selected ? (
                 <section className="portal-workbench">
                   <div className="studio-card portal-template-controls">
-                    <div className="portal-picker">
-                      <label htmlFor="portal-template">
-                        {translate("Template")}
-                      </label>
-                      <Select
-                        id="portal-template"
-                        value={selectedId}
-                        disabled={controlsDisabled}
-                        onChange={(value) => {
-                          const item = templates.find(
-                            (entry) => entry.id === value,
-                          );
-                          if (item) requestSelectTemplate(item);
-                        }}
-                        options={[
-                          {
-                            label: translate("ASSIGNED TEMPLATES"),
-                            items: assignedTemplates,
-                          },
-                          {
-                            label: translate("PERSONAL TEMPLATES"),
-                            items: personalTemplates,
-                          },
-                        ]
-                          .filter((group) => group.items.length > 0)
-                          .map((group) => ({
-                            label: group.label,
-                            options: group.items.map((item) => ({
-                              value: item.id,
-                              label:
-                                item.name +
-                                (item.id === portal.defaultTemplate
-                                  ? ` · ${translate("Default")}`
-                                  : !item.published
-                                    ? ` · ${translate("Draft")}`
-                                    : ""),
-                            })),
-                          }))}
-                      />
+                    <div className="portal-picker-row">
+                      <div className="portal-picker">
+                        <label htmlFor="portal-template">
+                          {translate("Template")}
+                        </label>
+                        <Select
+                          id="portal-template"
+                          value={selectedId}
+                          disabled={controlsDisabled}
+                          onChange={(value) => {
+                            const item = templates.find(
+                              (entry) => entry.id === value,
+                            );
+                            if (item) requestSelectTemplate(item);
+                          }}
+                          options={[
+                            {
+                              label: translate("ASSIGNED TEMPLATES"),
+                              items: assignedTemplates,
+                            },
+                            {
+                              label: translate("PERSONAL TEMPLATES"),
+                              items: personalTemplates,
+                            },
+                          ]
+                            .filter((group) => group.items.length > 0)
+                            .map((group) => ({
+                              label: group.label,
+                              options: group.items.map((item) => ({
+                                value: item.id,
+                                label:
+                                  `${item.name} · ${formatLabel(item.format)}` +
+                                  (item.id ===
+                                  portal.defaultTemplates?.[item.format]
+                                    ? ` · ${translate("Default")}`
+                                    : !item.published
+                                      ? ` · ${translate("Draft")}`
+                                      : ""),
+                              })),
+                            }))}
+                        />
+                      </div>
+                      <div className="chip-group portal-template-badges">
+                        <Chip mono>{formatLabel(selected.format)}</Chip>
+                        <Chip>
+                          {selected.personal
+                            ? translate("Personal")
+                            : translate("Assigned")}
+                        </Chip>
+                        {selected.id ===
+                          portal.defaultTemplates?.[selected.format] && (
+                          <Badge tone="good">{translate("Default")}</Badge>
+                        )}
+                        {selected.personal && (
+                          <Badge
+                            tone={
+                              selected.published && !selected.draft
+                                ? "good"
+                                : "neutral"
+                            }
+                          >
+                            {selected.draft
+                              ? translate("Draft")
+                              : translate("Published")}
+                          </Badge>
+                        )}
+                      </div>
                     </div>
                     <div className="portal-template-summary">
                       {pinnedLink ? (
@@ -691,10 +863,21 @@ export function SubscriptionPortal({
                           key={selected.id}
                           url={pinnedLink}
                           label={selected.name}
-                          description={translate("Pinned link")}
+                          description={translate(
+                            "Pinned link · {0}",
+                            formatLabel(selected.format),
+                          )}
+                          onShowQr={() =>
+                            setQrModal({
+                              label: selected.name,
+                              tag: formatLabel(selected.format),
+                              url: pinnedLink,
+                            })
+                          }
                         />
                       ) : (
-                        !portal.expired && (
+                        !portal.expired &&
+                        !selected.published && (
                           <p className="muted">
                             {translate(
                               "Publish “{0}” to get its pinned template link.",
@@ -776,6 +959,7 @@ export function SubscriptionPortal({
                               }}
                             />
                             <div className="chip-group">
+                              <Chip mono>{formatLabel(selected.format)}</Chip>
                               <Chip>{translate("Personal")}</Chip>
                               <Badge
                                 tone={
@@ -831,13 +1015,26 @@ export function SubscriptionPortal({
                         </div>
                       </div>
 
+                      <TemplateAuthoringHelp
+                        format={selected.format}
+                        canInsertStarter={!draftBody.trim()}
+                        disabled={controlsDisabled}
+                        onInsertStarter={(starter) => {
+                          setDraftBody(starter);
+                          setPreviewedSaved(false);
+                          setPreviewText("");
+                        }}
+                      />
+
                       <div className="ide-grid">
                         <div className="studio-card ide-pane">
                           <div className="studio-card-head">
                             <span className="kpi-label">
                               {translate("TEMPLATE SOURCE")}
                             </span>
-                            <Chip mono>Liquid · YAML</Chip>
+                            <Chip mono>
+                              {templateSyntaxLabel(selected.format)}
+                            </Chip>
                           </div>
                           <TextArea
                             className="template-source ide-editor"
@@ -981,6 +1178,15 @@ export function SubscriptionPortal({
                   )}
           </p>
         </Confirm>
+      )}
+
+      {qrModal && (
+        <QrCodeModal
+          title={qrModal.label}
+          tag={qrModal.tag}
+          url={qrModal.url}
+          onClose={() => setQrModal(null)}
+        />
       )}
 
       {toast && (

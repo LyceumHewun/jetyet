@@ -633,6 +633,68 @@ export const zhHans = {
   "Last 24 hours": "过去 24 小时",
   "Last 24 hours ({0}{1})": "过去 24 小时（{0}{1}）",
   "No traffic recorded in the last 24 hours.": "过去 24 小时暂无流量记录。",
+  Automatic: "自动识别",
+  Formats: "输出格式",
+  "Built-in": "内置",
+  "Default {0} template": "默认 {0} 模板",
+  "Select at least one published template and a default for both mihomo and sing-box.":
+    "请至少选择一个已发布模板，并为 mihomo 和 sing-box 各选一个默认模板。",
+  "Template source": "模板源码",
+  "Subscription QR Code": "订阅二维码",
+  "Subscription QR code for {0}": "{0} 的订阅二维码",
+  "SUBSCRIPTION QR CODE": "订阅二维码",
+  "Unable to generate QR code.": "无法生成二维码。",
+  "Scan this QR code with a compatible client to import the subscription URL.":
+    "使用兼容客户端扫描此二维码以导入订阅链接。",
+  "Scan with a compatible client to import this exact HTTPS URL.":
+    "使用兼容客户端扫描此二维码以导入完整 HTTPS 订阅链接。",
+  "Show QR code for {0}": "显示 {0} 的二维码",
+  "Hide QR code for {0}": "隐藏 {0} 的二维码",
+  "Authoring guide": "编写指南",
+  "Insert starter": "插入示例模板",
+  "Hide guide": "收起指南",
+  "Show variables": "查看变量说明",
+  "LIQUID VARIABLES": "LIQUID 变量",
+  "Array of authorized Hysteria 2 sing-box outbound objects (each with tag, type, server, port, password, tls).":
+    "已授权的 Hysteria 2 sing-box 出站对象数组（包含 tag、type、server、port、password、tls 等字段）。",
+  "Array of authorized Hysteria 2 mihomo proxy objects (each with name, type, server, port, password).":
+    "已授权的 Hysteria 2 mihomo 代理对象数组（包含 name、type、server、port、password 等字段）。",
+  "List of authorized outbound tags, or [\"DIRECT\"] when no active nodes are available.":
+    "已授权出站标签列表；无可用节点时为 [\"DIRECT\"]。",
+  "List of authorized proxy names, or [\"DIRECT\"] when no active nodes are available.":
+    "已授权节点名称列表；无可用节点时为 [\"DIRECT\"]。",
+  "Subscriber display name (redacted in portal previews).":
+    "订阅用户显示名称（门户预览中会脱敏）。",
+  "Serializes a Liquid array or object to valid JSON. Required top-level sections: dns, inbounds, outbounds, route.":
+    "将 Liquid 数组或对象序列化为合法 JSON。必需顶层字段：dns、inbounds、outbounds、route。",
+  "Serializes to YAML and indents lines by N spaces (0–64). Required top-level sections: proxies, proxy-groups, rules, dns.":
+    "序列化为 YAML 并按 N 个空格缩进（0–64）。必需顶层字段：proxies、proxy-groups、rules、dns。",
+  "SING-BOX JSON STARTER": "SING-BOX JSON 示例模板",
+  "MIHOMO YAML STARTER": "MIHOMO YAML 示例模板",
+  "Use starter": "使用此模板",
+  "Inherits format: {0}": "继承格式：{0}",
+  "Automatic link selects mihomo ({0}) or sing-box ({1}) by client, or use a fixed format link below.":
+    "自动链接会根据客户端自动选择 mihomo（{0}）或 sing-box（{1}），也可使用下方固定格式链接。",
+  "Copy or scan the automatic link, or pick a fixed output format below.":
+    "复制或扫描自动链接，或在下方选择固定输出格式。",
+  "Automatic · Detects client": "自动识别 · 根据客户端匹配格式",
+  "Shadowrocket · Hysteria 2 node list": "Shadowrocket · Hysteria 2 节点列表",
+  "{0} · Default: {1}": "{0} · 默认：{1}",
+  "No subscription links yet": "暂无可用订阅链接",
+  "Subscription links appear once at least one active node is assigned to your account.":
+    "当管理员为你分配至少一个可用节点后，此处将显示订阅链接。",
+  "Pinned link · {0}": "固定模板链接 · {0}",
+  "Built-in templates cannot be deleted": "内置模板不可删除",
+  "Default template must match its output format":
+    "默认模板必须与其输出格式匹配",
+  "Template validation failed. Check configuration syntax, groups, and rules.":
+    "模板验证失败。请检查配置语法、代理组和路由规则。",
+  "mihomo validation core is unavailable": "mihomo 验证核心不可用",
+  "sing-box validation core is unavailable": "sing-box 验证核心不可用",
+  "mihomo configuration validation failed; check groups, rules and DNS settings.":
+    "mihomo 配置验证失败；请检查代理组、规则和 DNS 设置。",
+  "sing-box configuration validation failed; check groups, rules and DNS settings.":
+    "sing-box 配置验证失败；请检查出站组、规则和 DNS 设置。",
 } as const;
 
 export type Message = keyof typeof zhHans;

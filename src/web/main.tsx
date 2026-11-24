@@ -79,8 +79,21 @@ import {
 import { History } from "./history";
 import { SubscriptionPortal } from "./portal";
 import "./styles.css";
-import { alertLabel, operationLabel, probeLabel, taskLabel } from "./labels";
-import type { PortalData, Row, Session, State } from "./types";
+import {
+  alertLabel,
+  formatLabel,
+  operationLabel,
+  probeLabel,
+  SUBSCRIPTION_FORMATS,
+  taskLabel,
+} from "./labels";
+import type {
+  PortalData,
+  Row,
+  Session,
+  State,
+  TemplateFormat,
+} from "./types";
 
 type AppRoute = "/" | "/portal" | "/set-password";
 
@@ -328,6 +341,9 @@ function App() {
     [search, setSearch] = useState(""),
     [inlineRange, setInlineRange] = useState("24"),
     [alertFilter, setAlertFilter] = useState<"all" | "open">("all"),
+    [templateFormatFilter, setTemplateFormatFilter] = useState<
+      "all" | TemplateFormat
+    >("all"),
     [theme, setTheme] = useState<"light" | "dark">(() =>
       document.documentElement.dataset.theme === "dark" ? "dark" : "light",
     );
@@ -522,22 +538,48 @@ function App() {
   const links = async (u: Row) => {
     try {
       const data = await api(`users/${u.id}/links`);
+      const items = [
+        {
+          id: "default",
+          kind: "auto" as const,
+          label: translate("Default subscription"),
+          url: data.default,
+          isDefault: true,
+        },
+        ...SUBSCRIPTION_FORMATS.flatMap((fmt) =>
+          data.formats?.[fmt]
+            ? [
+                {
+                  id: `format:${fmt}`,
+                  kind: "format" as const,
+                  format: fmt,
+                  label: formatLabel(fmt),
+                  url: data.formats[fmt],
+                },
+              ]
+            : [],
+        ),
+        ...(data.templates || []).map((t: Row) => {
+          const tpl = state.templates.find((x) => x.id === t.id);
+          const format = (tpl?.format ?? t.format) as
+            | TemplateFormat
+            | undefined;
+          return {
+            id: t.id,
+            kind: "template" as const,
+            format,
+            label: tpl?.name || t.id,
+            url: t.url,
+            isFormatDefault: Boolean(
+              format && u.defaultTemplates?.[format] === t.id,
+            ),
+          };
+        }),
+      ];
       setModal(() => (
         <SubscriptionLinksModal
           userName={u.name}
-          items={[
-            {
-              id: "default",
-              label: translate("Default subscription"),
-              url: data.default,
-              isDefault: true,
-            },
-            ...(data.templates || []).map((t: Row) => ({
-              id: t.id,
-              label: state.templates.find((x) => x.id === t.id)?.name || t.id,
-              url: t.url,
-            })),
-          ]}
+          items={items}
           onClose={() => setModal(null)}
         />
       ));
@@ -726,7 +768,16 @@ function App() {
     const q = search.trim().toLowerCase();
     if (!q) return list;
     return list.filter((r) =>
-      [r.name, r.username, r.address, r.note, r.kind, r.message, r.code]
+      [
+        r.name,
+        r.username,
+        r.address,
+        r.note,
+        r.kind,
+        r.message,
+        r.code,
+        r.format,
+      ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
@@ -1567,16 +1618,20 @@ function App() {
                                           (x) => x.id === tid,
                                         );
                                         if (!t) return null;
+                                        const isDefault =
+                                          u.defaultTemplates?.[t.format] ===
+                                          tid;
                                         return (
                                           <Chip
                                             key={tid}
                                             className={
-                                              tid === u.defaultTemplate
-                                                ? "accent-chip"
-                                                : ""
+                                              isDefault ? "accent-chip" : ""
                                             }
                                           >
-                                            {t.name}
+                                            {t.name} · {formatLabel(t.format)}
+                                            {isDefault
+                                              ? ` · ${translate("Default")}`
+                                              : ""}
                                           </Chip>
                                         );
                                       })}
@@ -1679,11 +1734,22 @@ function App() {
               {tab === "Templates" && (
                 <>
                   <div className="action-strip">
-                    <SearchInput
-                      placeholder={translate("Filter templates…")}
-                      value={search}
-                      onChange={setSearch}
-                    />
+                    <div className="strip-left">
+                      <SearchInput
+                        placeholder={translate("Filter templates…")}
+                        value={search}
+                        onChange={setSearch}
+                      />
+                      <SegmentedControl
+                        value={templateFormatFilter}
+                        options={[
+                          ["all", translate("All")],
+                          ["mihomo", "mihomo"],
+                          ["sing-box", "sing-box"],
+                        ]}
+                        onChange={setTemplateFormatFilter}
+                      />
+                    </div>
                     <div className="action-strip-right">
                       <Button
                         variant="primary"
@@ -1703,64 +1769,74 @@ function App() {
                     </div>
                   </div>
                   <div className="templates-grid">
-                    {visible(state.templates).map((t) => {
-                      const src = t.draft || t.body || "";
-                      const lines = src.split("\n");
-                      const usersUsing = state.users.filter((u) =>
-                        u.templateIds?.includes(t.id),
-                      ).length;
-                      return (
-                        <button
-                          type="button"
-                          className="template-card"
-                          key={t.id}
-                          onClick={() =>
-                            setStage(() => (
-                              <TemplateEditor
-                                template={t}
-                                state={state}
-                                onClose={() => setStage(null)}
-                                refresh={refresh}
-                              />
-                            ))
-                          }
-                        >
-                          <div className="template-card-head">
-                            <span className="file-icon">
-                              <FileCode2 size={17} />
-                            </span>
-                            <h2>{t.name}</h2>
-                            <div className="chip-group template-badges">
-                              {t.published && t.draft && t.draft !== t.body && (
-                                <Badge tone="warning">
-                                  {translate("Draft edits")}
+                    {visible(state.templates)
+                      .filter(
+                        (t) =>
+                          templateFormatFilter === "all" ||
+                          t.format === templateFormatFilter,
+                      )
+                      .map((t) => {
+                        const src = t.draft || t.body || "";
+                        const lines = src.split("\n");
+                        const usersUsing = state.users.filter((u) =>
+                          u.templateIds?.includes(t.id),
+                        ).length;
+                        return (
+                          <button
+                            type="button"
+                            className="template-card"
+                            key={t.id}
+                            onClick={() =>
+                              setStage(() => (
+                                <TemplateEditor
+                                  template={t}
+                                  state={state}
+                                  onClose={() => setStage(null)}
+                                  refresh={refresh}
+                                />
+                              ))
+                            }
+                          >
+                            <div className="template-card-head">
+                              <span className="file-icon">
+                                <FileCode2 size={17} />
+                              </span>
+                              <h2>{t.name}</h2>
+                              <div className="chip-group template-badges">
+                                {t.published && t.draft && t.draft !== t.body && (
+                                  <Badge tone="warning">
+                                    {translate("Draft edits")}
+                                  </Badge>
+                                )}
+                                <Badge tone={t.published ? "good" : "neutral"}>
+                                  {t.published
+                                    ? translate("Published")
+                                    : translate("Draft")}
                                 </Badge>
-                              )}
-                              <Badge tone={t.published ? "good" : "neutral"}>
-                                {t.published
-                                  ? translate("Published")
-                                  : translate("Draft")}
-                              </Badge>
+                              </div>
                             </div>
-                          </div>
-                          <pre>{lines.slice(0, 8).join("\n")}</pre>
-                          <div className="template-card-foot">
-                            <div className="chip-group">
-                              <Chip mono>
-                                {translate("{0} lines", lines.length)}
-                              </Chip>
-                              <Chip mono>
-                                {translate("{0} users", usersUsing)}
-                              </Chip>
+                            <pre>{lines.slice(0, 8).join("\n")}</pre>
+                            <div className="template-card-foot">
+                              <div className="chip-group">
+                                <Chip mono>{formatLabel(t.format)}</Chip>
+                                {t.builtin && (
+                                  <Chip>{translate("Built-in")}</Chip>
+                                )}
+                                <Chip mono>
+                                  {translate("{0} lines", lines.length)}
+                                </Chip>
+                                <Chip mono>
+                                  {translate("{0} users", usersUsing)}
+                                </Chip>
+                              </div>
+                              <span className="text-button">
+                                {translate("Studio") + " "}
+                                <ArrowUpRight size={14} />
+                              </span>
                             </div>
-                            <span className="text-button">
-                              {translate("Studio") + " "}
-                              <ArrowUpRight size={14} />
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })}
+                          </button>
+                        );
+                      })}
                   </div>
                 </>
               )}

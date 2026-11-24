@@ -1,23 +1,45 @@
 import { ScrollArea } from "./Scrollbars";
 import { t as translate } from "../i18n";
-import { Check, Copy, ExternalLink, Terminal } from "lucide-react";
+import { formatLabel } from "../labels";
+import { Check, Copy, ExternalLink, QrCode, Terminal } from "lucide-react";
 import { useState } from "react";
 import { when } from "../client";
-import type { Row } from "../types";
+import type { Row, SubscriptionFormat } from "../types";
 import { Badge, Button, Chip, CopyButton, SearchInput } from "./primitives";
+import { QrCodeSvg } from "./QrCode";
 import { Modal, ModalBody } from "./workspace";
 
 export type LinkItem = {
   id: string;
   label: string;
   url: string;
+  kind: "auto" | "format" | "template";
+  format?: SubscriptionFormat;
   isDefault?: boolean;
+  isFormatDefault?: boolean;
 };
 
-function SubscriptionLinkRow({ item }: { item: LinkItem }) {
+function SubscriptionLinkRow({
+  item,
+  qrOpen,
+  onToggleQr,
+}: {
+  item: LinkItem;
+  qrOpen: boolean;
+  onToggleQr: () => void;
+}) {
   return (
     <li className={item.isDefault ? "link-row is-featured" : "link-row"}>
-      <strong className="link-row-name">{item.label}</strong>
+      <div className="link-row-name chip-group">
+        <strong>{item.label}</strong>
+        {item.kind === "auto" && <Chip>{translate("Automatic")}</Chip>}
+        {item.kind === "template" && item.format && (
+          <Chip mono>{formatLabel(item.format)}</Chip>
+        )}
+        {item.isFormatDefault && (
+          <Badge tone="good">{translate("Default")}</Badge>
+        )}
+      </div>
       <code className="link-row-url" title={item.url}>
         {item.url}
       </code>
@@ -26,6 +48,20 @@ function SubscriptionLinkRow({ item }: { item: LinkItem }) {
           text={item.url}
           ariaLabel={translate("Copy link for {0}", item.label)}
         />
+        <Button
+          variant="icon"
+          className={"link-qr-btn" + (qrOpen ? " active" : "")}
+          aria-label={
+            qrOpen
+              ? translate("Hide QR code for {0}", item.label)
+              : translate("Show QR code for {0}", item.label)
+          }
+          aria-expanded={qrOpen}
+          title={translate("Subscription QR Code")}
+          onClick={onToggleQr}
+        >
+          <QrCode size={14} aria-hidden="true" />
+        </Button>
         <a
           href={item.url}
           target="_blank"
@@ -37,6 +73,27 @@ function SubscriptionLinkRow({ item }: { item: LinkItem }) {
           <ExternalLink size={14} aria-hidden="true" />
         </a>
       </div>
+      {qrOpen && (
+        <div className="link-qr-panel">
+          <div className="qr-frame">
+            <QrCodeSvg
+              value={item.url}
+              label={translate("Subscription QR code for {0}", item.label)}
+              size={156}
+            />
+          </div>
+          <div className="link-qr-meta">
+            <span className="kpi-label">
+              {translate("SUBSCRIPTION QR CODE")}
+            </span>
+            <p className="muted">
+              {translate(
+                "Scan with a compatible client to import this exact HTTPS URL.",
+              )}
+            </p>
+          </div>
+        </div>
+      )}
     </li>
   );
 }
@@ -51,16 +108,22 @@ export function SubscriptionLinksModal({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const defaultItem = items.find((i) => i.isDefault);
-  const templateItems = items.filter((i) => !i.isDefault);
+  const [qrId, setQrId] = useState<string | null>(null);
+  const defaultItem = items.find((i) => i.kind === "auto" || i.isDefault);
+  const formatItems = items.filter((i) => i.kind === "format");
+  const templateItems = items.filter((i) => i.kind === "template");
   const q = query.trim().toLowerCase();
   const filtered = q
     ? templateItems.filter(
         (i) =>
-          i.label.toLowerCase().includes(q) || i.url.toLowerCase().includes(q),
+          i.label.toLowerCase().includes(q) ||
+          (i.format || "").toLowerCase().includes(q) ||
+          i.url.toLowerCase().includes(q),
       )
     : templateItems;
   const allText = items.map((i) => `${i.label}\n${i.url}`).join("\n\n");
+  const toggleQr = (id: string) =>
+    setQrId((current) => (current === id ? null : id));
 
   return (
     <Modal
@@ -75,8 +138,33 @@ export function SubscriptionLinksModal({
       <ModalBody>
         {defaultItem && (
           <ul className="subscription-link-list">
-            <SubscriptionLinkRow item={defaultItem} />
+            <SubscriptionLinkRow
+              item={defaultItem}
+              qrOpen={qrId === defaultItem.id}
+              onToggleQr={() => toggleQr(defaultItem.id)}
+            />
           </ul>
+        )}
+
+        {formatItems.length > 0 && (
+          <section className="link-templates-block">
+            <div className="link-templates-bar">
+              <div className="chip-group">
+                <h3>{translate("Formats")}</h3>
+                <Chip mono>{formatItems.length}</Chip>
+              </div>
+            </div>
+            <ul className="subscription-link-list">
+              {formatItems.map((item) => (
+                <SubscriptionLinkRow
+                  key={item.id}
+                  item={item}
+                  qrOpen={qrId === item.id}
+                  onToggleQr={() => toggleQr(item.id)}
+                />
+              ))}
+            </ul>
+          </section>
         )}
 
         {templateItems.length > 0 && (
@@ -104,7 +192,12 @@ export function SubscriptionLinksModal({
             {filtered.length ? (
               <ul className="subscription-link-list">
                 {filtered.map((item) => (
-                  <SubscriptionLinkRow key={item.id} item={item} />
+                  <SubscriptionLinkRow
+                    key={item.id}
+                    item={item}
+                    qrOpen={qrId === item.id}
+                    onToggleQr={() => toggleQr(item.id)}
+                  />
                 ))}
               </ul>
             ) : (

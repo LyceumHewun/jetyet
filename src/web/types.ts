@@ -2,6 +2,10 @@ export type Row = Record<string, any>;
 
 export type Role = "admin" | "subscriber";
 
+export type TemplateFormat = "mihomo" | "sing-box";
+
+export type SubscriptionFormat = TemplateFormat | "shadowrocket";
+
 export type Session = {
   username: string;
   role: Role;
@@ -10,6 +14,7 @@ export type Session = {
 export type PortalTemplateSummary = {
   id: string;
   name: string;
+  format: TemplateFormat;
   personal: boolean;
   published: boolean;
   draft: boolean;
@@ -19,8 +24,9 @@ export type PortalData = {
   name: string;
   expired: boolean;
   templates: PortalTemplateSummary[];
-  defaultTemplate: string | null;
+  defaultTemplates: Record<TemplateFormat, string>;
   defaultLink: string | null;
+  formats: Record<SubscriptionFormat, string> | null;
   traffic: PortalTraffic;
 };
 
