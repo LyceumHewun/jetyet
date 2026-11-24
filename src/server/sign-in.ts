@@ -1,6 +1,10 @@
 import type { Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
+import {
+  PORTAL_PASSWORD_MAX_LENGTH,
+  PORTAL_PASSWORD_MIN_LENGTH,
+} from "../shared/portal-password";
 import { digest, same, token } from "./crypto";
 import type { Entity, Store } from "./db";
 import { HttpError, requireOrigin } from "./errors";
@@ -170,7 +174,11 @@ export function registerSignIn(app: Hono, s: Store) {
     const input = z
       .object({
         token: z.string(),
-        password: z.string().min(12).max(1000).optional(),
+        password: z
+          .string()
+          .min(PORTAL_PASSWORD_MIN_LENGTH)
+          .max(PORTAL_PASSWORD_MAX_LENGTH)
+          .optional(),
       })
       .parse(await c.req.json());
     if (!/^[a-zA-Z0-9_-]{43}$/.test(input.token)) throw invalidLink();

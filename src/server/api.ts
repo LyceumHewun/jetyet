@@ -18,7 +18,14 @@ import { registerNodesRoutes } from "./routes/nodes";
 import { registerOperationsRoutes } from "./routes/operations";
 import { registerTemplatesRoutes } from "./routes/templates";
 import { registerUsersRoutes } from "./routes/users";
-import { render, seedTemplate, validateMihomo } from "./templates";
+import { render, seedTemplate, validateCore } from "./templates";
+import {
+  clientFormat,
+  renderShadowrocket,
+  subscriptionFormats,
+  subscriptionNodes,
+} from "./subscriptions";
+import type { TemplateFormat } from "../shared/schemas";
 
 export function createApp(s: Store) {
   seedTemplate(s);
@@ -108,16 +115,11 @@ export function createApp(s: Store) {
     }
     return c.json({ ok: false });
   });
-  const validated = new Set<string>();
-  async function checked(text: string) {
-    const h = digest(text);
-    if (!validated.has(h)) {
-      await validateMihomo(s, text);
-      if (validated.size > 1000) validated.clear();
-      validated.add(h);
-    }
-  }
+  const checked = (text: string, format: TemplateFormat) =>
+    validateCore(s, text, format);
   app.get("/sub/:token", (c) => {
+    c.header("Cache-Control", "private, no-store");
+    c.header("Vary", "User-Agent");
     const rawToken = c.req.param("token");
     const row = s.db
       .query<{ entity: string }, [string, string]>(
@@ -135,24 +137,58 @@ export function createApp(s: Store) {
     if (!u || !u.enabled || (u.expires && Date.parse(u.expires) <= Date.now()))
       return c.text("Subscription unavailable", 403);
     refreshPeriods(s);
-    const id = c.req.query("template") || u.defaultTemplate;
-    const template = subscriptionTemplate(s, u, id);
-    if (!template) return c.text("Template unavailable", 403);
+    const explicit = c.req.query("format");
+    if (
+      explicit !== undefined &&
+      !subscriptionFormats.some((format) => format === explicit)
+    )
+      return c.text("Unknown subscription format", 400);
+    const templateId = c.req.query("template");
+    let template =
+      templateId === undefined ? null : subscriptionTemplate(s, u, templateId);
+    if (templateId !== undefined && !template)
+      return c.text("Template unavailable", 403);
+    if (template && explicit !== undefined && explicit !== template.format)
+      return c.text("Format conflicts with template type", 400);
+    const format =
+      template?.format ??
+      explicit ??
+      clientFormat(c.req.header("User-Agent") ?? "");
+    if (!format)
+      return c.text(
+        "Client not recognized. Use a format-specific subscription URL.",
+        406,
+      );
+    const nodes = subscriptionNodes(s, u);
+    if (!nodes.length) return c.text("No eligible assigned nodes", 403);
     let text: string;
     try {
-      text = render(s, u, template.body);
-    } catch (err) {
-      return c.text(
-        err instanceof Error ? err.message : "Subscription validation failed",
-        422,
-      );
+      if (format === "shadowrocket") {
+        text = renderShadowrocket(nodes, s.secrets(u.id).vpnToken);
+      } else {
+        template ??= subscriptionTemplate(s, u, u.defaultTemplates?.[format]);
+        if (!template || template.format !== format)
+          return c.text("Template unavailable", 403);
+        text = render(s, u, template.body, "live", format);
+      }
+    } catch {
+      return c.text("Subscription configuration is invalid", 422);
     }
     const use = usage(s, u);
     const upload = u.quota.direction === "out" ? 0 : use.inbound;
     const download = u.quota.direction === "in" ? 0 : use.outbound;
     const title = `Jetyet · ${u.username}`;
-    c.header("Content-Type", "text/yaml; charset=utf-8");
-    c.header("Profile-Title", `base64:${Buffer.from(title).toString("base64")}`);
+    const contentType =
+      format === "sing-box"
+        ? "application/json"
+        : format === "mihomo"
+          ? "text/yaml"
+          : "text/plain";
+    c.header("Content-Type", contentType + "; charset=utf-8");
+    c.header(
+      "Profile-Title",
+      `base64:${Buffer.from(title).toString("base64")}`,
+    );
     c.header("Profile-Web-Page-Url", s.config.origin);
     c.header("Support-Url", "https://github.com/LyceumHewun/jetyet");
     c.header(
@@ -234,6 +270,7 @@ export function createApp(s: Store) {
         name: e.name,
         published: e.published,
         format: e.format,
+        builtin: Boolean(e.builtin),
         body: e.body,
         draft: e.draft,
       })),

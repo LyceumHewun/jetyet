@@ -1,3 +1,4 @@
+import type { TemplateFormat } from "../../shared/schemas";
 import type { Hono } from "hono";
 import type { Entity, Store } from "../db";
 export type Routes = {
@@ -5,5 +6,5 @@ export type Routes = {
   s: Store;
   entity: (id: string, kind?: string) => Entity;
   view: (e: Entity) => Record<string, any>;
-  checked: (text: string) => Promise<void>;
+  checked: (text: string, format: TemplateFormat) => Promise<void>;
 };

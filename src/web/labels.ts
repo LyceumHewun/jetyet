@@ -1,5 +1,28 @@
 import { t } from "./i18n";
 import type { Message } from "./messages";
+import type { SubscriptionFormat, TemplateFormat } from "./types";
+
+export const TEMPLATE_FORMATS: readonly TemplateFormat[] = [
+  "mihomo",
+  "sing-box",
+];
+
+export const SUBSCRIPTION_FORMATS: readonly SubscriptionFormat[] = [
+  "mihomo",
+  "sing-box",
+  "shadowrocket",
+];
+
+export function formatLabel(format?: string): string {
+  if (format === "shadowrocket") return "Shadowrocket";
+  if (format === "mihomo") return "mihomo";
+  if (format === "sing-box") return "sing-box";
+  return format || "";
+}
+
+export function templateSyntaxLabel(format?: string): string {
+  return format === "sing-box" ? "Liquid · JSON" : "Liquid · YAML";
+}
 
 const operationLabels: Record<string, Message> = {
   deploy: "Deploy",

@@ -119,6 +119,9 @@ export const usernameSchema = z
     "Use letters, numbers, dots, underscores, or hyphens",
   );
 
+export const templateFormatSchema = z.enum(["mihomo", "sing-box"]);
+export type TemplateFormat = z.infer<typeof templateFormatSchema>;
+
 export const userSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
@@ -133,10 +136,13 @@ export const userSchema = z
     }),
     nodeIds: z.array(z.uuid()).max(1000).default([]),
     templateIds: z.array(z.uuid()).min(1).max(100),
-    defaultTemplate: z.uuid(),
+    defaultTemplates: z.record(templateFormatSchema, z.uuid()),
   })
   .refine(
-    (v) => v.templateIds.includes(v.defaultTemplate),
+    (v) =>
+      Object.values(v.defaultTemplates).every((id) =>
+        v.templateIds.includes(id),
+      ),
     "Default template must be available to this user",
   );
 export type Quota = z.infer<typeof quotaSchema>;

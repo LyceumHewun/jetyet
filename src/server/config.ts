@@ -21,6 +21,7 @@ const schema = z.object({
     )
     .default("https://www.gstatic.com/generate_204"),
   hysteriaBinary: z.string().default("/usr/local/bin/hysteria"),
+  singBoxBinary: z.string().default("/usr/local/bin/sing-box"),
   mihomoBinary: z.string().default("/usr/local/bin/mihomo"),
 });
 export const configPath = resolve(

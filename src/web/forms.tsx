@@ -1,3 +1,7 @@
+import {
+  PORTAL_PASSWORD_MAX_LENGTH,
+  PORTAL_PASSWORD_MIN_LENGTH,
+} from "../shared/portal-password";
 import { asUiError, type UiError, localizeError, t as translate } from "./i18n";
 import {
   ArrowLeft,
@@ -36,10 +40,16 @@ import {
   Select,
   Stage,
   SwitchPill,
+  TemplateAuthoringHelp,
   TextArea,
 } from "./components";
-import { operationLabel } from "./labels";
-import type { Row, Session, State } from "./types";
+import {
+  formatLabel,
+  operationLabel,
+  TEMPLATE_FORMATS,
+  templateSyntaxLabel,
+} from "./labels";
+import type { Row, Session, State, TemplateFormat } from "./types";
 
 function toDatetimeLocal(iso: string | null | undefined): string {
   const ms = Date.parse(iso || "");
@@ -361,9 +371,12 @@ export function SetPassword({
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                if (password.length < 12 || password.length > 1000) {
+                if (
+                  password.length < PORTAL_PASSWORD_MIN_LENGTH ||
+                  password.length > PORTAL_PASSWORD_MAX_LENGTH
+                ) {
                   setSubmitError(
-                    "Password must be between 12 and 1000 characters.",
+                    "Password must be between 6 and 1000 characters.",
                   );
                   return;
                 }
@@ -403,7 +416,7 @@ export function SetPassword({
               <Field
                 label={translate("New password")}
                 htmlFor="set-password-input"
-                hint={translate("12–1000 characters.")}
+                hint={translate("6–1000 characters.")}
                 hintAbove
                 hintId="set-password-hint"
               >
@@ -412,8 +425,8 @@ export function SetPassword({
                   name="password"
                   type="password"
                   autoComplete="new-password"
-                  minLength={12}
-                  maxLength={1000}
+                  minLength={PORTAL_PASSWORD_MIN_LENGTH}
+                  maxLength={PORTAL_PASSWORD_MAX_LENGTH}
                   enterKeyHint="done"
                   required
                   autoFocus
@@ -629,53 +642,71 @@ export function EntityForm({
   onClose: () => void;
   onSave: (v: Row) => Promise<void>;
 }) {
-  const [data, setData] = useState<Row>(() =>
-    kind === "hosts"
-      ? {
-          name: "",
-          address: "",
-          port: 22,
-          username: "root",
-          authType: "key",
-          enabled: true,
-          quota: newQuota(),
-          initialIn: 0,
-          initialOut: 0,
-          ...row,
-          credential: "",
-          passphrase: "",
-        }
-      : kind === "nodes"
-        ? {
-            hostId:
-              state.hosts.find(
-                (h) =>
-                  h.fingerprint && !state.nodes.some((n) => n.hostId === h.id),
-              )?.id || "",
-            name: "",
-            address: "",
-            port: 443,
-            hopping: "",
-            hopInterval: 30,
-            enabled: true,
-            ...row,
-          }
-        : {
-            name: "",
-            username: "",
-            note: "",
-            enabled: true,
-            expires: null,
-            quota: newQuota(),
-            nodeIds: [],
-            templateIds: state.templates
-              .filter((t) => t.published)
-              .slice(0, 1)
-              .map((t) => t.id),
-            defaultTemplate: state.templates.find((t) => t.published)?.id || "",
-            ...row,
-          },
-  );
+  const [data, setData] = useState<Row>(() => {
+    if (kind === "hosts") {
+      return {
+        name: "",
+        address: "",
+        port: 22,
+        username: "root",
+        authType: "key",
+        enabled: true,
+        quota: newQuota(),
+        initialIn: 0,
+        initialOut: 0,
+        ...row,
+        credential: "",
+        passphrase: "",
+      };
+    }
+    if (kind === "nodes") {
+      return {
+        hostId:
+          state.hosts.find(
+            (h) =>
+              h.fingerprint && !state.nodes.some((n) => n.hostId === h.id),
+          )?.id || "",
+        name: "",
+        address: "",
+        port: 443,
+        hopping: "",
+        hopInterval: 30,
+        enabled: true,
+        ...row,
+      };
+    }
+    const published = state.templates.filter((t) => t.published);
+    const defaultFor = (format: TemplateFormat) =>
+      published.find((t) => t.format === format && t.builtin)?.id ||
+      published.find((t) => t.format === format)?.id ||
+      "";
+    const defaultTemplates: Record<TemplateFormat, string> = {
+      mihomo: row?.defaultTemplates?.mihomo || defaultFor("mihomo"),
+      "sing-box":
+        row?.defaultTemplates?.["sing-box"] || defaultFor("sing-box"),
+    };
+    const templateIds: string[] = row?.templateIds
+      ? [...row.templateIds]
+      : Array.from(
+          new Set(
+            [defaultTemplates.mihomo, defaultTemplates["sing-box"]].filter(
+              Boolean,
+            ),
+          ),
+        );
+    return {
+      name: "",
+      username: "",
+      note: "",
+      enabled: true,
+      expires: null,
+      quota: newQuota(),
+      nodeIds: [],
+      ...row,
+      templateIds,
+      defaultTemplates,
+    };
+  });
   const [error, setError] = useState<UiError>(""),
     [busy, setBusy] = useState(false);
   const set = (k: string, v: any) => setData({ ...data, [k]: v });
@@ -836,6 +867,24 @@ export function EntityForm({
                 "Sign-in username must be 1–100 characters using ASCII letters, digits, ., _, or -.",
               );
               return;
+            }
+            if (kind === "users") {
+              const selectedIds: string[] = data.templateIds || [];
+              const defaults = data.defaultTemplates || {};
+              const hasAllDefaults = TEMPLATE_FORMATS.every((fmt) => {
+                const tid = defaults[fmt];
+                return (
+                  typeof tid === "string" &&
+                  selectedIds.includes(tid) &&
+                  state.templates.some((t) => t.id === tid && t.format === fmt)
+                );
+              });
+              if (!selectedIds.length || !hasAllDefaults) {
+                setError(
+                  "Select at least one published template and a default for both mihomo and sing-box.",
+                );
+                return;
+              }
             }
             if (
               kind !== "nodes" &&
@@ -1074,39 +1123,78 @@ export function EntityForm({
                 <ChipPicker
                   options={state.templates
                     .filter((t) => t.published)
-                    .map((t) => ({ id: t.id, label: t.name }))}
+                    .map((t) => ({
+                      id: t.id,
+                      label: t.name,
+                      tag: t.builtin
+                        ? `${formatLabel(t.format)} · ${translate("Built-in")}`
+                        : formatLabel(t.format),
+                    }))}
                   selected={data.templateIds}
                   emptyText={translate("No published templates.")}
                   onToggle={(id) => {
+                    const toggled = state.templates.find((t) => t.id === id);
+                    const format = toggled?.format as TemplateFormat | undefined;
                     setData((prev) => {
                       const active = prev.templateIds.includes(id);
                       const nextTemplateIds = active
                         ? prev.templateIds.filter((x: string) => x !== id)
                         : [...prev.templateIds, id];
-                      const nextDefault = active
-                        ? prev.defaultTemplate === id
-                          ? nextTemplateIds[0] || ""
-                          : prev.defaultTemplate
-                        : prev.defaultTemplate || id;
+                      const prevDefaults = prev.defaultTemplates || {};
+                      const nextDefaults = { ...prevDefaults };
+                      if (format) {
+                        if (active) {
+                          if (nextDefaults[format] === id) {
+                            nextDefaults[format] =
+                              nextTemplateIds.find(
+                                (tid: string) =>
+                                  state.templates.find((t) => t.id === tid)
+                                    ?.format === format,
+                              ) || "";
+                          }
+                        } else if (!nextDefaults[format]) {
+                          nextDefaults[format] = id;
+                        }
+                      }
                       return {
                         ...prev,
                         templateIds: nextTemplateIds,
-                        defaultTemplate: nextDefault,
+                        defaultTemplates: nextDefaults,
                       };
                     });
                   }}
                 />
               </div>
-              <Field label={translate("Default template")}>
-                <Select
-                  value={data.defaultTemplate}
-                  placeholder={translate("Choose template")}
-                  options={state.templates
-                    .filter((t) => data.templateIds.includes(t.id))
-                    .map((t) => ({ value: t.id, label: t.name }))}
-                  onChange={(v) => set("defaultTemplate", v)}
-                />
-              </Field>
+              <div className="form-grid">
+                {TEMPLATE_FORMATS.map((fmt) => (
+                  <Field
+                    key={fmt}
+                    label={translate("Default {0} template", formatLabel(fmt))}
+                  >
+                    <Select
+                      value={data.defaultTemplates?.[fmt] || ""}
+                      placeholder={translate("Choose template")}
+                      options={state.templates
+                        .filter(
+                          (t) =>
+                            data.templateIds.includes(t.id) && t.format === fmt,
+                        )
+                        .map((t) => ({
+                          value: t.id,
+                          label: t.builtin
+                            ? `${t.name} (${translate("Built-in")})`
+                            : t.name,
+                        }))}
+                      onChange={(v) =>
+                        set("defaultTemplates", {
+                          ...data.defaultTemplates,
+                          [fmt]: v,
+                        })
+                      }
+                    />
+                  </Field>
+                ))}
+              </div>
             </div>
           )}
           {error && <p className="form-error">{localizeError(error)}</p>}
@@ -1399,18 +1487,23 @@ export function TemplateEditor({
 }) {
   const [id, setId] = useState(template?.id || ""),
     [name, setName] = useState(template?.name || ""),
+    [format, setFormat] = useState<TemplateFormat>(
+      template?.format === "sing-box" ? "sing-box" : "mihomo",
+    ),
     [body, setBody] = useState(template?.draft ?? template?.body ?? ""),
     [userId, setUserId] = useState(state.users[0]?.id || ""),
     [preview, setPreview] = useState(""),
     [error, setError] = useState<UiError>(""),
     [busy, setBusy] = useState(false),
     [confirmDelete, setConfirmDelete] = useState(false);
+  const formatLocked = Boolean(id);
+  const isBuiltin = Boolean(template?.builtin);
   const save = async () => {
     if (id) {
       await api(`templates/${id}`, "PUT", { name, body });
       return id;
     }
-    const t = await api("templates", "POST", { name, body });
+    const t = await api("templates", "POST", { name, body, format });
     setId(t.id);
     return t.id;
   };
@@ -1443,11 +1536,11 @@ export function TemplateEditor({
         name ||
         (template ? translate("Edit template") : translate("New template"))
       }
-      tag={translate("Template Studio")}
+      tag={`${translate("Template Studio")} · ${formatLabel(format)}`}
       onClose={onClose}
       actions={
         <>
-          {id && (
+          {id && !isBuiltin && (
             <Button
               variant="danger-text"
               disabled={busy}
@@ -1492,6 +1585,15 @@ export function TemplateEditor({
         </Confirm>
       )}
       {error && <p className="form-error">{localizeError(error)}</p>}
+      <TemplateAuthoringHelp
+        format={format}
+        canInsertStarter={!body.trim()}
+        disabled={busy}
+        onInsertStarter={(starter) => {
+          setBody(starter);
+          setPreview("");
+        }}
+      />
       <div className="ide-grid">
         <div className="studio-card ide-pane">
           <div className="studio-card-head">
@@ -1501,10 +1603,29 @@ export function TemplateEditor({
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
-            <Chip mono>Liquid · YAML</Chip>
+            <div className="chip-group">
+              {!formatLocked ? (
+                <SegmentedControl
+                  value={format}
+                  options={[
+                    ["mihomo", "mihomo"],
+                    ["sing-box", "sing-box"],
+                  ]}
+                  onChange={(next) => {
+                    setFormat(next);
+                    setPreview("");
+                  }}
+                />
+              ) : (
+                <Chip mono>{formatLabel(format)}</Chip>
+              )}
+              <Chip mono>{templateSyntaxLabel(format)}</Chip>
+              {isBuiltin && <Chip>{translate("Built-in")}</Chip>}
+            </div>
           </div>
           <TextArea
             className="template-source ide-editor"
+            aria-label={translate("Template source")}
             spellCheck={false}
             rows={22}
             value={body}
@@ -1531,7 +1652,10 @@ export function TemplateEditor({
                 }}
               />
             </div>
-            {preview && <Badge tone="good">{translate("Validated")}</Badge>}
+            <div className="chip-group">
+              <Chip mono>{format === "sing-box" ? "JSON" : "YAML"}</Chip>
+              {preview && <Badge tone="good">{translate("Validated")}</Badge>}
+            </div>
           </div>
           {preview ? (
             <ScrollArea className="code-output ide-output">

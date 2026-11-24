@@ -4,15 +4,17 @@ import { counted, usage } from "../accounting";
 import { digest } from "../crypto";
 import { strip, type Entity, type Store } from "../db";
 import { HttpError, requireOrigin } from "../errors";
-import { render } from "../templates";
+import {
+  formatLinks,
+  subscriptionLink,
+  subscriptionNodes,
+} from "../subscriptions";
+import { render, validateCore } from "../templates";
 
 const personalKind = "personal-template";
 const title = z.string().trim().min(1).max(100);
 const isExpired = (user: Entity) =>
   !!user.expires && Date.parse(user.expires) <= Date.now();
-const subscriptionLink = (s: Store, user: Entity) =>
-  `${s.config.origin}/sub/${s.secrets(user.id).subscriptionToken}`;
-
 function availableTemplate(s: Store, user: Entity, id: string) {
   const t = s.get(id);
   if (!t || t.deleted) return null;
@@ -34,6 +36,7 @@ function templateSummary(t: Entity) {
     id: t.id,
     name: personal ? (t.draftName ?? t.name) : t.name,
     personal,
+    format: t.format,
     published: t.published,
     draft: personal && typeof t.draft === "string",
   };
@@ -83,11 +86,16 @@ export function portalOverview(s: Store, user: Entity) {
     .filter((t) => t !== null);
   const personal = s.list(personalKind).filter((t) => t.owner === user.id);
   const expired = isExpired(user);
+  const base =
+    !expired && subscriptionNodes(s, user).length
+      ? subscriptionLink(s, user)
+      : null;
   return {
     name: user.name,
     expired,
-    defaultLink: expired ? null : subscriptionLink(s, user),
-    defaultTemplate: user.defaultTemplate,
+    defaultLink: base,
+    formats: base ? formatLinks(base) : null,
+    defaultTemplates: user.defaultTemplates,
     templates: [...assigned, ...personal].map(templateSummary),
     traffic: portalTraffic(s, user),
   };
@@ -119,7 +127,7 @@ export function registerPortalRoutes(
     const t = template(user, c.req.param("id"));
     const summary = templateSummary(t);
     const link =
-      !isExpired(user) && t.published
+      !isExpired(user) && t.published && subscriptionNodes(s, user).length
         ? `${subscriptionLink(s, user)}?template=${t.id}`
         : null;
     return c.json({
@@ -184,18 +192,24 @@ export function registerPortalRoutes(
         .immediate(),
     );
   });
-  function preview(user: Entity, body: string, personal: boolean) {
+  function preview(
+    user: Entity,
+    body: string,
+    personal: boolean,
+    format: Entity["format"],
+  ) {
     try {
       return render(
         s,
         user,
         body,
         personal ? "portal-preview" : "assigned-preview",
+        format,
       );
     } catch {
       throw new HttpError(
         422,
-        "Template validation failed. Check YAML, proxy groups, and rules.",
+        "Template validation failed. Check configuration syntax, groups, and rules.",
       );
     }
   }
@@ -204,7 +218,7 @@ export function registerPortalRoutes(
     const t = template(user, c.req.param("id"));
     const draft = t.kind === personalKind ? t.draft : null;
     const body = draft ?? t.body;
-    const text = preview(user, body, t.kind === personalKind);
+    const text = preview(user, body, t.kind === personalKind, t.format);
     if (typeof draft === "string")
       s.put(
         personalKind,
@@ -214,14 +228,46 @@ export function registerPortalRoutes(
       );
     return c.json({ text });
   });
-  portal.post("/templates/:id/publish", (c) => {
+  portal.post("/templates/:id/publish", async (c) => {
     const user = c.get("user");
+    const draft = template(user, c.req.param("id"), true);
+    if (
+      typeof draft.draft !== "string" ||
+      draft.previewed !== digest(draft.draft)
+    )
+      throw new HttpError(409, "Preview the saved draft before publishing");
+    let configuration: string;
+    try {
+      configuration = render(s, user, draft.draft, "live", draft.format);
+    } catch {
+      throw new HttpError(
+        422,
+        "Template validation failed. Check configuration syntax, groups, and rules.",
+      );
+    }
+    await validateCore(s, configuration, draft.format);
     const published = s.db
       .transaction(() => {
-        const t = template(user, c.req.param("id"), true);
-        if (typeof t.draft !== "string" || t.previewed !== digest(t.draft))
+        const currentUser = sessionUser(c);
+        if (!currentUser) throw new HttpError(401, "Sign in required");
+        const t = template(currentUser, c.req.param("id"), true);
+        if (
+          t.draft !== draft.draft ||
+          t.draftName !== draft.draftName ||
+          t.previewed !== draft.previewed
+        )
           throw new HttpError(409, "Preview the saved draft before publishing");
-        preview(user, t.draft, true);
+        try {
+          if (
+            render(s, currentUser, t.draft, "live", t.format) !== configuration
+          )
+            throw Error("Configuration changed");
+        } catch {
+          throw new HttpError(
+            409,
+            "Subscription configuration changed during validation. Preview and publish again.",
+          );
+        }
         return s.put(
           personalKind,
           {

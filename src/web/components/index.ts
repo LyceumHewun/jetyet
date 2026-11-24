@@ -27,6 +27,12 @@ export {
   type ButtonVariant,
 } from "./primitives";
 export {
+  QrCodeModal,
+  QrCodeSvg,
+  type QrCodeOption,
+  type QrCodeTemplateOption,
+} from "./QrCode";
+export {
   initDocumentScrollbars,
   lockDocumentScroll,
   OVERLAY_SCROLLBAR_OPTIONS,
@@ -39,6 +45,7 @@ export {
   type ScrollAxis,
 } from "./Scrollbars";
 export { Select, type SelectOption } from "./Select";
+export { TemplateAuthoringHelp } from "./TemplateAuthoringHelp";
 export {
   Actions,
   Code,
