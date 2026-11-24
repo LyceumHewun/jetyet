@@ -440,6 +440,16 @@ describe("authorization and templates", () => {
       ).outbounds,
     ).toEqual(["Preview node 1"]);
     expect(JSON.stringify(preview)).not.toContain(node.address);
+    expect(preview.dns.final).toBe("cloudflare");
+    expect(() =>
+      render(
+        s,
+        user,
+        singBoxTemplate.body.replace('"final": "Proxy"', '"final": "Missing"'),
+        "live",
+        "sing-box",
+      ),
+    ).toThrow("Invalid sing-box outbound reference");
     const selected = path + "?template=" + template.id;
     expect(
       (await app.request(selected, shadowrocket)).headers.get("content-type"),
@@ -696,12 +706,21 @@ describe("authorization and templates", () => {
     expect(text).not.toContain("203.0.113.1");
     expect(text).not.toContain(s.secrets(user.id).vpnToken);
     const spawn = Bun.spawn.bind(Bun);
-    const validate = spyOn(Bun, "spawn").mockImplementation(() =>
-      spawn([process.execPath, "-e", "process.exit(0)"]),
-    );
+    const validate = spyOn(Bun, "spawn");
     try {
+      validate.mockImplementation(() => {
+        throw Error("Core unavailable");
+      });
+      expect((await request(root + "/publish", "POST")).status).toBe(503);
+      validate.mockImplementation(() =>
+        spawn([process.execPath, "-e", "process.exit(1)"]),
+      );
+      expect((await request(root + "/publish", "POST")).status).toBe(422);
+      validate.mockImplementation(() =>
+        spawn([process.execPath, "-e", "process.exit(0)"]),
+      );
       expect((await request(root + "/publish", "POST")).status).toBe(200);
-      expect(validate).toHaveBeenCalledTimes(1);
+      expect(validate).toHaveBeenCalledTimes(3);
     } finally {
       validate.mockRestore();
     }

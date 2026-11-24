@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
 import type { TemplateFormat } from "../shared/schemas";
+import { HttpError } from "./errors";
 import { subscriptionNodes } from "./subscriptions";
 import type { Entity, Store } from "./db";
 const engine = new Liquid({
@@ -131,17 +132,55 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
   }
   return YAML.stringify(redact(config));
 }
+type SingBoxConfig = Record<string, any> & { outbounds: Record<string, any>[] };
+
+function mapOutboundReferences(
+  config: SingBoxConfig,
+  map: (tag: unknown) => unknown,
+) {
+  function field(object: Record<string, any>, key: string) {
+    if (object[key] !== undefined && object[key] !== "")
+      object[key] = map(object[key]);
+  }
+  for (const outbound of config.outbounds) {
+    field(outbound, "default");
+    field(outbound, "detour");
+    if (Array.isArray(outbound.outbounds))
+      outbound.outbounds = outbound.outbounds.map(map);
+  }
+  for (const entries of [
+    config.dns.servers,
+    config.inbounds,
+    config.endpoints,
+  ]) {
+    if (Array.isArray(entries))
+      for (const entry of entries)
+        if (entry && typeof entry === "object") field(entry, "detour");
+  }
+  field(config.route, "final");
+  function rules(entries: unknown) {
+    if (!Array.isArray(entries)) return;
+    for (const rule of entries) {
+      if (!rule || typeof rule !== "object") continue;
+      field(rule, "outbound");
+      rules(rule.rules);
+    }
+  }
+  rules(config.route.rules);
+}
+
 function redactSingBoxPreview(
-  config: { outbounds: Record<string, any>[] },
+  config: SingBoxConfig,
+  tags: Set<string>,
   literalNames: Map<string, string>,
 ) {
-  const tags = new Set(config.outbounds.map((outbound) => outbound.tag));
   const aliases = new Map<string, string>();
   for (const outbound of config.outbounds) {
-    if (typeof outbound.tag !== "string" || !("server" in outbound)) continue;
+    if (!("server" in outbound)) continue;
     const index = aliases.size + 1;
     let tag = "Preview node " + index;
     while (tags.has(tag)) tag += " (preview)";
+    tags.delete(outbound.tag);
     tags.add(tag);
     aliases.set(outbound.tag, tag);
     outbound.tag = tag;
@@ -153,24 +192,9 @@ function redactSingBoxPreview(
   for (const [literal, simulated] of literalNames) {
     if (aliases.has(simulated)) aliases.set(literal, aliases.get(simulated)!);
   }
-  function replaceReferences(value: unknown, key = ""): unknown {
-    if (Array.isArray(value))
-      return value.map((item) => replaceReferences(item, key));
-    if (value && typeof value === "object")
-      return Object.fromEntries(
-        Object.entries(value).map(([field, item]) => [
-          field,
-          replaceReferences(item, field),
-        ]),
-      );
-    if (
-      typeof value === "string" &&
-      ["outbounds", "outbound", "detour", "default", "final"].includes(key)
-    )
-      return aliases.get(value) ?? value;
-    return value;
-  }
-  return replaceReferences(config) as typeof config;
+  mapOutboundReferences(config, (tag) =>
+    typeof tag === "string" ? (aliases.get(tag) ?? tag) : tag,
+  );
 }
 
 for (const name of ["include", "render", "layout", "extends"])
@@ -244,7 +268,7 @@ export function seedTemplate(s: Store) {
   ]) {
     if (!s.list("template").some((t) => t.format === format && t.builtin))
       s.put("template", {
-        name: "Everyday",
+        name: format === "mihomo" ? "Everyday (mihomo)" : "Everyday (sing-box)",
         body,
         published: true,
         format,
@@ -286,10 +310,10 @@ function proxies(
         tag: name,
         type: "hysteria2",
         server: simulated ? "node-" + (i + 1) + ".invalid" : n.address,
-        ...(n.hopping
+        ...(!simulated && n.hopping
           ? {
               server_ports: [n.hopping.replace("-", ":")],
-              hop_interval: n.hopInterval + "s",
+              hop_interval: (n.hopInterval ?? 30) + "s",
             }
           : { server_port: simulated ? 443 : n.port }),
         password: mode === "live" ? s.secrets(u.id).vpnToken : "REDACTED",
@@ -337,20 +361,21 @@ export function render(
   if (Buffer.byteLength(text) > 1024 * 1024)
     throw Error("Rendered configuration is too large");
   if (format === "sing-box") {
-    let config = JSON.parse(text);
+    const config: SingBoxConfig = JSON.parse(text);
+    const object = (value: unknown) =>
+      !!value && typeof value === "object" && !Array.isArray(value);
     if (
       !Array.isArray(config?.outbounds) ||
       !Array.isArray(config?.inbounds) ||
-      !config.dns ||
-      !config.route
+      !object(config.dns) ||
+      !object(config.route) ||
+      (config.endpoints !== undefined && !Array.isArray(config.endpoints))
     )
       throw Error(
         "A complete sing-box configuration requires inbounds, outbounds, DNS and routing",
       );
-    if (isPortalPreview(mode))
-      config = redactSingBoxPreview(config, literalNames);
     const tags = new Set<string>();
-    for (const outbound of config.outbounds) {
+    for (const outbound of [...config.outbounds, ...(config.endpoints ?? [])]) {
       if (
         typeof outbound?.tag !== "string" ||
         !outbound.tag ||
@@ -359,15 +384,19 @@ export function render(
         throw Error("Duplicate or missing outbound tag");
       tags.add(outbound.tag);
     }
+    if (isPortalPreview(mode)) redactSingBoxPreview(config, tags, literalNames);
     for (const outbound of config.outbounds) {
       if (
         ["selector", "urltest"].includes(outbound.type) &&
-        (!Array.isArray(outbound.outbounds) ||
-          !outbound.outbounds.length ||
-          outbound.outbounds.some((tag: string) => !tags.has(tag)))
+        (!Array.isArray(outbound.outbounds) || !outbound.outbounds.length)
       )
         throw Error("Invalid sing-box outbound selection");
     }
+    mapOutboundReferences(config, (tag) => {
+      if (typeof tag !== "string" || !tags.has(tag))
+        throw Error("Invalid sing-box outbound reference");
+      return tag;
+    });
     return mode === "live" ? text : JSON.stringify(redact(config), null, 2);
   }
   const output = isPortalPreview(mode)
@@ -457,12 +486,13 @@ export async function validateCore(
     try {
       child = Bun.spawn(args, { cwd: dir, stdout: "ignore", stderr: "ignore" });
     } catch {
-      throw Error(format + " validation core is unavailable");
+      throw new HttpError(503, format + " validation core is unavailable");
     }
     const timer = setTimeout(() => child.kill(), 15000);
     const code = await child.exited.finally(() => clearTimeout(timer));
     if (code !== 0)
-      throw Error(
+      throw new HttpError(
+        422,
         format +
           " configuration validation failed; check groups, rules and DNS settings.",
       );
@@ -472,9 +502,7 @@ export async function validateCore(
 }
 export function templateGroupNames(s: Store): Set<string> {
   const names = new Set<string>();
-  for (const t of s
-    .list("template")
-    .filter((t) => t.format === "mihomo" && t.published && t.body)) {
+  for (const t of s.list("template").filter((t) => t.published && t.body)) {
     try {
       const rendered = engine.parseAndRenderSync(t.body, {
         proxies: [],
@@ -482,6 +510,16 @@ export function templateGroupNames(s: Store): Set<string> {
         user: { name: "check" },
         nodes: [],
       });
+      if (t.format === "sing-box") {
+        const parsed = JSON.parse(rendered);
+        for (const outbound of [
+          ...(parsed.outbounds ?? []),
+          ...(parsed.endpoints ?? []),
+        ])
+          if (typeof outbound?.tag === "string" && outbound.tag)
+            names.add(outbound.tag);
+        continue;
+      }
       const parsed = YAML.parse(rendered, { maxAliasCount: 100 });
       if (Array.isArray(parsed?.["proxy-groups"])) {
         for (const g of parsed["proxy-groups"]) {

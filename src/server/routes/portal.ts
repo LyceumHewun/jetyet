@@ -236,7 +236,15 @@ export function registerPortalRoutes(
       draft.previewed !== digest(draft.draft)
     )
       throw new HttpError(409, "Preview the saved draft before publishing");
-    const configuration = render(s, user, draft.draft, "live", draft.format);
+    let configuration: string;
+    try {
+      configuration = render(s, user, draft.draft, "live", draft.format);
+    } catch {
+      throw new HttpError(
+        422,
+        "Template validation failed. Check configuration syntax, groups, and rules.",
+      );
+    }
     await validateCore(s, configuration, draft.format);
     const published = s.db
       .transaction(() => {
@@ -246,10 +254,20 @@ export function registerPortalRoutes(
         if (
           t.draft !== draft.draft ||
           t.draftName !== draft.draftName ||
-          t.previewed !== draft.previewed ||
-          render(s, currentUser, t.draft, "live", t.format) !== configuration
+          t.previewed !== draft.previewed
         )
           throw new HttpError(409, "Preview the saved draft before publishing");
+        try {
+          if (
+            render(s, currentUser, t.draft, "live", t.format) !== configuration
+          )
+            throw Error("Configuration changed");
+        } catch {
+          throw new HttpError(
+            409,
+            "Subscription configuration changed during validation. Preview and publish again.",
+          );
+        }
         return s.put(
           personalKind,
           {
