@@ -199,6 +199,7 @@ export function QrCodeModal({
         <Field label={templateLabel} htmlFor={templateSelectId}>
           <Select
             id={templateSelectId}
+            unclipped
             value={activeTemplate?.value ?? ""}
             options={templateSelectOptions}
             onChange={setSelectedTemplateId}
@@ -214,6 +215,7 @@ export function QrCodeModal({
         >
           <Select
             id={selectId}
+            unclipped
             aria-describedby={formatLockHint ? formatHintId : undefined}
             value={activeOption?.value ?? effectiveFormat}
             disabled={formatLocked}
