@@ -1,3 +1,7 @@
+import {
+  PORTAL_PASSWORD_MAX_LENGTH,
+  PORTAL_PASSWORD_MIN_LENGTH,
+} from "../shared/portal-password";
 import { asUiError, type UiError, localizeError, t as translate } from "./i18n";
 import {
   ArrowLeft,
@@ -367,9 +371,12 @@ export function SetPassword({
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                if (password.length < 12 || password.length > 1000) {
+                if (
+                  password.length < PORTAL_PASSWORD_MIN_LENGTH ||
+                  password.length > PORTAL_PASSWORD_MAX_LENGTH
+                ) {
                   setSubmitError(
-                    "Password must be between 12 and 1000 characters.",
+                    "Password must be between 6 and 1000 characters.",
                   );
                   return;
                 }
@@ -409,7 +416,7 @@ export function SetPassword({
               <Field
                 label={translate("New password")}
                 htmlFor="set-password-input"
-                hint={translate("12–1000 characters.")}
+                hint={translate("6–1000 characters.")}
                 hintAbove
                 hintId="set-password-hint"
               >
@@ -418,8 +425,8 @@ export function SetPassword({
                   name="password"
                   type="password"
                   autoComplete="new-password"
-                  minLength={12}
-                  maxLength={1000}
+                  minLength={PORTAL_PASSWORD_MIN_LENGTH}
+                  maxLength={PORTAL_PASSWORD_MAX_LENGTH}
                   enterKeyHint="done"
                   required
                   autoFocus

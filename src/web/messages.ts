@@ -30,14 +30,14 @@ export const zhHans = {
   "Checking portal password link…": "正在验证门户密码设置链接…",
   "Link unavailable": "链接不可用",
   "Back to sign in": "返回登录",
-  "Password must be between 12 and 1000 characters.":
-    "密码长度须为 12 至 1000 个字符。",
+  "Password must be between 6 and 1000 characters.":
+    "密码长度须为 6 至 1000 个字符。",
   "Portal Password": "门户密码",
   "Set password": "设置密码",
   "Choose a password for your subscription portal account.":
     "为你的订阅门户账号设置密码。",
   "New password": "新密码",
-  "12–1000 characters.": "12 至 1000 个字符。",
+  "6–1000 characters.": "6 至 1000 个字符。",
   "Saving password…": "正在保存密码…",
   "Set password & sign in": "设置密码并登录",
   "Traffic allowance": "流量配额",
