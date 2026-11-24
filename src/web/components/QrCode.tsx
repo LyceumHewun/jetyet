@@ -153,7 +153,7 @@ export function QrCodeModal({
           label: tpl.label,
         })),
       }));
-    return [{ value: "", label: translate("No template") }, ...groups];
+    return [{ value: "", label: translate("Default") }, ...groups];
   }, [templates]);
 
   const activeOption =
@@ -180,6 +180,18 @@ export function QrCodeModal({
 
   const hasControls =
     templateSelectOptions.length > 0 || formatOptions.length > 0;
+
+  const urlLink = (
+    <a
+      className="qr-link mono"
+      href={activeUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={translate("Open URL")}
+    >
+      {activeUrl}
+    </a>
+  );
 
   const controls = hasControls ? (
     <div className="qr-controls">
@@ -212,6 +224,7 @@ export function QrCodeModal({
           />
         </Field>
       )}
+      {urlLink}
     </div>
   ) : null;
 
@@ -224,7 +237,9 @@ export function QrCodeModal({
           size={200}
         />
       </div>
-      <figcaption className="qr-caption mono">{activeUrl}</figcaption>
+      {!hasControls && (
+        <figcaption className="qr-caption">{urlLink}</figcaption>
+      )}
     </figure>
   );
 
