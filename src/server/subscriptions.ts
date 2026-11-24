@@ -37,7 +37,7 @@ export function subscriptionNodes(s: Store, user: Entity) {
       !user.nodeIds.includes(node.id) ||
       !node.enabled ||
       node.deleting ||
-      node.status === "draft"
+      (node.status === "draft" && process.env.NODE_ENV !== "development")
     )
       return false;
     const host = s.get(node.hostId);

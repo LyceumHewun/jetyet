@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --hot src/server/index.ts",
+    "dev": "NODE_ENV=development bun --hot src/server/index.ts",
     "start": "bun src/server/index.ts",
     "monitor": "bun src/workers/monitor.ts",
     "operations": "bun src/workers/operations.ts",
