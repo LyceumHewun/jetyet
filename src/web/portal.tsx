@@ -36,6 +36,7 @@ import {
   ModalBody,
   QrCodeModal,
   type QrCodeOption,
+  type QrCodeTemplateOption,
   Select,
   TemplateAuthoringHelp,
   TextArea,
@@ -65,6 +66,18 @@ function isAbortError(err: unknown): boolean {
         err !== null &&
         "name" in err &&
         (err as { name?: unknown }).name === "AbortError";
+}
+
+function templateSubscriptionUrl(baseUrl: string, templateId: string): string {
+  try {
+    const parsed = new URL(baseUrl);
+    parsed.search = "";
+    parsed.searchParams.set("template", templateId);
+    return parsed.toString();
+  } catch {
+    const cleanBase = baseUrl.split("?")[0] ?? baseUrl;
+    return `${cleanBase}?template=${encodeURIComponent(templateId)}`;
+  }
 }
 
 function initialTemplateId(portal: PortalData | null) {
@@ -292,6 +305,7 @@ export function SubscriptionPortal({
     tag?: string;
     url: string;
     options?: QrCodeOption[];
+    templates?: QrCodeTemplateOption[];
   } | null>(null);
   const [templateLinks, setTemplateLinks] = useState<
     Record<string, string | null>
@@ -389,7 +403,7 @@ export function SubscriptionPortal({
   const selected = templates.find((item) => item.id === selectedId);
   const fallbackPinnedLink =
     portal?.defaultLink && selected?.published
-      ? `${portal.defaultLink}?template=${encodeURIComponent(selected.id)}`
+      ? templateSubscriptionUrl(portal.defaultLink, selected.id)
       : null;
   const pinnedLink = selected?.published
     ? selected.id in templateLinks
@@ -730,11 +744,30 @@ export function SubscriptionPortal({
                             });
                           }
                         }
+                        const qrTemplates: QrCodeTemplateOption[] =
+                          publishedSources.map((item) => ({
+                            value: item.id,
+                            label: `${item.name} · ${formatLabel(item.format)} · ${
+                              item.personal
+                                ? translate("Personal")
+                                : translate("Assigned")
+                            }`,
+                            format: item.format,
+                            group: item.personal ? "personal" : "assigned",
+                            url:
+                              templateLinks[item.id] ||
+                              templateSubscriptionUrl(
+                                portal.defaultLink!,
+                                item.id,
+                              ),
+                            tag: formatLabel(item.format),
+                          }));
                         setQrModal({
                           label: translate("Default subscription"),
                           tag: translate("Adaptive"),
                           url: portal.defaultLink!,
                           options,
+                          templates: qrTemplates,
                         });
                       }}
                     >
@@ -1159,6 +1192,7 @@ export function SubscriptionPortal({
           tag={qrModal.tag}
           url={qrModal.url}
           options={qrModal.options}
+          templates={qrModal.templates}
           onClose={() => setQrModal(null)}
         />
       )}

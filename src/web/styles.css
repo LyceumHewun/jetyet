@@ -2043,7 +2043,8 @@ tr:last-child td {
   font-size: var(--text-sm);
   min-width: 0;
 }
-.field > span {
+.field > span,
+.field > .field-label {
   font-weight: 550;
 }
 .field small {
@@ -2162,6 +2163,9 @@ legend {
   border-color: var(--accent);
   background: var(--surface);
 }
+.ui-select-trigger:disabled {
+  background: var(--subtle);
+}
 .ui-select-trigger > span {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2230,6 +2234,7 @@ legend {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
+.ui-select-option + .ui-select-group,
 .ui-select-group + .ui-select-group {
   border-top: 1px solid var(--border);
 }
@@ -3606,6 +3611,10 @@ body > .os-scrollbar.os-theme-jetyet {
 }
 .qr-dialog .field {
   margin-bottom: 0;
+}
+.qr-dialog .field-hint {
+  font-size: var(--text-xs);
+  line-height: var(--lh-body);
 }
 .qr-dialog .modal-foot {
   flex-wrap: wrap;

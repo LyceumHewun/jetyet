@@ -48,6 +48,10 @@ export function Select({
   const activeId = open && highlighted ? optionId(highlighted) : undefined;
 
   useEffect(() => {
+    if (disabled && open) setOpen(false);
+  }, [disabled, open]);
+
+  useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false);

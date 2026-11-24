@@ -26,7 +26,12 @@ export {
   TextArea,
   type ButtonVariant,
 } from "./primitives";
-export { QrCodeModal, QrCodeSvg, type QrCodeOption } from "./QrCode";
+export {
+  QrCodeModal,
+  QrCodeSvg,
+  type QrCodeOption,
+  type QrCodeTemplateOption,
+} from "./QrCode";
 export {
   initDocumentScrollbars,
   lockDocumentScroll,

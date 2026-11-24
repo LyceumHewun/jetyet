@@ -681,6 +681,9 @@ export const zhHans = {
   Subscribe: "订阅",
   Adaptive: "自适应",
   "Output format": "输出格式",
+  "No template": "不使用模板",
+  "Locked to {0} by the selected template. Clear template to choose another format.":
+    "已由所选模板锁定为 {0}。清除模板后可选择其他格式。",
   "Shadowrocket · Hysteria 2 node list": "Shadowrocket · Hysteria 2 节点列表",
   "{0} · Default: {1}": "{0} · 默认：{1}",
   "No subscription links yet": "暂无可用订阅链接",

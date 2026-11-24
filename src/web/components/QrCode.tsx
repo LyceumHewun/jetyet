@@ -14,6 +14,15 @@ export type QrCodeOption = {
   tag?: string;
 };
 
+export type QrCodeTemplateOption = {
+  value: string;
+  label: string;
+  format: string;
+  group: "assigned" | "personal";
+  url: string;
+  tag?: string;
+};
+
 /**
  * Renders a scannable local SVG QR code for the exact subscription URL.
  */
@@ -73,7 +82,7 @@ export function QrCodeSvg({
 
 /**
  * Focused flat modal showing a scannable QR code for an exact HTTPS URL,
- * with an optional format switcher backed by server-provided URLs.
+ * with optional format and template switchers backed by server-provided URLs.
  */
 export function QrCodeModal({
   title,
@@ -81,6 +90,8 @@ export function QrCodeModal({
   url,
   options,
   optionLabel = translate("Output format"),
+  templates,
+  templateLabel = translate("Template"),
   onClose,
 }: {
   title: string;
@@ -88,22 +99,84 @@ export function QrCodeModal({
   url: string;
   options?: QrCodeOption[];
   optionLabel?: string;
+  templates?: QrCodeTemplateOption[];
+  templateLabel?: string;
   onClose: () => void;
 }) {
   const selectId = useId();
-  const [selectedValue, setSelectedValue] = useState(
+  const formatHintId = useId();
+  const templateSelectId = useId();
+  const [selectedFormat, setSelectedFormat] = useState(
     () => options?.[0]?.value ?? "",
   );
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
 
   useEffect(() => {
-    setSelectedValue(options?.[0]?.value ?? "");
-  }, [options, url]);
+    setSelectedFormat(options?.[0]?.value ?? "");
+    setSelectedTemplateId("");
+  }, [options, templates, url]);
+
+  const activeTemplate = templates?.find(
+    (tpl) => tpl.value === selectedTemplateId,
+  );
+  const effectiveFormat = activeTemplate
+    ? activeTemplate.format
+    : selectedFormat;
+  const formatOptions = useMemo(() => {
+    if (!options?.length) return [];
+    const base = options.map((opt) => ({ value: opt.value, label: opt.label }));
+    if (
+      activeTemplate &&
+      !base.some((opt) => opt.value === activeTemplate.format)
+    ) {
+      base.push({
+        value: activeTemplate.format,
+        label: activeTemplate.tag ?? activeTemplate.format,
+      });
+    }
+    return base;
+  }, [options, activeTemplate]);
+
+  const templateSelectOptions = useMemo(() => {
+    if (!templates?.length) return [];
+    const assigned = templates.filter((tpl) => tpl.group === "assigned");
+    const personal = templates.filter((tpl) => tpl.group === "personal");
+    const groups = [
+      { label: translate("ASSIGNED TEMPLATES"), items: assigned },
+      { label: translate("PERSONAL TEMPLATES"), items: personal },
+    ]
+      .filter((group) => group.items.length > 0)
+      .map((group) => ({
+        label: group.label,
+        options: group.items.map((tpl) => ({
+          value: tpl.value,
+          label: tpl.label,
+        })),
+      }));
+    return [{ value: "", label: translate("No template") }, ...groups];
+  }, [templates]);
 
   const activeOption =
-    options?.find((opt) => opt.value === selectedValue) ?? options?.[0];
-  const activeUrl = activeOption?.url ?? url;
-  const activeTag = activeOption?.tag ?? tag;
-  const qrLabel = activeOption ? `${title} · ${activeOption.label}` : title;
+    options?.find((opt) => opt.value === effectiveFormat) ??
+    (activeTemplate ? undefined : options?.[0]);
+  const activeUrl = activeTemplate
+    ? activeTemplate.url
+    : (activeOption?.url ?? url);
+  const activeTag = activeTemplate
+    ? (activeTemplate.tag ?? activeOption?.tag ?? tag)
+    : (activeOption?.tag ?? tag);
+  const qrLabel = activeTemplate
+    ? `${title} · ${activeTemplate.label}`
+    : activeOption
+      ? `${title} · ${activeOption.label}`
+      : title;
+  const formatLocked = !!activeTemplate;
+  const formatLockHint = activeTemplate
+    ? translate(
+        "Locked to {0} by the selected template. Clear template to choose another format.",
+        activeTemplate.tag ?? activeTemplate.format,
+      )
+    : undefined;
 
   return (
     <Modal
@@ -116,16 +189,32 @@ export function QrCodeModal({
       className="qr-dialog"
     >
       <ModalBody>
-        {options && options.length > 0 && (
-          <Field label={optionLabel} htmlFor={selectId}>
+        {templateSelectOptions.length > 0 && (
+          <Field label={templateLabel} htmlFor={templateSelectId}>
+            <Select
+              id={templateSelectId}
+              value={activeTemplate?.value ?? ""}
+              options={templateSelectOptions}
+              onChange={setSelectedTemplateId}
+            />
+          </Field>
+        )}
+        {formatOptions.length > 0 && (
+          <Field
+            label={optionLabel}
+            htmlFor={selectId}
+            hint={formatLockHint}
+            hintId={formatLockHint ? formatHintId : undefined}
+          >
             <Select
               id={selectId}
-              value={activeOption?.value ?? ""}
-              options={options.map((opt) => ({
-                value: opt.value,
-                label: opt.label,
-              }))}
-              onChange={setSelectedValue}
+              aria-describedby={formatLockHint ? formatHintId : undefined}
+              value={activeOption?.value ?? effectiveFormat}
+              disabled={formatLocked}
+              options={formatOptions}
+              onChange={(next) => {
+                if (!formatLocked) setSelectedFormat(next);
+              }}
             />
           </Field>
         )}
