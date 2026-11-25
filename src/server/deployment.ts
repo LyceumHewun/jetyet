@@ -118,6 +118,7 @@ else
   if ss -H -lun | awk '{print $4}' | grep -Eq ':(${n.port}|9999)$'; then echo 'Port conflict' >&2; exit 1; fi
   if ss -H -ltn | awk '{print $4}' | grep -Eq ':9999$'; then echo 'Traffic API port conflict' >&2; exit 1; fi
 fi
+${n.hopping ? resolveHoppingAddress(n.address) : ""}
 mkdir -p /etc/jetyet /usr/local/bin
 python3 -c ${quote(`import json,hashlib,os; m=json.loads(${JSON.stringify(manifest)}); m['phase']='installing'; p='/etc/jetyet/config.yaml'; m['previousConfigHash']=hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.exists(p) else None; old=json.load(open('/etc/jetyet/manifest.json')) if os.path.exists('/etc/jetyet/manifest.json') else None; m['configHash']=old['configHash'] if old and old.get('configHash') else m['configHash']; f=open('/etc/jetyet/manifest.json.next','w'); json.dump(m,f); f.close(); os.replace('/etc/jetyet/manifest.json.next','/etc/jetyet/manifest.json')`)}
 case "$(uname -m)" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) echo 'Supported architectures: amd64, arm64' >&2; exit 1;; esac
@@ -148,24 +149,54 @@ systemctl enable jetyet-hysteria.service >/dev/null
 systemctl restart jetyet-hysteria.service
 sleep 2
 systemctl is-active --quiet jetyet-hysteria.service
-printf %s ${quote(Buffer.from(manifest).toString("base64"))} | base64 -d > /etc/jetyet/manifest.json.next
+python3 -c ${quote("import json,sys; m=json.loads(sys.argv[1]); address=sys.argv[2]; m.update(hoppingAddress=address) if address else None; print(json.dumps(m))")} ${quote(manifest)} "${n.hopping ? "$hopping_address" : ""}" > /etc/jetyet/manifest.json.next
 mv /etc/jetyet/manifest.json.next /etc/jetyet/manifest.json
 echo 'Deployment verified'
+`;
+}
+function resolveHoppingAddress(address: string) {
+  return `hopping_address=$(python3 - ${quote(address)} <<'PY'
+import ipaddress,json,subprocess,sys
+
+advertised=ipaddress.ip_address(sys.argv[1])
+family='-'+str(advertised.version)
+interfaces=json.loads(subprocess.check_output(['ip',family,'-j','addr','show','up','scope','global']))
+local={iface['ifname']:{ipaddress.ip_address(entry['local']) for entry in iface.get('addr_info', [])} for iface in interfaces}
+if any(advertised in addresses for addresses in local.values()):
+ print(advertised)
+else:
+ routes=json.loads(subprocess.check_output(['ip',family,'-j','route','get',str(advertised)]))
+ route=routes[0]
+ source=ipaddress.ip_address(route['prefsrc']) if route.get('prefsrc') else None
+ if source not in local.get(route.get('dev'), set()):
+  sys.exit('Cannot determine a local address for port hopping')
+ print(source)
+PY
+)
+echo "Port hopping destination: $hopping_address"
 `;
 }
 function hopScript(n: Entity) {
   const isV6 = n.address.includes(":");
   const cmd = isV6 ? "ip6tables" : "iptables";
-  const dest = `${n.address}/${isV6 ? 128 : 32}`;
+  const dest = `$hopping_address/${isV6 ? 128 : 32}`;
   const range = n.hopping.replace("-", ":");
   const rule = `-d ${dest} -p udp --dport ${range} -m comment --comment jetyet-${n.id} -j REDIRECT --to-ports ${n.port}`;
   const add = `${cmd} -t nat -C PREROUTING ${rule} 2>/dev/null || ${cmd} -t nat -A PREROUTING ${rule}`;
   const remove = `${cmd} -t nat -D PREROUTING ${rule} 2>/dev/null || true`;
-  return `command -v ${cmd} >/dev/null\nprintf %s ${quote(Buffer.from("set -e\n" + add + "\n").toString("base64"))} | base64 -d > /etc/jetyet/hopping-add.sh\nprintf %s ${quote(Buffer.from("set -e\n" + remove + "\n").toString("base64"))} | base64 -d > /etc/jetyet/hopping-remove.sh\n`;
+  return `cat > /etc/jetyet/hopping-add.sh <<EOF
+set -e
+${add}
+EOF
+cat > /etc/jetyet/hopping-remove.sh <<EOF
+set -e
+${remove}
+EOF
+`;
 }
 export const detectionScript = `set -euo pipefail
 python3 - <<'PY'
-import json,hashlib,os,shutil,subprocess
+import ipaddress,json,hashlib,os,subprocess
 m=json.load(open('/etc/jetyet/manifest.json'))
 p='/etc/jetyet/config.yaml'
 m['actualHash']=hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.exists(p) else None
@@ -175,19 +206,12 @@ if m['active'] and m.get('hopping'):
  dport=m['hopping'].replace('-',':')
  comment='jetyet-'+m['nodeId']
  port=str(m['port'])
- addr=m.get('address')
- if addr:
-  is_v6=':' in addr
-  cmd='ip6tables' if is_v6 else 'iptables'
-  dest=addr+('/128' if is_v6 else '/32')
-  subprocess.run([cmd,'-t','nat','-C','PREROUTING','-d',dest,'-p','udp','--dport',dport,'-m','comment','--comment',comment,'-j','REDIRECT','--to-ports',port],check=True,capture_output=True)
- else:
-  ok=False
-  for cmd in ['iptables','ip6tables']:
-   if shutil.which(cmd) and subprocess.run([cmd,'-t','nat','-C','PREROUTING','-p','udp','--dport',dport,'-m','comment','--comment',comment,'-j','REDIRECT','--to-ports',port],capture_output=True).returncode==0:
-    ok=True
-  if not ok:
-   raise Exception('Port hopping rule missing')
+ if not m.get('hoppingAddress'):
+  raise Exception('Port hopping address missing; redeploy the node')
+ addr=ipaddress.ip_address(m['hoppingAddress'])
+ cmd='ip6tables' if addr.version==6 else 'iptables'
+ dest=f'{addr}/{addr.max_prefixlen}'
+ subprocess.run([cmd,'-t','nat','-C','PREROUTING','-d',dest,'-p','udp','--dport',dport,'-m','comment','--comment',comment,'-j','REDIRECT','--to-ports',port],check=True,capture_output=True)
 print(json.dumps(m))
 PY
 `;
