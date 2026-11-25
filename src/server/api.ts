@@ -159,11 +159,11 @@ export function createApp(s: Store) {
         "Client not recognized. Use a format-specific subscription URL.",
         406,
       );
-    const nodes = subscriptionNodes(s, u);
-    if (!nodes.length) return c.text("No eligible assigned nodes", 403);
     let text: string;
     try {
       if (format === "shadowrocket") {
+        const nodes = subscriptionNodes(s, u);
+        if (!nodes.length) return c.text("No eligible assigned nodes", 403);
         text = renderShadowrocket(nodes, s.secrets(u.id).vpnToken);
       } else {
         template ??= subscriptionTemplate(s, u, u.defaultTemplates?.[format]);
