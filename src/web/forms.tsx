@@ -1591,9 +1591,13 @@ export function OperationForm({
           </div>
           {tlsInvalidatesCachedProfiles && (
             <p className="form-note warning">
-              {translate(
-                "Changing TLS mode, SNI, or ECH updates server certificates or ECH keys. Subscribers must refresh their subscription after the upgrade succeeds.",
-              )}
+              {kind === "command"
+                ? translate(
+                    "Changing TLS mode, SNI, or ECH updates server certificates or ECH keys. After running the command and detecting the installation, subscribers must refresh their subscription.",
+                  )
+                : translate(
+                    "Changing TLS mode, SNI, or ECH updates server certificates or ECH keys. Subscribers must refresh their subscription after the verified settings are published.",
+                  )}
             </p>
           )}
           {kind === "reapply" && (

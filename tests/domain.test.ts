@@ -26,6 +26,7 @@ import {
 import { createApp } from "../src/server/api";
 import type { Config } from "../src/server/config";
 import {
+  controlledProbeScript,
   deploymentScript,
   detectionScript,
   echKeysParserPy,
@@ -820,6 +821,7 @@ describe("queue and encryption", () => {
         },
       ),
       detectionScript,
+      controlledProbeScript,
       removeScript(node.id),
     ]) {
       const result = Bun.spawnSync(["bash", "-n"], {
@@ -1287,7 +1289,7 @@ describe("detect operation and concurrent safety", () => {
       keysBlob.toString("base64"),
       "-----END ECH KEYS-----",
       "-----BEGIN ECH CONFIGS-----",
-      staleList.toString("base64"),
+      "!!!not-valid-base64-padding===",
       "-----END ECH CONFIGS-----",
     ].join("\n");
     const parseRes = Bun.spawnSync(
@@ -1656,61 +1658,77 @@ proxy-providers:
     );
     expect(s.get(node.id)?.drift).not.toBe(true);
     finish(s, runningOp, "failed");
+    // Monitor skips drift while remote manual-install lock is busy, and alerts once unlocked with abandoned installing phase
+    await collectHost(s, s.get(host.id)!, async () =>
+      JSON.stringify({ ...baseSample, operationLockBusy: true }),
+    );
+    expect(s.get(node.id)?.drift).not.toBe(true);
     await collectHost(s, s.get(host.id)!, async () =>
       JSON.stringify(baseSample),
     );
     expect(s.get(node.id)?.drift).toBe(true);
 
-    // Disabled node Detect performs controlled start -> live TLS verify -> stop before publishing
+    // Disabled node Detect performs lock-serialized controlledProbeScript before publishing and rejects failed live proof
     s.put(
       "node",
       { ...strip(s.get(node.id)!), enabled: false },
       undefined,
       node.id,
     );
+    const inactiveManifest = {
+      ...upgradedOptions,
+      owner: "jetyet",
+      phase: "ready",
+      version: "v2.14.0",
+      actualVersion: "v2.14.0",
+      nodeId: node.id,
+      hostId: host.id,
+      address: node.address,
+      port: node.port,
+      hopping: node.hopping,
+      configHash: expectedHash,
+      actualHash: expectedHash,
+      certSha256,
+      certSpkiSha256,
+      certDnsSans: ["bing.com"],
+      echConfig,
+      echDetectedPublicNames: ["cloudflare-ech.com"],
+      echDetectedPublicName: "cloudflare-ech.com",
+      active: false,
+    };
+    enqueue(s, host.id, "detect", { nodeId: node.id });
+    const failedDisabledDetect = claim(s, false, "ops")!;
+    await expect(
+      runOperation(s, failedDisabledDetect, async (script) => {
+        if (script === controlledProbeScript)
+          return JSON.stringify({
+            ...inactiveManifest,
+            runtimeFresh: true,
+            liveTlsVerified: false,
+            controlledProbe: true,
+          });
+        return JSON.stringify(inactiveManifest);
+      }),
+    ).rejects.toThrow("Live TLS verification failed for stopped deployment");
+    finish(s, failedDisabledDetect, "failed");
+
     enqueue(s, host.id, "detect", { nodeId: node.id });
     const disabledDetect = claim(s, false, "ops")!;
-    let detectActive = false;
-    let startedForProbe = false;
-    let stoppedAfterProbe = false;
+    let ranControlledProbe = false;
     await runOperation(s, disabledDetect, async (script) => {
-      if (script.includes("systemctl start jetyet-hysteria.service")) {
-        detectActive = true;
-        startedForProbe = true;
-        return "";
+      if (script === controlledProbeScript) {
+        ranControlledProbe = true;
+        return JSON.stringify({
+          ...inactiveManifest,
+          runtimeFresh: true,
+          liveTlsVerified: true,
+          controlledProbe: true,
+        });
       }
-      if (script.includes("systemctl stop jetyet-hysteria.service")) {
-        detectActive = false;
-        stoppedAfterProbe = true;
-        return "";
-      }
-      return JSON.stringify({
-        ...upgradedOptions,
-        owner: "jetyet",
-        phase: "ready",
-        version: "v2.14.0",
-        actualVersion: "v2.14.0",
-        nodeId: node.id,
-        hostId: host.id,
-        address: node.address,
-        port: node.port,
-        hopping: node.hopping,
-        configHash: expectedHash,
-        actualHash: expectedHash,
-        certSha256,
-        certSpkiSha256,
-        certDnsSans: ["bing.com"],
-        echConfig,
-        echDetectedPublicNames: ["cloudflare-ech.com"],
-        echDetectedPublicName: "cloudflare-ech.com",
-        runtimeFresh: detectActive,
-        liveTlsVerified: detectActive,
-        active: detectActive,
-      });
+      return JSON.stringify(inactiveManifest);
     });
     finish(s, disabledDetect, "succeeded");
-    expect(startedForProbe).toBe(true);
-    expect(stoppedAfterProbe).toBe(true);
+    expect(ranControlledProbe).toBe(true);
     s.put(
       "node",
       { ...strip(s.get(node.id)!), enabled: true },

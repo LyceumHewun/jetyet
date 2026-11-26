@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,21 +13,39 @@ import type { Entity, Store } from "../server/db";
 
 const probeBinaryVersions = new Map<string, string>();
 
+async function binaryIdentity(binary: string): Promise<string | null> {
+  try {
+    const resolved = await realpath(binary);
+    const st = await stat(resolved);
+    return `${resolved}:${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}`;
+  } catch {
+    return null;
+  }
+}
+
 async function probeBinaryVersion(binary: string): Promise<string> {
-  const cached = probeBinaryVersions.get(binary);
-  if (cached) return cached;
+  const identity = await binaryIdentity(binary);
+  if (identity) {
+    const cached = probeBinaryVersions.get(identity);
+    if (cached) return cached;
+  }
   const proc = Bun.spawn([binary, "version"], {
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [out, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    proc.exited,
+  const timedOut = await Promise.race([
+    proc.exited.then(() => false),
+    Bun.sleep(5000).then(() => true),
   ]);
-  const match = code === 0 ? out.match(/\bv2\.\d+\.\d+\b/) : null;
+  if (timedOut) {
+    await stopChild(proc);
+    throw Error("Timed out checking management host Hysteria 2 binary version");
+  }
+  const out = await new Response(proc.stdout).text();
+  const match = proc.exitCode === 0 ? out.match(/\bv2\.\d+\.\d+\b/) : null;
   if (!match)
     throw Error("Unable to determine management host Hysteria 2 binary version");
-  probeBinaryVersions.set(binary, match[0]);
+  if (identity) probeBinaryVersions.set(identity, match[0]);
   return match[0];
 }
 

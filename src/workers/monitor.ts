@@ -22,7 +22,7 @@ import { probeNode } from "./probe";
 
 const hostScript = `set -euo pipefail
 python3 - <<'PY'
-import base64,json,struct,subprocess,time,os,hashlib,re
+import base64,fcntl,json,struct,subprocess,time,os,hashlib,re
 ${echKeysParserPy}
 def read(p):
  with open(p) as f:return f.read().strip()
@@ -43,21 +43,33 @@ mem={line.split(':')[0]:int(line.split()[1]) for line in read('/proc/meminfo').s
 disk=os.statvfs('/')
 out={'inbound':rx,'outbound':tx,'ifaceEpoch':','.join(sorted(interfaces)),'boot':read('/proc/sys/kernel/random/boot_id'),'uptime':float(read('/proc/uptime').split()[0]),'cpuTotal':sum(cpu),'cpuIdle':cpu[3]+cpu[4],'memory':100*(1-mem.get('MemAvailable',mem['MemFree'])/mem['MemTotal']),'disk':100*(1-disk.f_bavail/disk.f_blocks)}
 out['service']=subprocess.run(['systemctl','is-active','--quiet','jetyet-hysteria.service']).returncode==0
-if os.path.exists('/etc/jetyet/manifest.json'):
- out['manifest']=json.loads(read('/etc/jetyet/manifest.json'))
- if os.path.exists('/etc/jetyet/config.yaml'):
-  out['configHash']=hashlib.sha256(open('/etc/jetyet/config.yaml','rb').read()).hexdigest()
-  out['config']=read('/etc/jetyet/config.yaml')
- else:
-  out['configHash']=None
-  out['config']=''
- if os.path.exists('/etc/jetyet/server.crt'):
-  r=subprocess.run(['openssl','x509','-in','/etc/jetyet/server.crt','-outform','DER'],capture_output=True)
-  if r.returncode==0: out['certSha256']=hashlib.sha256(r.stdout).hexdigest()
- if os.path.exists('/etc/jetyet/ech.pem'):
-  parsed=parse_ech_keys_file('/etc/jetyet/ech.pem')
-  if parsed: out['echConfig']=parsed['echConfig']
- out['serviceEpoch']=subprocess.run(['systemctl','show','--value','--property=InvocationID','jetyet-hysteria.service'],capture_output=True,text=True).stdout.strip()
+out['operationLockBusy']=False
+lock_fd=None
+try:
+ lock_fd=os.open('/run/jetyet-operation.lock',os.O_CREAT|os.O_RDWR,0o600)
+ fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+ if os.path.exists('/etc/jetyet/manifest.json'):
+  out['manifest']=json.loads(read('/etc/jetyet/manifest.json'))
+  if os.path.exists('/etc/jetyet/config.yaml'):
+   out['configHash']=hashlib.sha256(open('/etc/jetyet/config.yaml','rb').read()).hexdigest()
+   out['config']=read('/etc/jetyet/config.yaml')
+  else:
+   out['configHash']=None
+   out['config']=''
+  if os.path.exists('/etc/jetyet/server.crt'):
+   r=subprocess.run(['openssl','x509','-in','/etc/jetyet/server.crt','-outform','DER'],capture_output=True)
+   if r.returncode==0: out['certSha256']=hashlib.sha256(r.stdout).hexdigest()
+  if os.path.exists('/etc/jetyet/ech.pem'):
+   parsed=parse_ech_keys_file('/etc/jetyet/ech.pem')
+   if parsed: out['echConfig']=parsed['echConfig']
+  out['serviceEpoch']=subprocess.run(['systemctl','show','--value','--property=InvocationID','jetyet-hysteria.service'],capture_output=True,text=True).stdout.strip()
+except BlockingIOError:
+ out['operationLockBusy']=True
+finally:
+ if lock_fd is not None:
+  try: fcntl.flock(lock_fd,fcntl.LOCK_UN)
+  except Exception: pass
+  os.close(lock_fd)
 print(json.dumps(out))
 PY
 `;
@@ -181,7 +193,12 @@ export async function collectHost(
         latestHost.deleted ||
         nodeVerifiedRevision(s, current, latestHost) !== initialRevision;
       if (current && !current.deleted && !current.deleting) {
-        if (!activeOpBefore && !activeOpAfter && !revisionChanged) {
+        if (
+          !activeOpBefore &&
+          !activeOpAfter &&
+          !revisionChanged &&
+          data.operationLockBusy !== true
+        ) {
           const incompleteInstall = data.manifest?.phase !== "ready";
           const pinnedDrift =
             current.tlsSecurity === "pinned" &&

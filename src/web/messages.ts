@@ -739,8 +739,10 @@ export const zhHans = {
     "控制面宿主机 Hysteria 2 二进制需为 v2.6.4 或更高版本才能探测固定指纹节点",
   "Management host Hysteria 2 binary must be v2.12.3 or later to probe ECH nodes":
     "控制面宿主机 Hysteria 2 二进制需为 v2.12.3 或更高版本才能探测 ECH 节点",
-  "Changing TLS mode, SNI, or ECH updates server certificates or ECH keys. Subscribers must refresh their subscription after the upgrade succeeds.":
-    "更改 TLS 模式、SNI 或 ECH 会更新服务端证书或 ECH 密钥，升级成功后订阅用户需刷新一次订阅。",
+  "Changing TLS mode, SNI, or ECH updates server certificates or ECH keys. Subscribers must refresh their subscription after the verified settings are published.":
+    "更改 TLS 模式、SNI 或 ECH 会更新服务端证书或 ECH 密钥，新配置验证并发布后订阅用户需刷新一次订阅。",
+  "Changing TLS mode, SNI, or ECH updates server certificates or ECH keys. After running the command and detecting the installation, subscribers must refresh their subscription.":
+    "更改 TLS 模式、SNI 或 ECH 会更新服务端证书或 ECH 密钥，在 VPS 上执行命令并完成安装检测后，订阅用户需刷新一次订阅。",
 } as const;
 
 export type Message = keyof typeof zhHans;
