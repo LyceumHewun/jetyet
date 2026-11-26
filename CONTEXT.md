@@ -25,6 +25,9 @@ An optional deployment setting that uses the target **VPS** resources to choose 
 **Node Congestion Control Mode**:
 The **Administrator**'s choice of Brutal or BBR for a **Node**, with Brutal selected by default.
 
+**Node TLS Security**:
+Per-node TLS hardening combining a forced SNI on the locally generated self-signed certificate with client certificate pinning (`pinSHA256`), enabled by default for new deployments while keeping existing legacy deployments compatible. **ECH (Encrypted Client Hello)** is an independent per-node option that hides the inner SNI behind an outer public decoy name.
+
 **Subscription**:
 A managed source of VPN client configurations published in supported output formats.
 
@@ -178,7 +181,9 @@ The proportion of expected reachability observations actually performed during a
 - **Adaptive Performance Tuning** can add swap on a low-memory **VPS** with sufficient disk space and no existing swap. It leaves existing swap unchanged.
 - Disabling **Adaptive Performance Tuning** skips tuning in future deployments. The host keeps its applied buffer settings and swap when tuning is disabled or the **Node** is deleted.
 - A **Node**'s congestion control mode determines the managed server settings and how the node is rendered in subscriptions. Brutal mode supplies default upload and download bandwidth hints of 1,000 Mbps each. BBR mode omits both hints.
-- A **Node**'s subscription reflects its last verified congestion control mode.
+- A **Node**'s subscription reflects its last verified congestion control mode and last verified **Node TLS Security** and **ECH** state.
+- New **Node** deployments enable forced SNI and `pinSHA256` certificate pinning by default, using a platform default SNI when left blank. Existing legacy nodes without verified TLS security remain compatible in verification-skipping mode until upgraded individually.
+- **ECH** is enabled independently per **Node** and requires a compatible Hysteria 2 version; its private key stays on the VPS while only the public ECH configuration is published to subscriptions.
 - Administrators do not manage Brutal bandwidth in the control panel. Clients may override the subscription defaults locally.
 - After administrator-operated deployment, the platform detects the deployed resources to populate their records; manual form entry alone is not the source of truth for node details.
 - Both deployment paths require platform-held SSH access to the **VPS** for detection, traffic collection, and ongoing management.
@@ -186,8 +191,7 @@ The proportion of expected reachability observations actually performed during a
 - Detection identifies the configuration and state of those deployments; adopting arbitrary pre-existing VPN services is outside the product scope.
 - Administrators explicitly assign an allowed set of **Nodes** to each **Subscription User**, with a select-all action available.
 - Subscription output, VPN credential provisioning, and actual connection authorization all follow the user's allowed node set.
-- A **Subscription User** with no assigned nodes cannot retrieve subscriptions in any output format.
-- If all assigned nodes are disabled, subscription retrieval is unavailable in every output format until an assigned node is enabled and eligible again.
+- When a **Subscription User** has no eligible assigned nodes (none assigned or all assigned nodes disabled), built-in **mihomo** and **sing-box** subscriptions route traffic through `DIRECT`, while **Shadowrocket** subscriptions remain unavailable until an assigned node is enabled and eligible again.
 - Select-all assigns only nodes that currently exist; newly created nodes require explicit assignment and are not automatically shared.
 - Each **Subscription User** has one subscription entry point, one allowed node set, and one shared traffic allowance across output formats.
 - A template-specific subscription URL always uses the selected template's type as its output format, regardless of the client User-Agent. An explicit format that conflicts with the selected template type returns HTTP 400.
@@ -238,7 +242,7 @@ The proportion of expected reachability observations actually performed during a
 - **Personal Templates** are available only to their creators for editing, preview, and subscription output. They are separate from administrator-assigned templates.
 - A new **Personal Template** can only be created as an independent draft copied from a published template and inherits its **Subscription Template Type**. Later changes to the source do not affect the copy.
 - **Subscription Users** can save incomplete **Personal Template** drafts and publish them after a redacted preview and successful validation. A draft or failed publication leaves the last published version active.
-- **Subscription Portal** previews hide real credentials, links containing credentials, and node names, addresses, and ports. Placeholder node data preserves group and routing relationships.
+- **Subscription Portal** previews hide real credentials, links containing credentials, node names, addresses, ports, SNI values, certificate pins, and ECH configurations. Placeholder node data preserves group and routing relationships.
 - Selecting a template in the **Subscription Portal** changes the current preview and template-specific link. The default subscription link for each type uses the administrator-assigned default template of that type.
 - A **Subscription User**'s client-facing subscription title is `Jetyet · <sign-in username>` for every template.
 - Users obtain configurations through the corresponding subscription links; selecting a template does not alter node authorization or traffic allowances.

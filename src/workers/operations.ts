@@ -8,9 +8,11 @@ import { loadWorkerConfig } from "../server/config";
 import { digest } from "../server/crypto";
 import { storage, strip, type Entity, type Store } from "../server/db";
 import {
+  controlledProbeScript,
   deploymentScript,
   detectionScript,
   nodeDeploymentOptions,
+  nodeVerifiedRevision,
   removeScript,
   serverConfig,
   validateDeploymentVersion,
@@ -18,6 +20,79 @@ import {
 import { safeError } from "../server/errors";
 import { execute, withHost } from "../server/ssh";
 import { beat, claim, finish, type Task } from "../server/tasks";
+
+type LiveAttestation = {
+  certSha256: string;
+  certSpkiSha256: string;
+  echConfig: string;
+  configHash: string;
+  version: string;
+  deploymentId: string;
+};
+
+function extractAttestation(
+  options: DeploymentOptions,
+  actual: Record<string, unknown>,
+): LiveAttestation | null {
+  if (actual.runtimeFresh !== true || actual.liveTlsVerified !== true)
+    return null;
+  if (
+    typeof actual.configHash !== "string" ||
+    typeof actual.version !== "string"
+  )
+    return null;
+  const certSha256 =
+    options.tlsSecurity === "pinned" && typeof actual.certSha256 === "string"
+      ? actual.certSha256
+      : "";
+  const certSpkiSha256 =
+    options.tlsSecurity === "pinned" &&
+    typeof actual.certSpkiSha256 === "string"
+      ? actual.certSpkiSha256
+      : "";
+  const echConfig =
+    options.ech && typeof actual.echConfig === "string" ? actual.echConfig : "";
+  if (options.tlsSecurity === "pinned" && (!certSha256 || !certSpkiSha256))
+    return null;
+  if (options.ech && !echConfig) return null;
+  return {
+    certSha256,
+    certSpkiSha256,
+    echConfig,
+    configHash: actual.configHash,
+    version: actual.version,
+    deploymentId:
+      typeof actual.deploymentId === "string" ? actual.deploymentId : "",
+  };
+}
+
+function matchesAttestation(
+  options: DeploymentOptions,
+  actual: Record<string, unknown>,
+  attested: LiveAttestation,
+) {
+  const actualCertSha =
+    options.tlsSecurity === "pinned" && typeof actual.certSha256 === "string"
+      ? actual.certSha256
+      : "";
+  const actualSpki =
+    options.tlsSecurity === "pinned" &&
+    typeof actual.certSpkiSha256 === "string"
+      ? actual.certSpkiSha256
+      : "";
+  const actualEch =
+    options.ech && typeof actual.echConfig === "string" ? actual.echConfig : "";
+  const actualDeploymentId =
+    typeof actual.deploymentId === "string" ? actual.deploymentId : "";
+  return (
+    actual.configHash === attested.configHash &&
+    actual.version === attested.version &&
+    actualDeploymentId === attested.deploymentId &&
+    actualCertSha === attested.certSha256 &&
+    actualSpki === attested.certSpkiSha256 &&
+    actualEch === attested.echConfig
+  );
+}
 
 function matchesDeployment(
   s: Store,
@@ -27,6 +102,41 @@ function matchesDeployment(
   version: string,
 ) {
   const expectedHash = digest(serverConfig(s, node, options));
+  const actualTlsSecurity =
+    actual.tlsSecurity === "pinned" ? "pinned" : "legacy";
+  const actualSni = typeof actual.sni === "string" ? actual.sni : "";
+  const actualEch = actual.ech === true;
+  const actualEchPublicName =
+    typeof actual.echPublicName === "string" ? actual.echPublicName : "";
+  const legacyCertOk =
+    options.tlsSecurity !== "legacy" ||
+    !Array.isArray(actual.certDnsSans) ||
+    actual.certDnsSans.length === 0;
+  const pinnedOk =
+    options.tlsSecurity !== "pinned" ||
+    (typeof actual.certSha256 === "string" &&
+      /^[a-f0-9]{64}$/.test(actual.certSha256) &&
+      typeof actual.certSpkiSha256 === "string" &&
+      /^[A-Za-z0-9+/]{43}=$/.test(actual.certSpkiSha256) &&
+      Array.isArray(actual.certDnsSans) &&
+      actual.certDnsSans.includes(options.sni));
+  const echNames = Array.isArray(actual.echDetectedPublicNames)
+    ? actual.echDetectedPublicNames
+    : typeof actual.echDetectedPublicName === "string"
+      ? [actual.echDetectedPublicName]
+      : [];
+  const echOk =
+    !options.ech ||
+    (typeof actual.echConfig === "string" &&
+      actual.echConfig.length > 0 &&
+      echNames.length > 0 &&
+      echNames.every((name) => name === options.echPublicName));
+  const runtimeOk =
+    actual.active !== true
+      ? actual.runtimeFresh !== false && actual.liveTlsVerified !== false
+      : options.tlsSecurity === "pinned"
+        ? actual.runtimeFresh === true && actual.liveTlsVerified === true
+        : actual.runtimeFresh !== false && actual.liveTlsVerified !== false;
   return (
     actual.owner === "jetyet" &&
     actual.phase === "ready" &&
@@ -38,12 +148,49 @@ function matchesDeployment(
     actual.protocol === options.protocol &&
     actual.congestion === options.congestion &&
     actual.tuning === options.tuning &&
+    actualTlsSecurity === options.tlsSecurity &&
+    actualSni === options.sni &&
+    actualEch === options.ech &&
+    actualEchPublicName === options.echPublicName &&
+    legacyCertOk &&
+    pinnedOk &&
+    echOk &&
+    runtimeOk &&
     actual.version === version &&
     typeof actual.actualVersion === "string" &&
     actual.actualVersion.split(/[^\w.-]+/).includes(version) &&
     actual.configHash === expectedHash &&
     actual.actualHash === expectedHash
   );
+}
+
+function verifiedSecurityFields(
+  options: DeploymentOptions,
+  actual: Record<string, unknown>,
+  attested: LiveAttestation | null,
+) {
+  const deploymentId =
+    attested?.deploymentId ??
+    (typeof actual.deploymentId === "string" ? actual.deploymentId : "");
+  return {
+    certSha256:
+      options.tlsSecurity === "pinned"
+        ? (attested?.certSha256 ??
+          (typeof actual.certSha256 === "string" ? actual.certSha256 : ""))
+        : "",
+    certSpkiSha256:
+      options.tlsSecurity === "pinned"
+        ? (attested?.certSpkiSha256 ??
+          (typeof actual.certSpkiSha256 === "string"
+            ? actual.certSpkiSha256
+            : ""))
+        : "",
+    echConfig: options.ech
+      ? (attested?.echConfig ??
+        (typeof actual.echConfig === "string" ? actual.echConfig : ""))
+      : "",
+    ...(deploymentId ? { deploymentId } : {}),
+  };
 }
 
 export async function runOperation(
@@ -76,11 +223,21 @@ export async function runOperation(
   const execRemote = async (run: (script: string) => Promise<string>) => {
     if (["deploy", "upgrade", "reapply"].includes(t.kind)) {
       if (!n || n.deleted || n.deleting) throw Error("Node removed");
+      if (
+        typeof p.expectedRevision === "string" &&
+        p.expectedRevision &&
+        nodeVerifiedRevision(s, n, h) !== p.expectedRevision
+      )
+        throw Error(
+          "Node state changed since this operation was queued; retry with current settings",
+        );
       const version = deploymentVersionSchema.parse(p.version);
       const options =
         t.kind === "deploy"
           ? deploymentOptionsSchema.parse(p)
-          : nodeDeploymentOptions(n);
+          : t.kind === "upgrade" && "protocol" in p
+            ? deploymentOptionsSchema.parse(p)
+            : nodeDeploymentOptions(n);
       checkpoint(
         1,
         "Applying native Hysteria 2 deployment; existing connections may be interrupted",
@@ -103,13 +260,20 @@ export async function runOperation(
         actual.active !== true
       )
         throw Error("Deployed configuration verification failed");
+      const needsLiveTlsProof =
+        options.tlsSecurity === "pinned" || options.ech === true;
+      const attested = extractAttestation(options, actual);
+      if (needsLiveTlsProof && !attested)
+        throw Error("Live TLS verification failed for deployment");
       if (
         !curNode.enabled ||
         !curHost.enabled ||
         curNode.deleting ||
         curHost.deleting
       ) {
-        await run("set -e\nsystemctl stop jetyet-hysteria.service\n");
+        await run(
+          "set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl stop jetyet-hysteria.service\n",
+        );
         actual = JSON.parse(await run(detectionScript));
       }
       s.db
@@ -127,7 +291,8 @@ export async function runOperation(
             throw Error("Entity removed during deployment");
           if (
             !matchesDeployment(s, latestNode, actual, options, version) ||
-            actual.active !== Boolean(latestNode.enabled && latestHost.enabled)
+            actual.active !== Boolean(latestNode.enabled && latestHost.enabled) ||
+            (attested && !matchesAttestation(options, actual, attested))
           )
             throw Error("Deployed configuration verification failed");
           s.put(
@@ -135,6 +300,7 @@ export async function runOperation(
             {
               ...strip(latestNode),
               ...options,
+              ...verifiedSecurityFields(options, actual, attested),
               status: "ready",
               version,
               configHash: actual.configHash,
@@ -179,7 +345,11 @@ export async function runOperation(
         throw Error("Remote deployment does not match the planned node");
       const { version, ...options } = detected.data;
       validateDeploymentVersion(version, options);
-      const verifyState = async (wantActive: boolean) => {
+      const needsLiveTlsProof =
+        options.tlsSecurity === "pinned" || options.ech === true;
+      let attested =
+        actual.active === true ? extractAttestation(options, actual) : null;
+      const runServiceState = async (wantActive: boolean) => {
         if (actual.active === wantActive) return;
         await run(
           `set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl ${wantActive ? "start" : "stop"} jetyet-hysteria.service\n`,
@@ -194,18 +364,50 @@ export async function runOperation(
               ? "Remote deployment failed to start with verified rules"
               : "Remote deployment failed to stop",
           );
+        if (wantActive) {
+          const nextAttested = extractAttestation(options, actual);
+          if (needsLiveTlsProof && !nextAttested)
+            throw Error("Live TLS verification failed for started deployment");
+          if (nextAttested) attested = nextAttested;
+        }
       };
-      await verifyState(planned.active);
+      if (needsLiveTlsProof && !attested) {
+        if (actual.active === true)
+          throw Error("Live TLS verification failed for running deployment");
+        if (planned.active) {
+          await runServiceState(true);
+        } else {
+          actual = JSON.parse(await run(controlledProbeScript));
+          const probeAttested = extractAttestation(options, actual);
+          if (
+            !matchesDeployment(s, planned.node, actual, options, version) ||
+            actual.active !== false ||
+            !probeAttested
+          )
+            throw Error("Live TLS verification failed for stopped deployment");
+          attested = probeAttested;
+        }
+      }
+      await runServiceState(planned.active);
       const beforePublish = current();
-      if (!matchesDeployment(s, beforePublish.node, actual, options, version))
+      if (
+        !matchesDeployment(s, beforePublish.node, actual, options, version) ||
+        (attested && !matchesAttestation(options, actual, attested))
+      )
         throw Error("Planned node configuration changed during detection");
-      await verifyState(beforePublish.active);
+      await runServiceState(beforePublish.active);
+      if (
+        needsLiveTlsProof &&
+        (!attested || !matchesAttestation(options, actual, attested))
+      )
+        throw Error("Live TLS verification failed for detected deployment");
       s.db
         .transaction(() => {
           const latest = current();
           if (
             !matchesDeployment(s, latest.node, actual, options, version) ||
-            actual.active !== latest.active
+            actual.active !== latest.active ||
+            (attested && !matchesAttestation(options, actual, attested))
           )
             throw Error("Planned node configuration changed during detection");
           s.put(
@@ -213,6 +415,7 @@ export async function runOperation(
             {
               ...strip(latest.node),
               ...options,
+              ...verifiedSecurityFields(options, actual, attested),
               status: "ready",
               version,
               configHash: actual.configHash,

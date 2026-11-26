@@ -67,8 +67,8 @@ export const zhHans = {
   "∞ Unlimited": "∞ 不限",
   nodes: "个节点",
   templates: "个模板",
-  "Native Hysteria 2 · self-signed cert. Network changes require a reapply operation.":
-    "原生 Hysteria 2 · 自签名证书。修改网络设置后须重新应用配置。",
+  "Native Hysteria 2 · self-signed cert with forced SNI & pinSHA256. Network changes require a reapply operation.":
+    "原生 Hysteria 2 · 带强制 SNI 与 pinSHA256 的自签名证书。修改网络设置后须重新应用配置。",
   "Sign-in username must be 1–100 characters using ASCII letters, digits, ., _, or -.":
     "用户名须为 1 至 100 个字符，只能使用 ASCII 字母、数字、点号、下划线或连字符。",
   Profile: "基本资料",
@@ -700,6 +700,49 @@ export const zhHans = {
     "mihomo 配置验证失败；请检查代理组、规则和 DNS 设置。",
   "sing-box configuration validation failed; check groups, rules and DNS settings.":
     "sing-box 配置验证失败；请检查出站组、规则和 DNS 设置。",
+  "Enter a valid domain name": "请输入有效的域名",
+  "ECH requires forced SNI and pinSHA256 TLS security":
+    "启用 ECH 需要同时启用强制 SNI 和 pinSHA256 TLS 安全模式",
+  "ECH requires Hysteria 2 v2.12.3 or later":
+    "ECH 要求 Hysteria 2 v2.12.3 或更高版本",
+  "ECH requires Hysteria 2 v2.12.3 or later.":
+    "ECH 要求 Hysteria 2 v2.12.3 或更高版本。",
+  "TLS security": "TLS 安全模式",
+  "Pinned mode enforces SNI matching on the server and pins the self-signed certificate in subscriptions. Legacy mode preserves older verification-skipping deployments.":
+    "固定指纹模式会在服务端强制校验 SNI，并在订阅中下发自签名证书指纹（pinSHA256）。兼容模式保留旧版跳过证书验证的部署方式。",
+  "Forced SNI + pinSHA256 (Recommended)": "强制 SNI + pinSHA256（推荐）",
+  "Legacy (skip-cert-verify)": "兼容模式（跳过证书校验）",
+  "Legacy TLS": "旧版 TLS",
+  "Forced SNI": "强制 SNI",
+  "Optional. Leave blank to use the default SNI ({0}). Changing SNI re-issues the self-signed certificate.":
+    "可选，留空将使用默认 SNI（{0}）。修改 SNI 会重新签发自签名证书。",
+  "Encrypted Client Hello (ECH)": "加密客户端问候（ECH）",
+  "Optional and independent. Hides the inner SNI behind an outer decoy domain; private keys stay on the VPS.":
+    "独立可选项。将真实内层 SNI 隐藏在外层伪装域名之后，私钥仅保留在 VPS 本地。",
+  "Requires Forced SNI + pinSHA256 TLS security.":
+    "需要先启用「强制 SNI + pinSHA256」TLS 安全模式。",
+  "Enable ECH": "启用 ECH",
+  "ECH public name": "ECH 外层伪装域名",
+  "Optional outer decoy SNI visible on the network. Leave blank to use {0}.":
+    "可选，网络上可见的外层伪装 SNI。留空将使用默认值 {0}。",
+  "TLS & SECURITY": "TLS 与安全",
+  "TRANSPORT & TUNING": "传输与调优",
+  "Forced SNI and pinSHA256 require Hysteria 2 v2.6.4 or later":
+    "强制 SNI 与 pinSHA256 要求 Hysteria 2 v2.6.4 或更高版本",
+  "Forced SNI + pinSHA256 requires Hysteria 2 v2.6.4 or later.":
+    "强制 SNI 与 pinSHA256 要求 Hysteria 2 v2.6.4 或更高版本。",
+  "Node state changed since this operation was queued; retry with current settings":
+    "任务入队后节点状态已变更，请按最新配置重试",
+  "Node settings changed since this task was created; reopen the node operation form to queue a new task":
+    "此任务创建后节点配置已变更，请重新打开节点操作表单发起新任务",
+  "Management host Hysteria 2 binary must be v2.6.4 or later to probe pinned nodes":
+    "控制面宿主机 Hysteria 2 二进制需为 v2.6.4 或更高版本才能探测固定指纹节点",
+  "Management host Hysteria 2 binary must be v2.12.3 or later to probe ECH nodes":
+    "控制面宿主机 Hysteria 2 二进制需为 v2.12.3 或更高版本才能探测 ECH 节点",
+  "Changing TLS mode, SNI, or ECH updates server certificates or ECH keys. Subscribers must refresh their subscription after the verified settings are published.":
+    "更改 TLS 模式、SNI 或 ECH 会更新服务端证书或 ECH 密钥，新配置验证并发布后订阅用户需刷新一次订阅。",
+  "Changing TLS mode, SNI, or ECH updates server certificates or ECH keys. After running the command and detecting the installation, subscribers must refresh their subscription.":
+    "更改 TLS 模式、SNI 或 ECH 会更新服务端证书或 ECH 密钥，在 VPS 上执行命令并完成安装检测后，订阅用户需刷新一次订阅。",
 } as const;
 
 export type Message = keyof typeof zhHans;

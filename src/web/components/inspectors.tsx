@@ -411,6 +411,10 @@ export function DeployCommandModal({
   expiresAt,
   congestion,
   tuning,
+  tlsSecurity,
+  sni,
+  ech,
+  echPublicName,
   onDetect,
   onClose,
 }: {
@@ -419,6 +423,10 @@ export function DeployCommandModal({
   expiresAt: string;
   congestion: "brutal" | "bbr";
   tuning: boolean;
+  tlsSecurity: "legacy" | "pinned";
+  sni: string;
+  ech: boolean;
+  echPublicName: string;
   onDetect: () => void;
   onClose: () => void;
 }) {
@@ -436,6 +444,14 @@ export function DeployCommandModal({
             <div className="chip-group">
               <Chip>Hysteria 2</Chip>
               <Chip>{congestion === "bbr" ? "BBR" : "Brutal"}</Chip>
+              {tlsSecurity === "pinned" ? (
+                <Chip mono>{`pinSHA256 · ${sni}`}</Chip>
+              ) : (
+                <Badge tone="warning">{translate("Legacy TLS")}</Badge>
+              )}
+              {ech && (
+                <Chip mono className="accent-chip">{`ECH · ${echPublicName}`}</Chip>
+              )}
               <Chip>
                 {tuning
                   ? translate("Adaptive tuning: On")

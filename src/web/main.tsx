@@ -68,6 +68,10 @@ import {
   Table,
 } from "./components";
 import {
+  DEFAULT_ECH_PUBLIC_NAME,
+  DEFAULT_TLS_SNI,
+} from "../shared/tls";
+import {
   Correction,
   EntityForm,
   ForceRemove,
@@ -515,6 +519,10 @@ function App() {
                 expiresAt={result.expiresAt || ""}
                 congestion={payload.congestion}
                 tuning={payload.tuning}
+                tlsSecurity={payload.tlsSecurity}
+                sni={payload.sni || DEFAULT_TLS_SNI}
+                ech={payload.ech}
+                echPublicName={payload.echPublicName || DEFAULT_ECH_PUBLIC_NAME}
                 onDetect={() => {
                   setModal(null);
                   act(`nodes/${n.id}/operation`, { kind: "detect" });
@@ -524,7 +532,7 @@ function App() {
             ));
           } else {
             const body =
-              kind === "deploy"
+              kind === "deploy" || kind === "upgrade"
                 ? { kind, ...payload }
                 : { kind, version: payload.version };
             await run(() => api(`nodes/${n.id}/operation`, "POST", body));
@@ -1260,6 +1268,26 @@ function App() {
                                                 {translate("Adaptive tuning")}
                                               </Chip>
                                             )}
+                                          {(node.version ||
+                                            (node.status &&
+                                              node.status !== "draft")) &&
+                                            (node.tlsSecurity === "pinned" ? (
+                                              <>
+                                                <Chip mono>
+                                                  pinSHA256 ·{" "}
+                                                  {node.sni || DEFAULT_TLS_SNI}
+                                                </Chip>
+                                                {node.ech && (
+                                                  <Chip className="accent-chip">
+                                                    ECH
+                                                  </Chip>
+                                                )}
+                                              </>
+                                            ) : (
+                                              <Badge tone="warning">
+                                                {translate("Legacy TLS")}
+                                              </Badge>
+                                            ))}
                                         </div>
                                       </div>
                                       <Button
@@ -1383,12 +1411,22 @@ function App() {
                             <QuotaBar row={h} />
                             <div className="compact-foot">
                               {node ? (
-                                <Badge tone={node.drift ? "warning" : nTone}>
-                                  {node.name}
-                                  {node.drift
-                                    ? ` · ${translate("Drift")}`
-                                    : ` · ${translate("{0} online", clients)}`}
-                                </Badge>
+                                <div className="chip-group">
+                                  <Badge tone={node.drift ? "warning" : nTone}>
+                                    {node.name}
+                                    {node.drift
+                                      ? ` · ${translate("Drift")}`
+                                      : ` · ${translate("{0} online", clients)}`}
+                                  </Badge>
+                                  {(node.version ||
+                                    (node.status &&
+                                      node.status !== "draft")) &&
+                                    node.tlsSecurity !== "pinned" && (
+                                      <Badge tone="warning">
+                                        {translate("Legacy TLS")}
+                                      </Badge>
+                                    )}
+                                </div>
                               ) : (
                                 <Chip>{translate("No node")}</Chip>
                               )}

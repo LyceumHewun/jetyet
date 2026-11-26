@@ -7,7 +7,8 @@ import {
   spyOn,
   test,
 } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
@@ -16,6 +17,7 @@ import {
   counted,
   exhausted,
   nextReset,
+  nodeDelta,
   refreshPeriods,
   resetUsage,
   retention,
@@ -25,16 +27,24 @@ import {
 import { createApp } from "../src/server/api";
 import type { Config } from "../src/server/config";
 import {
+  controlledProbeScript,
   deploymentScript,
   detectionScript,
+  echKeysParserPy,
   removeScript,
   serverConfig,
 } from "../src/server/deployment";
 import { digest, token, vault } from "../src/server/crypto";
 import { storage, strip, type Store } from "../src/server/db";
 import { claim, enqueue, finish } from "../src/server/tasks";
-import { defaultTemplate, render } from "../src/server/templates";
+import {
+  defaultSingBoxTemplate,
+  defaultTemplate,
+  render,
+} from "../src/server/templates";
+import { collectHost } from "../src/workers/monitor";
 import { runOperation } from "../src/workers/operations";
+import { probeNode } from "../src/workers/probe";
 
 let s: Store, dir: string;
 const now = Date.parse("2026-01-15T04:00:00Z");
@@ -460,8 +470,19 @@ describe("authorization and templates", () => {
     ).toContain("text/yaml");
     expect((await app.request(selected + "&format=sing-box")).status).toBe(400);
     s.put("node", { ...strip(node), enabled: false }, undefined, node.id);
-    for (const format of ["mihomo", "sing-box", "shadowrocket"])
-      expect((await app.request(path + "?format=" + format)).status).toBe(403);
+    const emptyMihomo = await app.request(path + "?format=mihomo");
+    expect(emptyMihomo.status).toBe(200);
+    expect(YAML.parse(await emptyMihomo.text())["proxy-groups"][0].proxies).toEqual([
+      "DIRECT",
+    ]);
+    const emptySingBox = await app.request(path + "?format=sing-box");
+    expect(emptySingBox.status).toBe(200);
+    expect(
+      (await emptySingBox.json()).outbounds.find(
+        (outbound: { tag: string }) => outbound.tag === "Proxy",
+      ).outbounds,
+    ).toEqual(["DIRECT"]);
+    expect((await app.request(path + "?format=shadowrocket")).status).toBe(403);
   });
   test("subscription emits fields for the node's port and congestion modes", async () => {
     const { node, user } = fixture();
@@ -782,7 +803,38 @@ describe("queue and encryption", () => {
         "v2.13.0",
         true,
       ),
+      deploymentScript(s, node, "v2.14.0", false, {
+        protocol: "hysteria2",
+        congestion: "bbr",
+        tuning: false,
+        tlsSecurity: "pinned",
+        sni: `${"a".repeat(63)}.example.com`,
+        ech: true,
+        echPublicName: "cloudflare-ech.com",
+      }),
+      deploymentScript(
+        s,
+        {
+          ...node,
+          tlsSecurity: "pinned",
+          sni: "bing.com",
+          ech: true,
+          echPublicName: "cloudflare-ech.com",
+        },
+        "v2.14.0",
+        false,
+        {
+          protocol: "hysteria2",
+          congestion: "brutal",
+          tuning: false,
+          tlsSecurity: "legacy",
+          sni: "",
+          ech: false,
+          echPublicName: "",
+        },
+      ),
       detectionScript,
+      controlledProbeScript,
       removeScript(node.id),
     ]) {
       const result = Bun.spawnSync(["bash", "-n"], {
@@ -1177,5 +1229,709 @@ describe("detect operation and concurrent safety", () => {
     finish(s, t3, "failed");
     expect(s.get(node.id)?.deleting).toBe(true);
     expect(s.get(node.id)?.status).toBe("draft");
+  });
+
+  test("per-node upgrade transitions legacy nodes to pinned SNI + pinSHA256 + ECH, rejects stale/unverified state, supports downgrade, and scrubs literal preview TLS metadata", async () => {
+    const { host, node, user } = fixture();
+    const app = createApp(s);
+    const certSha256 = "ab".repeat(32);
+    const certSpkiSha256 = Buffer.alloc(32, 7).toString("base64");
+    const subBase = `/sub/${s.secrets(user.id).subscriptionToken}`;
+
+    // Construct a real RFC 9849 ECHConfigList + ECH KEYS PEM using matched X25519 keypairs and a leading unknown version entry
+    const u16 = (n: number) => Buffer.from([(n >> 8) & 0xff, n & 0xff]);
+    const makeX25519Pair = () => {
+      const pair = generateKeyPairSync("x25519");
+      const privDer = pair.privateKey.export({ format: "der", type: "pkcs8" });
+      const pubDer = pair.publicKey.export({ format: "der", type: "spki" });
+      return {
+        priv: Buffer.from(privDer.subarray(privDer.length - 32)),
+        pub: Buffer.from(pubDer.subarray(pubDer.length - 32)),
+      };
+    };
+    const buildEchConfig = (
+      publicName: string,
+      pub: Buffer,
+      version = 0xfe0d,
+    ) => {
+      if (version !== 0xfe0d) {
+        const body = Buffer.from([1, 2, 3, 4]);
+        return Buffer.concat([u16(version), u16(body.length), body]);
+      }
+      const cs = Buffer.from([0x00, 0x01, 0x00, 0x01]);
+      const pn = Buffer.from(publicName, "ascii");
+      const contents = Buffer.concat([
+        Buffer.from([0x01]),
+        u16(0x0020),
+        u16(pub.length),
+        pub,
+        u16(cs.length),
+        cs,
+        Buffer.from([64]),
+        Buffer.from([pn.length]),
+        pn,
+        u16(0),
+      ]);
+      return Buffer.concat([u16(0xfe0d), u16(contents.length), contents]);
+    };
+    const k1 = makeX25519Pair();
+    const k2 = makeX25519Pair();
+    const unknownCfg = buildEchConfig("ignored.example", k1.pub, 0xfe0c);
+    const realCfg = buildEchConfig("cloudflare-ech.com", k2.pub, 0xfe0d);
+    const allCfgs = Buffer.concat([unknownCfg, realCfg]);
+    const authoritativeList = Buffer.concat([u16(allCfgs.length), allCfgs]);
+    const echConfig = authoritativeList.toString("base64");
+
+    // Verify the Python authoritative ECH KEYS parser derives the exact list even when ECH CONFIGS differs
+    const keysBlob = Buffer.concat([
+      u16(k1.priv.length),
+      k1.priv,
+      u16(unknownCfg.length),
+      unknownCfg,
+      u16(k2.priv.length),
+      k2.priv,
+      u16(realCfg.length),
+      realCfg,
+    ]);
+    const staleList = Buffer.concat([
+      u16(buildEchConfig("stale.example", k1.pub).length),
+      buildEchConfig("stale.example", k1.pub),
+    ]);
+    const mismatchedPem = [
+      "-----BEGIN ECH KEYS-----",
+      keysBlob.toString("base64"),
+      "-----END ECH KEYS-----",
+      "-----BEGIN ECH CONFIGS-----",
+      "!!!not-valid-base64-padding===",
+      "-----END ECH CONFIGS-----",
+    ].join("\n");
+    const parseRes = Bun.spawnSync(
+      [
+        "python3",
+        "-c",
+        `import base64,json,re,struct,sys,tempfile\n${echKeysParserPy}\nwith tempfile.NamedTemporaryFile('w') as f:\n f.write(sys.stdin.read()); f.flush()\n print(json.dumps(parse_ech_keys_file(f.name)))`,
+      ],
+      { stdin: Buffer.from(mismatchedPem), stdout: "pipe", stderr: "pipe" },
+    );
+    expect(parseRes.exitCode).toBe(0);
+    const parsedEch = JSON.parse(parseRes.stdout.toString());
+    expect(parsedEch.echConfig).toBe(echConfig);
+    expect(parsedEch.publicNames).toEqual(["cloudflare-ech.com"]);
+    expect(parsedEch.configsBlockMatches).toBe(false);
+
+    // Long SNI (>64 chars) keeps a bounded CN <= 64 while preserving full DNS SAN
+    const longSni = `${"a".repeat(63)}.example.com`;
+    const longSniScript = deploymentScript(s, node, "v2.14.0", false, {
+      protocol: "hysteria2",
+      congestion: "brutal",
+      tuning: false,
+      tlsSecurity: "pinned",
+      sni: longSni,
+      ech: false,
+      echPublicName: "",
+    });
+    expect(longSniScript).toContain("'/CN=jetyet-node'");
+    expect(longSniScript).toContain(`'subjectAltName=DNS:${longSni}'`);
+
+    // Legacy node stays compatible before upgrade
+    const legacyMihomo = YAML.parse(
+      await (await app.request(`${subBase}?format=mihomo`)).text(),
+    ).proxies[0];
+    expect(legacyMihomo["skip-cert-verify"]).toBe(true);
+    expect(legacyMihomo.fingerprint).toBeUndefined();
+    expect(legacyMihomo["ech-opts"]).toBeUndefined();
+
+    const legacySingBox = JSON.parse(
+      await (await app.request(`${subBase}?format=sing-box`)).text(),
+    ).outbounds.find((o: any) => o.type === "hysteria2");
+    expect(legacySingBox.tls).toEqual({ enabled: true, insecure: true });
+
+    const legacyShadowrocket = Buffer.from(
+      await (await app.request(`${subBase}?format=shadowrocket`)).text(),
+      "base64",
+    ).toString("utf8");
+    expect(legacyShadowrocket).toContain("?insecure=1#");
+    expect(legacyShadowrocket).not.toContain("pinSHA256=");
+
+    const login = await app.request("/api/login", {
+      method: "POST",
+      headers: { origin: s.config.origin },
+      body: JSON.stringify({ username: "ADMIN", password: "correct-password" }),
+    });
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+
+    // Mint a legacy manual install link BEFORE upgrade to verify it becomes stale afterward
+    const issuedLegacy = await app.request(`/api/nodes/${node.id}/command`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+      body: JSON.stringify({
+        version: "v2.13.0",
+        protocol: "hysteria2",
+        congestion: "brutal",
+        tuning: false,
+        tlsSecurity: "legacy",
+        sni: "",
+        ech: false,
+        echPublicName: "",
+      }),
+    });
+    expect(issuedLegacy.status).toBe(200);
+    const legacyLinkPath = new URL(
+      (await issuedLegacy.json()).command.match(/https:\/\/[^']+/)[0],
+    ).pathname;
+    expect((await app.request(legacyLinkPath)).status).toBe(200);
+
+    // Reject pinned TLS on Hysteria < v2.6.4 and ECH on Hysteria < v2.12.3
+    const tooOldPinned = await app.request(`/api/nodes/${node.id}/operation`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+      body: JSON.stringify({
+        kind: "upgrade",
+        version: "v2.6.3",
+        protocol: "hysteria2",
+        congestion: "brutal",
+        tuning: false,
+        tlsSecurity: "pinned",
+        sni: "",
+        ech: false,
+        echPublicName: "",
+      }),
+    });
+    expect(tooOldPinned.status).toBe(400);
+
+    const tooOldEch = await app.request(`/api/nodes/${node.id}/operation`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+      body: JSON.stringify({
+        kind: "upgrade",
+        version: "v2.12.2",
+        protocol: "hysteria2",
+        congestion: "brutal",
+        tuning: false,
+        tlsSecurity: "pinned",
+        sni: "",
+        ech: true,
+        echPublicName: "",
+      }),
+    });
+    expect(tooOldEch.status).toBe(400);
+
+    // Queue two concurrent upgrades from the same snapshot; second must be rejected as stale
+    const queued = await app.request(`/api/nodes/${node.id}/operation`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+      body: JSON.stringify({
+        kind: "upgrade",
+        version: "v2.14.0",
+        protocol: "hysteria2",
+        congestion: "bbr",
+        tuning: false,
+        tlsSecurity: "pinned",
+        sni: "",
+        ech: true,
+        echPublicName: "",
+      }),
+    });
+    expect(queued.status).toBe(202);
+    const staleQueued = await app.request(`/api/nodes/${node.id}/operation`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+      body: JSON.stringify({
+        kind: "upgrade",
+        version: "v2.13.0",
+        protocol: "hysteria2",
+        congestion: "brutal",
+        tuning: false,
+        tlsSecurity: "legacy",
+        sni: "",
+        ech: false,
+        echPublicName: "",
+      }),
+    });
+    expect(staleQueued.status).toBe(202);
+
+    const upgradedOptions = {
+      protocol: "hysteria2" as const,
+      congestion: "bbr" as const,
+      tuning: false,
+      tlsSecurity: "pinned" as const,
+      sni: "bing.com",
+      ech: true,
+      echPublicName: "cloudflare-ech.com",
+    };
+    const expectedHash = digest(serverConfig(s, node, upgradedOptions));
+    const task = claim(s, false, "ops")!;
+    // Reject if live TLS handshake verification fails
+    await expect(
+      runOperation(s, task, async (script) => {
+        if (script !== detectionScript) return "Deployment verified";
+        return JSON.stringify({
+          ...upgradedOptions,
+          owner: "jetyet",
+          phase: "ready",
+          version: "v2.14.0",
+          actualVersion: "v2.14.0",
+          nodeId: node.id,
+          hostId: host.id,
+          address: node.address,
+          port: node.port,
+          hopping: node.hopping,
+          configHash: expectedHash,
+          actualHash: expectedHash,
+          certSha256,
+          certSpkiSha256,
+          certDnsSans: ["bing.com"],
+          echConfig,
+          echDetectedPublicNames: ["cloudflare-ech.com"],
+          echDetectedPublicName: "cloudflare-ech.com",
+          runtimeFresh: true,
+          liveTlsVerified: false,
+          active: true,
+        });
+      }),
+    ).rejects.toThrow("Deployed configuration verification failed");
+    finish(s, task, "failed");
+
+    const staleTask = claim(s, false, "ops")!;
+    finish(s, staleTask, "cancelled");
+    const retryQueued = await app.request(`/api/nodes/${node.id}/operation`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+      body: JSON.stringify({
+        kind: "upgrade",
+        version: "v2.14.0",
+        protocol: "hysteria2",
+        congestion: "bbr",
+        tuning: false,
+        tlsSecurity: "pinned",
+        sni: "",
+        ech: true,
+        echPublicName: "",
+      }),
+    });
+    expect(retryQueued.status).toBe(202);
+    const upgradeTask = claim(s, false, "ops")!;
+    await runOperation(s, upgradeTask, async (script) => {
+      if (script !== detectionScript) return "Deployment verified";
+      return JSON.stringify({
+        ...upgradedOptions,
+        owner: "jetyet",
+        phase: "ready",
+        version: "v2.14.0",
+        actualVersion: "v2.14.0",
+        nodeId: node.id,
+        hostId: host.id,
+        address: node.address,
+        port: node.port,
+        hopping: node.hopping,
+        configHash: expectedHash,
+        actualHash: expectedHash,
+        certSha256,
+        certSpkiSha256,
+        certDnsSans: ["bing.com"],
+        echConfig,
+        echDetectedPublicNames: ["cloudflare-ech.com"],
+        echDetectedPublicName: "cloudflare-ech.com",
+        runtimeFresh: true,
+        liveTlsVerified: true,
+        active: true,
+      });
+    });
+    finish(s, upgradeTask, "succeeded");
+
+    // Stale manual link minted before upgrade now returns 404
+    expect((await app.request(legacyLinkPath)).status).toBe(404);
+    // Re-running a task carrying the pre-upgrade expectedRevision is rejected
+    await expect(
+      runOperation(s, staleTask, async () => "should not execute"),
+    ).rejects.toThrow("Node state changed since this operation was queued");
+
+    // Activity retry API rejects stale pre-upgrade tasks instead of requeuing them
+    const staleRetryRes = await app.request(`/api/tasks/${staleTask.id}/retry`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+    });
+    expect(staleRetryRes.status).toBe(400);
+
+    // Subscriptions now publish pinned SNI + pinSHA256 + ECH across all formats
+    const mihomoProxy = YAML.parse(
+      await (await app.request(`${subBase}?format=mihomo`)).text(),
+    ).proxies[0];
+    expect(mihomoProxy).toMatchObject({
+      sni: "bing.com",
+      fingerprint: certSha256,
+      "skip-cert-verify": false,
+      "ech-opts": { enable: true, config: echConfig },
+    });
+
+    const singBoxOutbound = JSON.parse(
+      await (await app.request(`${subBase}?format=sing-box`)).text(),
+    ).outbounds.find((o: any) => o.type === "hysteria2");
+    expect(singBoxOutbound.tls).toEqual({
+      enabled: true,
+      server_name: "bing.com",
+      insecure: false,
+      certificate_public_key_sha256: [certSpkiSha256],
+      ech: {
+        enabled: true,
+        config: [
+          "-----BEGIN ECH CONFIGS-----",
+          echConfig,
+          "-----END ECH CONFIGS-----",
+        ],
+      },
+    });
+
+    const shadowrocketUri = Buffer.from(
+      await (await app.request(`${subBase}?format=shadowrocket`)).text(),
+      "base64",
+    ).toString("utf8");
+    const parsedUri = new URL(shadowrocketUri);
+    expect(parsedUri.searchParams.get("sni")).toBe("bing.com");
+    expect(parsedUri.searchParams.get("insecure")).toBe("1");
+    expect(parsedUri.searchParams.get("pinSHA256")).toBe(certSha256);
+    expect(parsedUri.searchParams.get("ech")).toBe(echConfig);
+
+    // Portal previews hide real SNI, pins, ECH config, and literal template TLS fields / URIs / DNS TLS
+    const literalMihomoTemplate = `${defaultTemplate}
+proxy-providers:
+  ext:
+    type: http
+    url: "hysteria2://pw@1.2.3.4:443/?sni=secret.sni.example&pinSHA256=${certSha256}&ech=${encodeURIComponent(echConfig)}"
+`;
+    const mihomoPreview = render(
+      s,
+      user,
+      literalMihomoTemplate.replace(
+        "{{ proxies | yaml | indent: 2 }}",
+        `{{ proxies | yaml | indent: 2 }}\n  - name: Literal\n    type: hysteria2\n    server: 198.51.100.9\n    port: 443\n    password: p\n    sni: literal.sni.example\n    name-cert-verify: verify.sni.example\n    fingerprint: ${certSha256}`,
+      ),
+      "assigned-preview",
+      "mihomo",
+    );
+    expect(mihomoPreview).not.toContain("bing.com");
+    expect(mihomoPreview).not.toContain("secret.sni.example");
+    expect(mihomoPreview).not.toContain("literal.sni.example");
+    expect(mihomoPreview).not.toContain("verify.sni.example");
+    expect(mihomoPreview).not.toContain(certSha256);
+    expect(mihomoPreview).not.toContain(echConfig);
+
+    const singBoxPreview = render(
+      s,
+      user,
+      defaultSingBoxTemplate
+        .replace(
+          '{"type": "https", "tag": "cloudflare", "server": "1.1.1.1"}',
+          `{"type": "https", "tag": "cloudflare", "server": "1.1.1.1", "tls": {"enabled": true, "server_name": "dns-secret.example", "ech": {"enabled": true, "config": ["-----BEGIN ECH CONFIGS-----", "${echConfig}", "-----END ECH CONFIGS-----"]}}}`,
+        )
+        .replace(
+          '"final": "Proxy"',
+          `"rule_set": [{"type": "remote", "tag": "rs", "url": "https://example.com/rules.srs?sni=secret.sb.example&pinSHA256=${certSha256}&ech=${encodeURIComponent(echConfig)}"}], "final": "Proxy"`,
+        ),
+      "assigned-preview",
+      "sing-box",
+    );
+    expect(singBoxPreview).not.toContain("bing.com");
+    expect(singBoxPreview).not.toContain("dns-secret.example");
+    expect(singBoxPreview).not.toContain("secret.sb.example");
+    expect(singBoxPreview).not.toContain(certSpkiSha256);
+    expect(singBoxPreview).not.toContain(certSha256);
+    expect(singBoxPreview).not.toContain(echConfig);
+
+    // Monitor collector runs against real SQLite tasks schema: skips drift while an op runs, flags abandoned installing phase
+    const baseSample = {
+      inbound: 100,
+      outbound: 200,
+      ifaceEpoch: "eth0",
+      boot: "boot-1",
+      uptime: 1000,
+      cpuTotal: 100,
+      cpuIdle: 50,
+      memory: 20,
+      disk: 10,
+      service: false,
+      configHash: expectedHash,
+      config: serverConfig(s, s.get(node.id)!),
+      certSha256,
+      echConfig,
+      manifest: {
+        ...upgradedOptions,
+        owner: "jetyet",
+        phase: "installing",
+        nodeId: node.id,
+        hostId: host.id,
+        port: node.port,
+        hopping: node.hopping,
+      },
+    };
+    enqueue(s, host.id, "upgrade", { nodeId: node.id });
+    const runningOp = claim(s, false, "ops")!;
+    await collectHost(s, s.get(host.id)!, async () =>
+      JSON.stringify(baseSample),
+    );
+    expect(s.get(node.id)?.drift).not.toBe(true);
+    finish(s, runningOp, "failed");
+    // Monitor skips node updates and accounting while remote lock is busy (preserving existing counter epochs), then alerts drift once unlocked
+    nodeDelta(s, node.id, "boot-1:inv-1", 500, 700, now);
+    addObservation(
+      s,
+      user,
+      `node:${node.id}:user:${user.id}`,
+      "boot-1:inv-1",
+      500,
+      700,
+      now,
+    );
+    await collectHost(s, s.get(host.id)!, async () =>
+      JSON.stringify({
+        ...baseSample,
+        service: true,
+        operationLockBusy: true,
+      }),
+    );
+    expect(s.get(node.id)?.drift).not.toBe(true);
+    const totalAfterBusy = s.db
+      .query<{ epoch: string; inbound: number; outbound: number }, [string]>(
+        "SELECT epoch,inbound,outbound FROM counters WHERE source=?",
+      )
+      .get(`node-total:${node.id}`);
+    expect(totalAfterBusy).toEqual({
+      epoch: "boot-1:inv-1",
+      inbound: 500,
+      outbound: 700,
+    });
+    const userAfterBusy = s.db
+      .query<{ epoch: string; inbound: number; outbound: number }, [string]>(
+        "SELECT epoch,inbound,outbound FROM counters WHERE source=?",
+      )
+      .get(`node:${node.id}:user:${user.id}`);
+    expect(userAfterBusy).toEqual({
+      epoch: "boot-1:inv-1",
+      inbound: 500,
+      outbound: 700,
+    });
+    const nextDelta = nodeDelta(s, node.id, "boot-1:inv-1", 650, 900, now + 60000);
+    expect(nextDelta).toEqual({ inbound: 150, outbound: 200 });
+    await collectHost(s, s.get(host.id)!, async () =>
+      JSON.stringify(baseSample),
+    );
+    expect(s.get(node.id)?.drift).toBe(true);
+
+    // Wildcard *.invalid SAN does not cause non-terminating negative SNI search
+    const wildcardCheck = Bun.spawnSync(
+      [
+        "python3",
+        "-c",
+        `forbidden={'bing.com','*.invalid'}
+def san_covers(pattern, candidate):
+ pattern=pattern.lower()
+ if pattern==candidate: return True
+ if pattern.startswith('*.'):
+  pl=pattern.split('.'); cl=candidate.split('.')
+  return len(pl)==len(cl) and pl[1:]==cl[1:]
+ return False
+neg=None
+for idx in range(64):
+ cand='jetyet-sni-mismatch.invalid' if idx==0 else f'jetyet-sni-mismatch-{idx}.probe-{idx}.invalid'
+ if not any(san_covers(s, cand) for s in forbidden):
+  neg=cand
+  break
+print(neg or '')`,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    expect(wildcardCheck.exitCode).toBe(0);
+    expect(wildcardCheck.stdout.toString().trim()).toBe(
+      "jetyet-sni-mismatch-1.probe-1.invalid",
+    );
+
+    // probeNode snapshots the executable so an in-place binary rollback after approval cannot bypass the version gate
+    const fakeBinPath = join(dir, "fake-hysteria");
+    writeFileSync(
+      fakeBinPath,
+      `#!/bin/sh
+if [ "$1" = "version" ]; then
+  echo "Version: v2.6.3"
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(fakeBinPath, 0o755);
+    const origBin = s.config.hysteriaBinary;
+    s.config.hysteriaBinary = fakeBinPath;
+    try {
+      await expect(probeNode(s, s.get(node.id)!)).rejects.toThrow(
+        "v2.6.4 or later",
+      );
+      // Replace fake binary with v2.14.0 that mutates the original path during version check; snapshot must still run v2.14.0 logic (not replaced file)
+      const ranMarker = join(dir, "probe-ran-v214");
+      writeFileSync(
+        fakeBinPath,
+        `#!/bin/sh
+if [ "$1" = "version" ]; then
+  printf '#!/bin/sh\\necho bad > ${ranMarker}\\nexit 1\\n' > "${fakeBinPath}"
+  echo "Version: v2.14.0"
+  exit 0
+fi
+echo "snapshot-ok" > "${ranMarker}"
+exit 1
+`,
+      );
+      chmodSync(fakeBinPath, 0o755);
+      await expect(probeNode(s, s.get(node.id)!)).rejects.toThrow(
+        "Probe client exited",
+      );
+      expect(await Bun.file(ranMarker).text()).toBe("snapshot-ok\n");
+    } finally {
+      s.config.hysteriaBinary = origBin;
+    }
+
+    // Disabled node Detect performs lock-serialized controlledProbeScript before publishing and rejects failed live proof
+    s.put(
+      "node",
+      { ...strip(s.get(node.id)!), enabled: false },
+      undefined,
+      node.id,
+    );
+    const inactiveManifest = {
+      ...upgradedOptions,
+      owner: "jetyet",
+      phase: "ready",
+      version: "v2.14.0",
+      actualVersion: "v2.14.0",
+      nodeId: node.id,
+      hostId: host.id,
+      address: node.address,
+      port: node.port,
+      hopping: node.hopping,
+      configHash: expectedHash,
+      actualHash: expectedHash,
+      certSha256,
+      certSpkiSha256,
+      certDnsSans: ["bing.com"],
+      echConfig,
+      echDetectedPublicNames: ["cloudflare-ech.com"],
+      echDetectedPublicName: "cloudflare-ech.com",
+      active: false,
+    };
+    enqueue(s, host.id, "detect", { nodeId: node.id });
+    const failedDisabledDetect = claim(s, false, "ops")!;
+    await expect(
+      runOperation(s, failedDisabledDetect, async (script) => {
+        if (script === controlledProbeScript)
+          return JSON.stringify({
+            ...inactiveManifest,
+            runtimeFresh: true,
+            liveTlsVerified: false,
+            controlledProbe: true,
+          });
+        return JSON.stringify(inactiveManifest);
+      }),
+    ).rejects.toThrow("Live TLS verification failed for stopped deployment");
+    finish(s, failedDisabledDetect, "failed");
+
+    enqueue(s, host.id, "detect", { nodeId: node.id });
+    const disabledDetect = claim(s, false, "ops")!;
+    let ranControlledProbe = false;
+    await runOperation(s, disabledDetect, async (script) => {
+      if (script === controlledProbeScript) {
+        ranControlledProbe = true;
+        return JSON.stringify({
+          ...inactiveManifest,
+          runtimeFresh: true,
+          liveTlsVerified: true,
+          controlledProbe: true,
+        });
+      }
+      return JSON.stringify(inactiveManifest);
+    });
+    finish(s, disabledDetect, "succeeded");
+    expect(ranControlledProbe).toBe(true);
+    s.put(
+      "node",
+      { ...strip(s.get(node.id)!), enabled: true },
+      undefined,
+      node.id,
+    );
+
+    // Downgrade pinned node back to legacy: refuses stale DNS-SAN cert, succeeds once legacy cert has no DNS SAN
+    const downgradeQueued = await app.request(
+      `/api/nodes/${node.id}/operation`,
+      {
+        method: "POST",
+        headers: { origin: s.config.origin, cookie },
+        body: JSON.stringify({
+          kind: "upgrade",
+          version: "v2.14.0",
+          protocol: "hysteria2",
+          congestion: "brutal",
+          tuning: false,
+          tlsSecurity: "legacy",
+          sni: "",
+          ech: false,
+          echPublicName: "",
+        }),
+      },
+    );
+    expect(downgradeQueued.status).toBe(202);
+    const legacyOptions = {
+      protocol: "hysteria2" as const,
+      congestion: "brutal" as const,
+      tuning: false,
+      tlsSecurity: "legacy" as const,
+      sni: "",
+      ech: false,
+      echPublicName: "",
+    };
+    const legacyHash = digest(serverConfig(s, node, legacyOptions));
+    const downgradeTask = claim(s, false, "ops")!;
+    await expect(
+      runOperation(s, downgradeTask, async (script) => {
+        if (script !== detectionScript) return "Deployment verified";
+        return JSON.stringify({
+          ...legacyOptions,
+          owner: "jetyet",
+          phase: "ready",
+          version: "v2.14.0",
+          actualVersion: "v2.14.0",
+          nodeId: node.id,
+          hostId: host.id,
+          address: node.address,
+          port: node.port,
+          hopping: node.hopping,
+          configHash: legacyHash,
+          actualHash: legacyHash,
+          certDnsSans: ["bing.com"],
+          runtimeFresh: true,
+          liveTlsVerified: true,
+          active: true,
+        });
+      }),
+    ).rejects.toThrow("Deployed configuration verification failed");
+    await runOperation(s, downgradeTask, async (script) => {
+      if (script !== detectionScript) return "Deployment verified";
+      return JSON.stringify({
+        ...legacyOptions,
+        owner: "jetyet",
+        phase: "ready",
+        version: "v2.14.0",
+        actualVersion: "v2.14.0",
+        nodeId: node.id,
+        hostId: host.id,
+        address: node.address,
+        port: node.port,
+        hopping: node.hopping,
+        configHash: legacyHash,
+        actualHash: legacyHash,
+        certDnsSans: [],
+        runtimeFresh: true,
+        liveTlsVerified: true,
+        active: true,
+      });
+    });
+    expect(s.get(node.id)?.tlsSecurity).toBe("legacy");
+    expect(s.get(node.id)?.ech).toBe(false);
+    expect(s.get(node.id)?.certSha256).toBe("");
   });
 });

@@ -11,14 +11,19 @@ import {
 import { loadWorkerConfig } from "../server/config";
 import { digest } from "../server/crypto";
 import { storage, strip, type Entity, type Store } from "../server/db";
-import { serverConfig } from "../server/deployment";
+import {
+  echKeysParserPy,
+  nodeVerifiedRevision,
+  serverConfig,
+} from "../server/deployment";
 import { execute, statsApi, withHost } from "../server/ssh";
 import { beat, claim, enqueue, finish, type Task } from "../server/tasks";
 import { probeNode } from "./probe";
 
 const hostScript = `set -euo pipefail
 python3 - <<'PY'
-import json,subprocess,time,os,hashlib
+import base64,fcntl,json,struct,subprocess,time,os,hashlib,re
+${echKeysParserPy}
 def read(p):
  with open(p) as f:return f.read().strip()
 routes=[]
@@ -37,16 +42,34 @@ cpu=list(map(int,read('/proc/stat').splitlines()[0].split()[1:9]))
 mem={line.split(':')[0]:int(line.split()[1]) for line in read('/proc/meminfo').splitlines()}
 disk=os.statvfs('/')
 out={'inbound':rx,'outbound':tx,'ifaceEpoch':','.join(sorted(interfaces)),'boot':read('/proc/sys/kernel/random/boot_id'),'uptime':float(read('/proc/uptime').split()[0]),'cpuTotal':sum(cpu),'cpuIdle':cpu[3]+cpu[4],'memory':100*(1-mem.get('MemAvailable',mem['MemFree'])/mem['MemTotal']),'disk':100*(1-disk.f_bavail/disk.f_blocks)}
-out['service']=subprocess.run(['systemctl','is-active','--quiet','jetyet-hysteria.service']).returncode==0
-if os.path.exists('/etc/jetyet/manifest.json'):
- out['manifest']=json.loads(read('/etc/jetyet/manifest.json'))
- if os.path.exists('/etc/jetyet/config.yaml'):
-  out['configHash']=hashlib.sha256(open('/etc/jetyet/config.yaml','rb').read()).hexdigest()
-  out['config']=read('/etc/jetyet/config.yaml')
- else:
-  out['configHash']=None
-  out['config']=''
- out['serviceEpoch']=subprocess.run(['systemctl','show','--value','--property=InvocationID','jetyet-hysteria.service'],capture_output=True,text=True).stdout.strip()
+out['operationLockBusy']=False
+lock_fd=None
+try:
+ lock_fd=os.open('/run/jetyet-operation.lock',os.O_CREAT|os.O_RDWR,0o600)
+ fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+ out['service']=subprocess.run(['systemctl','is-active','--quiet','jetyet-hysteria.service']).returncode==0
+ if os.path.exists('/etc/jetyet/manifest.json'):
+  out['manifest']=json.loads(read('/etc/jetyet/manifest.json'))
+  if os.path.exists('/etc/jetyet/config.yaml'):
+   out['configHash']=hashlib.sha256(open('/etc/jetyet/config.yaml','rb').read()).hexdigest()
+   out['config']=read('/etc/jetyet/config.yaml')
+  else:
+   out['configHash']=None
+   out['config']=''
+  if os.path.exists('/etc/jetyet/server.crt'):
+   r=subprocess.run(['openssl','x509','-in','/etc/jetyet/server.crt','-outform','DER'],capture_output=True)
+   if r.returncode==0: out['certSha256']=hashlib.sha256(r.stdout).hexdigest()
+  if os.path.exists('/etc/jetyet/ech.pem'):
+   parsed=parse_ech_keys_file('/etc/jetyet/ech.pem')
+   if parsed: out['echConfig']=parsed['echConfig']
+  out['serviceEpoch']=subprocess.run(['systemctl','show','--value','--property=InvocationID','jetyet-hysteria.service'],capture_output=True,text=True).stdout.strip()
+except BlockingIOError:
+ out['operationLockBusy']=True
+finally:
+ if lock_fd is not None:
+  try: fcntl.flock(lock_fd,fcntl.LOCK_UN)
+  except Exception: pass
+  os.close(lock_fd)
 print(json.dumps(out))
 PY
 `;
@@ -86,15 +109,27 @@ function isUserStale(
   );
 }
 
-export async function collectHost(s: Store, h: Entity) {
+export async function collectHost(
+  s: Store,
+  h: Entity,
+  runner?: (script: string) => Promise<string>,
+) {
   const at = Date.now(),
     n = s
       .list("node")
       .find((n) => n.hostId === h.id && !n.deleting && n.status !== "draft");
   try {
-    const data = await withHost(s, h, (c) =>
-      execute(c, hostScript, h.username !== "root", 30000).then(JSON.parse),
-    );
+    const initialRevision = n ? nodeVerifiedRevision(s, n, h) : null;
+    const activeOpBefore = !!s.db
+      .query<{ id: string }, [string]>(
+        "SELECT id FROM tasks WHERE host=? AND kind!='kick' AND state='running' LIMIT 1",
+      )
+      .get(h.id);
+    const data = runner
+      ? JSON.parse(await runner(hostScript))
+      : await withHost(s, h, (c) =>
+          execute(c, hostScript, h.username !== "root", 30000).then(JSON.parse),
+        );
     const totalDelta = data.cpuTotal - (h.cpuTotal ?? data.cpuTotal),
       idleDelta = data.cpuIdle - (h.cpuIdle ?? data.cpuIdle);
     const cpu =
@@ -142,36 +177,86 @@ export async function collectHost(s: Store, h: Entity) {
       .immediate();
     s.resolveAlert(h.id, "unreachable");
     s.resolveAlert(h.id, "stale");
-    if (n) {
-      const drift =
-        data.configHash !== digest(serverConfig(s, n)) ||
-        data.manifest?.nodeId !== n.id ||
-        data.manifest?.hopping !== n.hopping ||
-        data.manifest?.port !== n.port;
-      if (drift)
-        s.alert(
-          n.id,
-          "drift",
-          "Remote configuration differs from the platform configuration.",
-        );
-      else s.resolveAlert(n.id, "drift");
-      const current = s.get(n.id)!;
-      s.put(
-        "node",
-        {
-          ...strip(current),
-          service: data.service,
-          drift,
-          lastSeen: at,
-          ...(data.service ? {} : { online: {} }),
-        },
-        {
-          ...s.secrets(n.id),
-          observedConfig: typeof data.config === "string" ? data.config : "",
-        },
-        n.id,
-      );
-      if (data.service) {
+    if (n && data.operationLockBusy !== true) {
+      const current = s.get(n.id);
+      const latestHost = s.get(h.id);
+      const activeOpAfter = !!s.db
+        .query<{ id: string }, [string]>(
+          "SELECT id FROM tasks WHERE host=? AND kind!='kick' AND state='running' LIMIT 1",
+        )
+        .get(h.id);
+      const revisionChanged =
+        !current ||
+        current.deleted ||
+        current.deleting ||
+        !latestHost ||
+        latestHost.deleted ||
+        nodeVerifiedRevision(s, current, latestHost) !== initialRevision;
+      if (current && !current.deleted && !current.deleting) {
+        if (!activeOpBefore && !activeOpAfter && !revisionChanged) {
+          const incompleteInstall = data.manifest?.phase !== "ready";
+          const pinnedDrift =
+            current.tlsSecurity === "pinned" &&
+            (data.manifest?.tlsSecurity !== "pinned" ||
+              data.manifest?.sni !== current.sni ||
+              (current.certSha256 && data.certSha256 !== current.certSha256));
+          const echDrift =
+            current.ech === true &&
+            (data.manifest?.ech !== true ||
+              data.manifest?.echPublicName !== current.echPublicName ||
+              (current.echConfig && data.echConfig !== current.echConfig));
+          const drift =
+            incompleteInstall ||
+            data.configHash !== digest(serverConfig(s, current)) ||
+            data.manifest?.nodeId !== current.id ||
+            data.manifest?.hopping !== current.hopping ||
+            data.manifest?.port !== current.port ||
+            pinnedDrift ||
+            echDrift;
+          if (drift)
+            s.alert(
+              current.id,
+              "drift",
+              incompleteInstall
+                ? "Remote deployment is incomplete and differs from the platform configuration."
+                : "Remote configuration differs from the platform configuration.",
+            );
+          else s.resolveAlert(current.id, "drift");
+          s.put(
+            "node",
+            {
+              ...strip(current),
+              service: data.service,
+              drift,
+              lastSeen: at,
+              ...(data.service ? {} : { online: {} }),
+            },
+            {
+              ...s.secrets(current.id),
+              observedConfig:
+                typeof data.config === "string" ? data.config : "",
+            },
+            current.id,
+          );
+        } else {
+          s.put(
+            "node",
+            {
+              ...strip(current),
+              service: data.service,
+              lastSeen: at,
+              ...(data.service ? {} : { online: {} }),
+            },
+            undefined,
+            current.id,
+          );
+        }
+      }
+      if (
+        data.service &&
+        typeof data.serviceEpoch === "string" &&
+        data.serviceEpoch.length > 0
+      ) {
         try {
           // /traffic tx is client upload (server inbound); rx is client download (server outbound).
           const traffic = (await statsApi(s, n, "/traffic")) as Record<

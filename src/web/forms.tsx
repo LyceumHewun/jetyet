@@ -2,6 +2,17 @@ import {
   PORTAL_PASSWORD_MAX_LENGTH,
   PORTAL_PASSWORD_MIN_LENGTH,
 } from "../shared/portal-password";
+import {
+  DEFAULT_ECH_PUBLIC_NAME,
+  DEFAULT_HYSTERIA_VERSION,
+  DEFAULT_TLS_SNI,
+  MIN_BBR_VERSION,
+  MIN_ECH_VERSION,
+  MIN_PINNED_TLS_VERSION,
+  compareHysteriaVersion,
+  isValidDnsName,
+  type TlsSecurityMode,
+} from "../shared/tls";
 import { asUiError, type UiError, localizeError, t as translate } from "./i18n";
 import {
   ArrowLeft,
@@ -849,7 +860,7 @@ export function EntityForm({
           {kind === "nodes" && (
             <div className="form-note">
               {translate(
-                "Native Hysteria 2 · self-signed cert. Network changes require a reapply operation.",
+                "Native Hysteria 2 · self-signed cert with forced SNI & pinSHA256. Network changes require a reapply operation.",
               )}
             </div>
           )}
@@ -1209,6 +1220,10 @@ export type NodeOperationPayload = {
   protocol: "hysteria2";
   tuning: boolean;
   congestion: "brutal" | "bbr";
+  tlsSecurity: TlsSecurityMode;
+  sni: string;
+  ech: boolean;
+  echPublicName: string;
 };
 
 export function OperationForm({
@@ -1222,16 +1237,40 @@ export function OperationForm({
   onClose: () => void;
   onSubmit: (payload: NodeOperationPayload) => Promise<void>;
 }) {
-  const hasDeployOptions = kind === "deploy" || kind === "command";
+  const hasDeployOptions =
+    kind === "deploy" || kind === "command" || kind === "upgrade";
   const isVerified = node.status
     ? node.status !== "draft"
     : Boolean(node.version);
-  const [version, setVersion] = useState(node.version || "v2.14.0"),
+  const currentTlsSecurity: TlsSecurityMode =
+    isVerified && node.tlsSecurity === "pinned" ? "pinned" : "legacy";
+  const defaultVersion =
+    kind === "upgrade" &&
+    node.version &&
+    /^v2\.\d+\.\d+$/.test(node.version) &&
+    compareHysteriaVersion(node.version, DEFAULT_HYSTERIA_VERSION) < 0
+      ? DEFAULT_HYSTERIA_VERSION
+      : node.version || DEFAULT_HYSTERIA_VERSION;
+  const [version, setVersion] = useState(defaultVersion),
     [congestion, setCongestion] = useState<"brutal" | "bbr">(
       isVerified && node.congestion === "bbr" ? "bbr" : "brutal",
     ),
     [tuning, setTuning] = useState<boolean>(
       isVerified ? Boolean(node.tuning) : false,
+    ),
+    [tlsSecurity, setTlsSecurity] = useState<TlsSecurityMode>(
+      hasDeployOptions ? "pinned" : currentTlsSecurity,
+    ),
+    [sni, setSni] = useState<string>(
+      isVerified && typeof node.sni === "string" ? node.sni : "",
+    ),
+    [ech, setEch] = useState<boolean>(
+      isVerified && currentTlsSecurity === "pinned" ? Boolean(node.ech) : false,
+    ),
+    [echPublicName, setEchPublicName] = useState<string>(
+      isVerified && typeof node.echPublicName === "string"
+        ? node.echPublicName
+        : "",
     ),
     [busy, setBusy] = useState(false),
     [error, setError] = useState<UiError>("");
@@ -1239,7 +1278,54 @@ export function OperationForm({
   const versionHintId = useId();
   const congestionId = useId();
   const congestionHintId = useId();
-  const showBbrMinimum = hasDeployOptions || congestion === "bbr";
+  const tlsSecurityId = useId();
+  const tlsSecurityHintId = useId();
+  const sniId = useId();
+  const sniHintId = useId();
+  const echPublicNameId = useId();
+  const echPublicNameHintId = useId();
+  const effectiveTlsSecurity = hasDeployOptions
+    ? tlsSecurity
+    : currentTlsSecurity;
+  const effectiveEch = effectiveTlsSecurity === "pinned" && ech;
+  const versionHints = [
+    hasDeployOptions || effectiveTlsSecurity === "pinned"
+      ? translate("Forced SNI + pinSHA256 requires Hysteria 2 v2.6.4 or later.")
+      : "",
+    hasDeployOptions || congestion === "bbr"
+      ? translate("BBR requires Hysteria 2 v2.8.0 or later.")
+      : "",
+    hasDeployOptions || effectiveEch
+      ? translate("ECH requires Hysteria 2 v2.12.3 or later.")
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const resolvedSni =
+    effectiveTlsSecurity === "pinned"
+      ? sni.trim().toLowerCase() || DEFAULT_TLS_SNI
+      : "";
+  const resolvedEchPublicName = effectiveEch
+    ? echPublicName.trim().toLowerCase() || DEFAULT_ECH_PUBLIC_NAME
+    : "";
+  const currentSni =
+    currentTlsSecurity === "pinned"
+      ? (typeof node.sni === "string" && node.sni.trim().toLowerCase()) ||
+        DEFAULT_TLS_SNI
+      : "";
+  const currentEch = currentTlsSecurity === "pinned" && Boolean(node.ech);
+  const currentEchPublicName = currentEch
+    ? (typeof node.echPublicName === "string" &&
+        node.echPublicName.trim().toLowerCase()) ||
+      DEFAULT_ECH_PUBLIC_NAME
+    : "";
+  const tlsInvalidatesCachedProfiles =
+    hasDeployOptions &&
+    isVerified &&
+    (effectiveTlsSecurity !== currentTlsSecurity ||
+      resolvedSni !== currentSni ||
+      effectiveEch !== currentEch ||
+      resolvedEchPublicName !== currentEchPublicName);
 
   return (
     <Modal
@@ -1248,17 +1334,64 @@ export function OperationForm({
         kind === "command" ? translate("Deploy command") : operationLabel(kind)
       }
       onClose={onClose}
+      className={hasDeployOptions ? "operation-dialog" : ""}
     >
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          const trimmedVersion = version.trim();
+          const nextSni =
+            effectiveTlsSecurity === "pinned" ? sni.trim().toLowerCase() : "";
+          const nextEch = effectiveTlsSecurity === "pinned" && ech;
+          const nextEchPublicName = nextEch
+            ? echPublicName.trim().toLowerCase()
+            : "";
+          if (!/^v2\.\d+\.\d+$/.test(trimmedVersion)) {
+            setError("Specify an explicit Hysteria 2 version");
+            return;
+          }
+          if (
+            effectiveTlsSecurity === "pinned" &&
+            compareHysteriaVersion(trimmedVersion, MIN_PINNED_TLS_VERSION) < 0
+          ) {
+            setError(
+              "Forced SNI and pinSHA256 require Hysteria 2 v2.6.4 or later",
+            );
+            return;
+          }
+          if (
+            congestion === "bbr" &&
+            compareHysteriaVersion(trimmedVersion, MIN_BBR_VERSION) < 0
+          ) {
+            setError("BBR mode requires Hysteria 2 v2.8.0 or later");
+            return;
+          }
+          if (
+            nextEch &&
+            compareHysteriaVersion(trimmedVersion, MIN_ECH_VERSION) < 0
+          ) {
+            setError("ECH requires Hysteria 2 v2.12.3 or later");
+            return;
+          }
+          if (nextSni && !isValidDnsName(nextSni)) {
+            setError("Enter a valid domain name");
+            return;
+          }
+          if (nextEchPublicName && !isValidDnsName(nextEchPublicName)) {
+            setError("Enter a valid domain name");
+            return;
+          }
           setBusy(true);
           setError("");
           onSubmit({
-            version,
+            version: trimmedVersion,
             protocol: "hysteria2",
             tuning,
             congestion,
+            tlsSecurity: effectiveTlsSecurity,
+            sni: nextSni,
+            ech: nextEch,
+            echPublicName: nextEchPublicName,
           })
             .catch((e) => setError(asUiError(e)))
             .finally(() => setBusy(false));
@@ -1271,75 +1404,202 @@ export function OperationForm({
             )}
           </p>
           <div className="deploy-options">
-            <Field
-              label={translate("Target Hysteria 2 version")}
-              htmlFor={versionId}
-              hint={
-                showBbrMinimum
-                  ? translate("BBR requires Hysteria 2 v2.8.0 or later.")
-                  : undefined
-              }
-              hintId={versionHintId}
-            >
-              <Input
-                id={versionId}
-                value={version}
-                required
-                pattern="v2\.\d+\.\d+"
-                aria-describedby={showBbrMinimum ? versionHintId : undefined}
-                autoFocus
-                autoCorrect="off"
-                autoCapitalize="none"
-                spellCheck={false}
-                onChange={(e) => {
-                  setVersion(e.target.value);
-                  if (error) setError("");
-                }}
-              />
-            </Field>
-            {hasDeployOptions && (
-              <>
+            <div className={hasDeployOptions ? "deploy-row" : undefined}>
+              <Field
+                label={translate("Target Hysteria 2 version")}
+                htmlFor={versionId}
+                hint={versionHints || undefined}
+                hintId={versionHintId}
+              >
+                <Input
+                  id={versionId}
+                  className="mono"
+                  value={version}
+                  required
+                  pattern="v2\.\d+\.\d+"
+                  aria-describedby={versionHints ? versionHintId : undefined}
+                  autoFocus
+                  autoCorrect="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  onChange={(e) => {
+                    setVersion(e.target.value);
+                    if (error) setError("");
+                  }}
+                />
+              </Field>
+              {hasDeployOptions && (
                 <Field
                   label={translate("Protocol")}
                   hint={translate("Only Hysteria 2 is supported.")}
                 >
                   <p className="field-readonly">Hysteria 2</p>
                 </Field>
-                <Field
-                  label={translate("Congestion control")}
-                  htmlFor={congestionId}
-                  hint={translate(
-                    "Brutal is the default. Changes publish to subscriptions after deployment or installation detection succeeds.",
+              )}
+            </div>
+            {hasDeployOptions && (
+              <>
+                <section className="deploy-section">
+                  <span className="kpi-label">
+                    {translate("TLS & SECURITY")}
+                  </span>
+                  <Field
+                    label={translate("TLS security")}
+                    htmlFor={tlsSecurityId}
+                    hint={translate(
+                      "Pinned mode enforces SNI matching on the server and pins the self-signed certificate in subscriptions. Legacy mode preserves older verification-skipping deployments.",
+                    )}
+                    hintId={tlsSecurityHintId}
+                  >
+                    <Select
+                      id={tlsSecurityId}
+                      aria-describedby={tlsSecurityHintId}
+                      value={tlsSecurity}
+                      options={[
+                        {
+                          value: "pinned",
+                          label: translate("Forced SNI + pinSHA256 (Recommended)"),
+                        },
+                        {
+                          value: "legacy",
+                          label: translate("Legacy (skip-cert-verify)"),
+                        },
+                      ]}
+                      onChange={(v) => {
+                        const next = v as TlsSecurityMode;
+                        setTlsSecurity(next);
+                        if (next !== "pinned") setEch(false);
+                        if (error) setError("");
+                      }}
+                    />
+                  </Field>
+                  {tlsSecurity === "pinned" && (
+                    <Field
+                      label={translate("Forced SNI")}
+                      htmlFor={sniId}
+                      hint={translate(
+                        "Optional. Leave blank to use the default SNI ({0}). Changing SNI re-issues the self-signed certificate.",
+                        DEFAULT_TLS_SNI,
+                      )}
+                      hintId={sniHintId}
+                    >
+                      <Input
+                        id={sniId}
+                        className="mono"
+                        value={sni}
+                        placeholder={DEFAULT_TLS_SNI}
+                        aria-describedby={sniHintId}
+                        autoCorrect="off"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        onChange={(e) => {
+                          setSni(e.target.value);
+                          if (error) setError("");
+                        }}
+                      />
+                    </Field>
                   )}
-                  hintId={congestionHintId}
-                >
-                  <Select
-                    id={congestionId}
-                    aria-describedby={congestionHintId}
-                    value={congestion}
-                    options={[
-                      { value: "brutal", label: "Brutal" },
-                      { value: "bbr", label: "BBR" },
-                    ]}
-                    onChange={(v) => {
-                      setCongestion(v as "brutal" | "bbr");
-                      if (error) setError("");
-                    }}
-                  />
-                </Field>
-                <Field
-                  label={translate("Adaptive performance tuning")}
-                  hint={translate(
-                    "Optional and off by default. May raise low UDP socket buffers and add swap on low-memory VPS when host conditions allow; applied changes stay if disabled later.",
+                  <Field
+                    label={translate("Encrypted Client Hello (ECH)")}
+                    hint={
+                      tlsSecurity === "pinned"
+                        ? translate(
+                            "Optional and independent. Hides the inner SNI behind an outer decoy domain; private keys stay on the VPS.",
+                          )
+                        : translate(
+                            "Requires Forced SNI + pinSHA256 TLS security.",
+                          )
+                    }
+                  >
+                    <Checkbox
+                      checked={tlsSecurity === "pinned" && ech}
+                      disabled={tlsSecurity !== "pinned"}
+                      onChange={(checked) => {
+                        setEch(checked);
+                        if (error) setError("");
+                      }}
+                    >
+                      {translate("Enable ECH")}
+                    </Checkbox>
+                  </Field>
+                  {tlsSecurity === "pinned" && ech && (
+                    <Field
+                      label={translate("ECH public name")}
+                      htmlFor={echPublicNameId}
+                      hint={translate(
+                        "Optional outer decoy SNI visible on the network. Leave blank to use {0}.",
+                        DEFAULT_ECH_PUBLIC_NAME,
+                      )}
+                      hintId={echPublicNameHintId}
+                    >
+                      <Input
+                        id={echPublicNameId}
+                        className="mono"
+                        value={echPublicName}
+                        placeholder={DEFAULT_ECH_PUBLIC_NAME}
+                        aria-describedby={echPublicNameHintId}
+                        autoCorrect="off"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        onChange={(e) => {
+                          setEchPublicName(e.target.value);
+                          if (error) setError("");
+                        }}
+                      />
+                    </Field>
                   )}
-                >
-                  <Checkbox checked={tuning} onChange={setTuning}>
-                    {translate("Enable adaptive performance tuning")}
-                  </Checkbox>
-                </Field>
+                </section>
+                <section className="deploy-section">
+                  <span className="kpi-label">
+                    {translate("TRANSPORT & TUNING")}
+                  </span>
+                  <Field
+                    label={translate("Congestion control")}
+                    htmlFor={congestionId}
+                    hint={translate(
+                      "Brutal is the default. Changes publish to subscriptions after deployment or installation detection succeeds.",
+                    )}
+                    hintId={congestionHintId}
+                  >
+                    <Select
+                      id={congestionId}
+                      aria-describedby={congestionHintId}
+                      value={congestion}
+                      options={[
+                        { value: "brutal", label: "Brutal" },
+                        { value: "bbr", label: "BBR" },
+                      ]}
+                      onChange={(v) => {
+                        setCongestion(v as "brutal" | "bbr");
+                        if (error) setError("");
+                      }}
+                    />
+                  </Field>
+                  <Field
+                    label={translate("Adaptive performance tuning")}
+                    hint={translate(
+                      "Optional and off by default. May raise low UDP socket buffers and add swap on low-memory VPS when host conditions allow; applied changes stay if disabled later.",
+                    )}
+                  >
+                    <Checkbox checked={tuning} onChange={setTuning}>
+                      {translate("Enable adaptive performance tuning")}
+                    </Checkbox>
+                  </Field>
+                </section>
               </>
             )}
           </div>
+          {tlsInvalidatesCachedProfiles && (
+            <p className="form-note warning">
+              {kind === "command"
+                ? translate(
+                    "Changing TLS mode, SNI, or ECH updates server certificates or ECH keys. After running the command and detecting the installation, subscribers must refresh their subscription.",
+                  )
+                : translate(
+                    "Changing TLS mode, SNI, or ECH updates server certificates or ECH keys. Subscribers must refresh their subscription after the verified settings are published.",
+                  )}
+            </p>
+          )}
           {kind === "reapply" && (
             <p className="form-note">
               {translate(

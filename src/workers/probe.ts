@@ -1,9 +1,88 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdtemp,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
+import {
+  MIN_ECH_VERSION,
+  MIN_PINNED_TLS_VERSION,
+  compareHysteriaVersion,
+} from "../shared/tls";
+import { hasEch, hasPinnedTls } from "../server/subscriptions";
 import type { Entity, Store } from "../server/db";
+
+async function checkBinaryVersion(
+  binaryPath: string,
+  ech: boolean,
+): Promise<void> {
+  const proc = Bun.spawn([binaryPath, "version"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const outPromise = new Response(proc.stdout).text();
+  const errPromise = new Response(proc.stderr).text();
+  const timedOut = await Promise.race([
+    proc.exited.then(() => false),
+    Bun.sleep(5000).then(() => true),
+  ]);
+  if (timedOut) {
+    await stopChild(proc);
+    await Promise.allSettled([outPromise, errPromise]);
+    throw Error(
+      "Timed out checking management host Hysteria 2 binary version",
+    );
+  }
+  const [out] = await Promise.all([outPromise, errPromise]);
+  const match = proc.exitCode === 0 ? out.match(/\bv2\.\d+\.\d+\b/) : null;
+  if (!match)
+    throw Error("Unable to determine management host Hysteria 2 binary version");
+  const version = match[0];
+  if (compareHysteriaVersion(version, MIN_PINNED_TLS_VERSION) < 0)
+    throw Error(
+      "Management host Hysteria 2 binary must be v2.6.4 or later to probe pinned nodes",
+    );
+  if (ech && compareHysteriaVersion(version, MIN_ECH_VERSION) < 0)
+    throw Error(
+      "Management host Hysteria 2 binary must be v2.12.3 or later to probe ECH nodes",
+    );
+}
+
+async function preparePinnedProbeBinary(
+  binary: string,
+  dir: string,
+  ech: boolean,
+): Promise<string> {
+  const located = binary.includes("/") ? binary : Bun.which(binary);
+  if (!located) throw Error("Management host Hysteria 2 binary was not found");
+  const resolved = await realpath(located);
+  const snapshot = join(dir, "hysteria");
+  let candidate = resolved;
+  try {
+    await copyFile(resolved, snapshot);
+    await chmod(snapshot, 0o500);
+    await checkBinaryVersion(snapshot, ech);
+    return snapshot;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    const message = err instanceof Error ? err.message : "";
+    const isNoExec =
+      code === "EACCES" ||
+      code === "EPERM" ||
+      /EACCES|permission denied/i.test(message);
+    if (!isNoExec) throw err;
+    await rm(snapshot, { force: true }).catch(() => {});
+  }
+  await checkBinaryVersion(candidate, ech);
+  return candidate;
+}
+
 async function freePort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((res, rej) => {
@@ -27,11 +106,24 @@ async function stopChild(child: ReturnType<typeof Bun.spawn>) {
   }
 }
 export async function probeNode(s: Store, n: Entity) {
+  const pinned = hasPinnedTls(n);
+  const ech = hasEch(n);
   const dir = await mkdtemp(join(tmpdir(), "jetyet-probe-"));
   let child: ReturnType<typeof Bun.spawn> | undefined;
   try {
+    const executable = pinned
+      ? await preparePinnedProbeBinary(s.config.hysteriaBinary, dir, ech)
+      : s.config.hysteriaBinary;
     const path = join(dir, "config.yaml"),
       address = n.address.includes(":") ? `[${n.address}]` : n.address;
+    const tls = pinned
+      ? {
+          sni: n.sni,
+          insecure: true,
+          pinSHA256: n.certSha256,
+          ...(ech ? { ech: n.echConfig } : {}),
+        }
+      : { insecure: true };
     let port = 0;
     for (let attempt = 0; attempt < 2; attempt++) {
       port = await freePort();
@@ -40,12 +132,12 @@ export async function probeNode(s: Store, n: Entity) {
         YAML.stringify({
           server: `${address}:${n.port}`,
           auth: s.secrets(n.id).probeToken,
-          tls: { insecure: true },
+          tls,
           socks5: { listen: `127.0.0.1:${port}` },
         }),
         { mode: 0o600 },
       );
-      child = Bun.spawn([s.config.hysteriaBinary, "client", "-c", path], {
+      child = Bun.spawn([executable, "client", "-c", path], {
         stdout: "ignore",
         stderr: "ignore",
       });

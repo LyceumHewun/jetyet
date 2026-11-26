@@ -5,7 +5,7 @@ import { join } from "node:path";
 import YAML from "yaml";
 import type { TemplateFormat } from "../shared/schemas";
 import { HttpError } from "./errors";
-import { subscriptionNodes } from "./subscriptions";
+import { hasEch, hasPinnedTls, subscriptionNodes } from "./subscriptions";
 import type { Entity, Store } from "./db";
 const engine = new Liquid({
   strictVariables: true,
@@ -19,10 +19,16 @@ const credentialField =
   /(?:^|[-_])(?:password|passwd|uuid|token|secret|username|authentication|auth|authorization|key|cookie|psk)(?:$|[-_])|^(?:api|private|access)key$/i;
 
 function isCredentialField(key: string) {
+  if (/^(?:client_)?certificate_public_key_sha256$/i.test(key)) return false;
   return credentialField.test(key.replace(/([a-z0-9])([A-Z])/g, "$1-$2"));
 }
 
-function redactQueryCredentials(value: string) {
+const previewTlsQueryField =
+  /^(?:sni|peer|servername|server[-_]?name|name[-_]?cert[-_]?verify|pinsha256|fingerprint|ech|ech[-_]?config|query[-_]?server[-_]?name)$/i;
+const previewTlsObjectField =
+  /^(?:pinsha256|fingerprint|(?:client_)?certificate(?:_(?:public_key_)?sha256)?)$/i;
+
+function redactQueryCredentials(value: string, includeTls = false) {
   return value.replace(
     /([?&])([^=&#\s]+)=[^&#\s]+/g,
     (match, delimiter: string, key: string) => {
@@ -32,7 +38,10 @@ function redactQueryCredentials(value: string) {
       } catch {
         // Malformed escapes can still contain a recognizable credential key.
       }
-      return isCredentialField(decoded) ? `${delimiter}${key}=REDACTED` : match;
+      return isCredentialField(decoded) ||
+        (includeTls && previewTlsQueryField.test(decoded))
+        ? `${delimiter}${key}=REDACTED`
+        : match;
     },
   );
 }
@@ -52,7 +61,7 @@ function ruleTarget(parts: string[]) {
   return commaPayloadRules.has(type) ? parts.length - 1 : 2;
 }
 
-function redact(value: unknown): unknown {
+function redact(value: unknown, previewTls = false): unknown {
   if (typeof value === "string") {
     return redactQueryCredentials(
       value
@@ -61,9 +70,10 @@ function redact(value: unknown): unknown {
           "[REDACTED]",
         )
         .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1REDACTED@"),
+      previewTls,
     );
   }
-  if (Array.isArray(value)) return value.map(redact);
+  if (Array.isArray(value)) return value.map((item) => redact(item, previewTls));
   if (value && typeof value === "object")
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
@@ -72,7 +82,11 @@ function redact(value: unknown): unknown {
           ? Array.isArray(item)
             ? []
             : "REDACTED"
-          : redact(item),
+          : previewTls && previewTlsObjectField.test(key) && item
+            ? Array.isArray(item)
+              ? ["REDACTED"]
+              : "REDACTED"
+            : redact(item, previewTls),
       ]),
     );
   return value;
@@ -98,6 +112,29 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
     if ("sni" in proxy) proxy.sni = host;
     if ("servername" in proxy) proxy.servername = host;
     if ("server-name" in proxy) proxy["server-name"] = host;
+    if ("name-cert-verify" in proxy && proxy["name-cert-verify"])
+      proxy["name-cert-verify"] = host;
+    if ("fingerprint" in proxy && proxy.fingerprint)
+      proxy.fingerprint = "REDACTED";
+    if ("pinSHA256" in proxy && proxy.pinSHA256) proxy.pinSHA256 = "REDACTED";
+    if ("certificate" in proxy && proxy.certificate)
+      proxy.certificate = "REDACTED";
+    if (proxy["ech-opts"] && typeof proxy["ech-opts"] === "object") {
+      if ("config" in proxy["ech-opts"] && proxy["ech-opts"].config)
+        proxy["ech-opts"].config = "REDACTED";
+      if (
+        "query-server-name" in proxy["ech-opts"] &&
+        proxy["ech-opts"]["query-server-name"]
+      )
+        proxy["ech-opts"]["query-server-name"] = host;
+    }
+    if (proxy["realm-opts"] && typeof proxy["realm-opts"] === "object") {
+      if (proxy["realm-opts"].sni) proxy["realm-opts"].sni = host;
+      if (proxy["realm-opts"]["name-cert-verify"])
+        proxy["realm-opts"]["name-cert-verify"] = host;
+      if (proxy["realm-opts"].fingerprint)
+        proxy["realm-opts"].fingerprint = "REDACTED";
+    }
   }
   for (const [literal, simulated] of literalNames) {
     const placeholder = names.get(simulated);
@@ -130,7 +167,7 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
       }
     }
   }
-  return YAML.stringify(redact(config));
+  return YAML.stringify(redact(config, true));
 }
 type SingBoxConfig = Record<string, any> & { outbounds: Record<string, any>[] };
 
@@ -169,6 +206,23 @@ function mapOutboundReferences(
   rules(config.route.rules);
 }
 
+function redactSingBoxTls(tls: unknown, placeholderHost: string) {
+  if (!tls || typeof tls !== "object" || Array.isArray(tls)) return;
+  const obj = tls as Record<string, any>;
+  if (obj.server_name) obj.server_name = placeholderHost;
+  if (obj.certificate_public_key_sha256)
+    obj.certificate_public_key_sha256 = ["REDACTED"];
+  if (obj.certificate_sha256) obj.certificate_sha256 = ["REDACTED"];
+  if (obj.certificate)
+    obj.certificate = Array.isArray(obj.certificate)
+      ? ["REDACTED"]
+      : "REDACTED";
+  if (obj.ech && typeof obj.ech === "object" && !Array.isArray(obj.ech)) {
+    if (obj.ech.config) obj.ech.config = ["REDACTED"];
+    if (obj.ech.query_server_name) obj.ech.query_server_name = placeholderHost;
+  }
+}
+
 function redactSingBoxPreview(
   config: SingBoxConfig,
   tags: Set<string>,
@@ -176,7 +230,10 @@ function redactSingBoxPreview(
 ) {
   const aliases = new Map<string, string>();
   for (const outbound of config.outbounds) {
-    if (!("server" in outbound)) continue;
+    if (!("server" in outbound)) {
+      redactSingBoxTls(outbound?.tls, "outbound.invalid");
+      continue;
+    }
     const index = aliases.size + 1;
     let tag = "Preview node " + index;
     while (tags.has(tag)) tag += " (preview)";
@@ -187,7 +244,19 @@ function redactSingBoxPreview(
     outbound.server = "node-" + index + ".invalid";
     if ("server_port" in outbound) outbound.server_port = 443;
     if ("server_ports" in outbound) outbound.server_ports = ["443:444"];
-    if (outbound.tls?.server_name) outbound.tls.server_name = outbound.server;
+    redactSingBoxTls(outbound.tls, outbound.server);
+  }
+  if (Array.isArray(config.dns?.servers)) {
+    config.dns.servers.forEach((server: Record<string, any>, idx: number) => {
+      if (server && typeof server === "object")
+        redactSingBoxTls(server.tls, `dns-${idx + 1}.invalid`);
+    });
+  }
+  if (Array.isArray(config.endpoints)) {
+    config.endpoints.forEach((endpoint: Record<string, any>, idx: number) => {
+      if (endpoint && typeof endpoint === "object")
+        redactSingBoxTls(endpoint.tls, `endpoint-${idx + 1}.invalid`);
+    });
   }
   for (const [literal, simulated] of literalNames) {
     if (aliases.has(simulated)) aliases.set(literal, aliases.get(simulated)!);
@@ -240,7 +309,7 @@ engine.registerFilter("indent", (v, n) => {
     .map((l) => " ".repeat(width) + l)
     .join("\n");
 });
-const singBoxTemplate = `{
+export const defaultSingBoxTemplate = `{
   "log": {"level": "warn"},
   "dns": {"servers": [{"type": "https", "tag": "cloudflare", "server": "1.1.1.1"}], "final": "cloudflare"},
   "inbounds": [{"type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30"], "auto_route": true}],
@@ -264,7 +333,7 @@ const singBoxTemplate = `{
 export function seedTemplate(s: Store) {
   for (const [format, body] of [
     ["mihomo", defaultTemplate],
-    ["sing-box", singBoxTemplate],
+    ["sing-box", defaultSingBoxTemplate],
   ]) {
     if (!s.list("template").some((t) => t.format === format && t.builtin))
       s.put("template", {
@@ -304,12 +373,39 @@ function proxies(
         literalNames.set(n.name, name);
       }
     }
+    const pinned = hasPinnedTls(n);
+    const ech = hasEch(n);
+    const server = simulated ? `node-${i + 1}.invalid` : n.address;
     if (format === "sing-box") {
+      const tls = pinned
+        ? {
+            enabled: true,
+            server_name: simulated ? server : n.sni,
+            insecure: false,
+            certificate_public_key_sha256: [
+              simulated ? "REDACTED" : n.certSpkiSha256,
+            ],
+            ...(ech
+              ? {
+                  ech: {
+                    enabled: true,
+                    config: simulated
+                      ? ["REDACTED"]
+                      : [
+                          "-----BEGIN ECH CONFIGS-----",
+                          n.echConfig,
+                          "-----END ECH CONFIGS-----",
+                        ],
+                  },
+                }
+              : {}),
+          }
+        : { enabled: true, insecure: true };
       return {
         name,
         tag: name,
         type: "hysteria2",
-        server: simulated ? "node-" + (i + 1) + ".invalid" : n.address,
+        server,
         ...(!simulated && n.hopping
           ? {
               server_ports: [n.hopping.replace("-", ":")],
@@ -317,14 +413,14 @@ function proxies(
             }
           : { server_port: simulated ? 443 : n.port }),
         password: mode === "live" ? s.secrets(u.id).vpnToken : "REDACTED",
-        tls: { enabled: true, insecure: true },
+        tls,
         ...(n.congestion === "bbr" ? {} : { up_mbps: 1000, down_mbps: 1000 }),
       };
     }
     return {
       name,
       type: "hysteria2",
-      server: simulated ? `node-${i + 1}.invalid` : n.address,
+      server,
       ...(!simulated && n.hopping
         ? {
             ports: n.hopping,
@@ -332,7 +428,21 @@ function proxies(
           }
         : { port: simulated ? 443 : n.port }),
       password: mode === "live" ? s.secrets(u.id).vpnToken : "REDACTED",
-      "skip-cert-verify": true,
+      ...(pinned
+        ? {
+            sni: simulated ? server : n.sni,
+            fingerprint: simulated ? "REDACTED" : n.certSha256,
+            "skip-cert-verify": false,
+            ...(ech
+              ? {
+                  "ech-opts": {
+                    enable: true,
+                    config: simulated ? "REDACTED" : n.echConfig,
+                  },
+                }
+              : {}),
+          }
+        : { "skip-cert-verify": true }),
       udp: true,
       ...(n.congestion === "bbr"
         ? { "bbr-profile": "standard" }
@@ -397,7 +507,9 @@ export function render(
         throw Error("Invalid sing-box outbound reference");
       return tag;
     });
-    return mode === "live" ? text : JSON.stringify(redact(config), null, 2);
+    return mode === "live"
+      ? text
+      : JSON.stringify(redact(config, isPortalPreview(mode)), null, 2);
   }
   const output = isPortalPreview(mode)
     ? redactPreview(text, literalNames)
