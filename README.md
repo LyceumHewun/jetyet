@@ -35,23 +35,44 @@ Host and node configuration changes are deliberately separated: editing a node's
 
 ## Production
 
-Run on a Linux server with systemd, sudo, rsync, and curl. Install Bun 1.3.5 or newer at `/usr/local/bin/bun`, Hysteria at `/usr/local/bin/hysteria`, mihomo at `/usr/local/bin/mihomo`, and sing-box at `/usr/local/bin/sing-box` for template validation. Copy the official executable binaries for your architecture to those paths.
+Run on a Linux (`amd64` or `arm64`) server with `systemd`, `curl`, `tar`, `gzip`, `flock`, `sha256sum` (or `shasum`), and `unzip` (or `bsdtar` / `python3` to extract Bun). Run directly as `root` or as a user with `sudo` access—no local `git clone` is required. Headless / non-TTY runs require passwordless `sudo` (or `root`), an explicit subcommand, a pre-created `/etc/jetyet/jetyet.config.json` on first install, and `--yes` for `uninstall`.
 
-From a writable checkout on the server, run as your deployment user with sudo access:
-
-```bash
-bash deploy/install.sh
-```
-
-The script installs locked dependencies, deploys the application to `/opt/jetyet`, and creates `/etc/jetyet/jetyet.config.json` interactively on first run. Enter the public HTTPS origin and accept `/var/lib/jetyet/jetyet.sqlite` for the SQLite database, or enter another file under `/var/lib/jetyet`. The script waits for Web to respond before starting the monitoring and operations workers.
-
-To update, run from the same Git checkout you used to install Jetyet:
+Launch the interactive manager (install, upgrade, uninstall, status):
 
 ```bash
-bash deploy/update.sh
+curl -fsSL https://raw.githubusercontent.com/LyceumHewun/jetyet/main/deploy/jetyet.sh | bash
 ```
 
-The update script pulls the current branch with `git pull --ff-only` and runs the installer after a successful pull. The installer reuses the existing configuration and database, synchronizes the updated application to `/opt/jetyet`, and restarts the services. The update script prints the deployed commit after the installer succeeds. If your checkout predates `deploy/update.sh`, pull once to get the script.
+Or download first and execute locally (recommended if your shell does not enable `pipefail`):
+
+```bash
+curl -fsSL -o jetyet.sh https://raw.githubusercontent.com/LyceumHewun/jetyet/main/deploy/jetyet.sh && bash jetyet.sh install
+```
+
+Direct subcommands via pipe:
+
+```bash
+# Install Jetyet and required binaries (Bun, Hysteria 2, mihomo, sing-box)
+curl -fsSL https://raw.githubusercontent.com/LyceumHewun/jetyet/main/deploy/jetyet.sh | bash -s -- install
+
+# Upgrade Jetyet (add --with-deps to also upgrade third-party binaries)
+curl -fsSL https://raw.githubusercontent.com/LyceumHewun/jetyet/main/deploy/jetyet.sh | bash -s -- upgrade
+
+# Uninstall Jetyet (preserves /etc/jetyet, /var/lib/jetyet, and binaries unless --purge / --remove-deps is set)
+curl -fsSL https://raw.githubusercontent.com/LyceumHewun/jetyet/main/deploy/jetyet.sh | bash -s -- uninstall
+```
+
+The installer downloads `bun`, `hysteria`, `mihomo`, and `sing-box` to `/usr/local/bin/`, verifies each archive/binary against official GitHub Release SHA-256 digests (`SHASUMS256.txt` / `hashes.txt` / Release API digests) before executing it unprivileged, selects CPU-compatible `amd64` builds (`avx2` / x86-64-v3 / v2 / compatible fallback), deploys Jetyet to `/opt/jetyet`, installs `/usr/local/bin/jetyet`, and runs interactive setup for `/etc/jetyet/jetyet.config.json` on first install. Enter the public HTTPS origin and accept `/var/lib/jetyet/jetyet.sqlite` for the SQLite database, or choose another file under `/var/lib/jetyet`. The script waits for Web to respond and confirms all three systemd services are active before completing.
+
+After installation, manage the server directly with:
+
+```bash
+jetyet status
+jetyet upgrade            # or: jetyet upgrade --with-deps
+jetyet uninstall          # add --purge to also delete config, SQLite data, and the script-created jetyet user
+```
+
+Upgrades stage dependencies and locked `node_modules` unprivileged before stopping services, reuse the existing configuration, database, and previously deployed `--repo`/`--ref`, and automatically roll back `/opt/jetyet`, systemd units, and replaced dependencies if startup or health checks fail. Pass `--ref <branch|tag|sha>` or `--repo <owner/repo>` to deploy a custom source, `--gh-proxy <url>` (or `GH_PROXY`) to route downloads through a mirror (official SHA-256 verification still contacts GitHub directly unless `--insecure-skip-checksum` / `JETYET_SKIP_CHECKSUM=1` is set; note that Git source archives are not cryptographically signed), or set `BUN_VERSION`, `HYSTERIA_VERSION`, `MIHOMO_VERSION`, or `SING_BOX_VERSION` to pin exact dependency versions.
 
 If an existing configuration points outside `/var/lib/jetyet`, set its `database` field to the absolute production path before updating. If the old path contains data you need, stop all three services and migrate the SQLite database before changing the path. Keep its configuration and master key.
 
