@@ -3,6 +3,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
+import { hasEch, hasPinnedTls } from "../server/subscriptions";
 import type { Entity, Store } from "../server/db";
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -32,6 +33,14 @@ export async function probeNode(s: Store, n: Entity) {
   try {
     const path = join(dir, "config.yaml"),
       address = n.address.includes(":") ? `[${n.address}]` : n.address;
+    const tls = hasPinnedTls(n)
+      ? {
+          sni: n.sni,
+          insecure: true,
+          pinSHA256: n.certSha256,
+          ...(hasEch(n) ? { ech: n.echConfig } : {}),
+        }
+      : { insecure: true };
     let port = 0;
     for (let attempt = 0; attempt < 2; attempt++) {
       port = await freePort();
@@ -40,7 +49,7 @@ export async function probeNode(s: Store, n: Entity) {
         YAML.stringify({
           server: `${address}:${n.port}`,
           auth: s.secrets(n.id).probeToken,
-          tls: { insecure: true },
+          tls,
           socks5: { listen: `127.0.0.1:${port}` },
         }),
         { mode: 0o600 },

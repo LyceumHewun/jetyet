@@ -326,10 +326,12 @@ export function SwitchPill({
 
 export function Checkbox({
   checked,
+  disabled = false,
   onChange,
   children,
 }: {
   checked: boolean;
+  disabled?: boolean;
   onChange: (next: boolean) => void;
   children: ReactNode;
 }) {
@@ -338,8 +340,11 @@ export function Checkbox({
       type="button"
       role="checkbox"
       aria-checked={checked}
+      disabled={disabled}
       className={"ui-checkbox" + (checked ? " checked" : "")}
-      onClick={() => onChange(!checked)}
+      onClick={() => {
+        if (!disabled) onChange(!checked);
+      }}
     >
       <span className="ui-checkbox-box">
         {checked && <Check size={12} strokeWidth={3} />}

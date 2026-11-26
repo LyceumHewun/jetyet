@@ -5,7 +5,7 @@ import { join } from "node:path";
 import YAML from "yaml";
 import type { TemplateFormat } from "../shared/schemas";
 import { HttpError } from "./errors";
-import { subscriptionNodes } from "./subscriptions";
+import { hasEch, hasPinnedTls, subscriptionNodes } from "./subscriptions";
 import type { Entity, Store } from "./db";
 const engine = new Liquid({
   strictVariables: true,
@@ -19,6 +19,7 @@ const credentialField =
   /(?:^|[-_])(?:password|passwd|uuid|token|secret|username|authentication|auth|authorization|key|cookie|psk)(?:$|[-_])|^(?:api|private|access)key$/i;
 
 function isCredentialField(key: string) {
+  if (/^(?:client_)?certificate_public_key_sha256$/i.test(key)) return false;
   return credentialField.test(key.replace(/([a-z0-9])([A-Z])/g, "$1-$2"));
 }
 
@@ -98,6 +99,17 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
     if ("sni" in proxy) proxy.sni = host;
     if ("servername" in proxy) proxy.servername = host;
     if ("server-name" in proxy) proxy["server-name"] = host;
+    if ("fingerprint" in proxy && proxy.fingerprint)
+      proxy.fingerprint = "REDACTED";
+    if (proxy["ech-opts"] && typeof proxy["ech-opts"] === "object") {
+      if ("config" in proxy["ech-opts"] && proxy["ech-opts"].config)
+        proxy["ech-opts"].config = "REDACTED";
+      if (
+        "query-server-name" in proxy["ech-opts"] &&
+        proxy["ech-opts"]["query-server-name"]
+      )
+        proxy["ech-opts"]["query-server-name"] = host;
+    }
   }
   for (const [literal, simulated] of literalNames) {
     const placeholder = names.get(simulated);
@@ -187,7 +199,18 @@ function redactSingBoxPreview(
     outbound.server = "node-" + index + ".invalid";
     if ("server_port" in outbound) outbound.server_port = 443;
     if ("server_ports" in outbound) outbound.server_ports = ["443:444"];
-    if (outbound.tls?.server_name) outbound.tls.server_name = outbound.server;
+    if (outbound.tls && typeof outbound.tls === "object") {
+      if (outbound.tls.server_name) outbound.tls.server_name = outbound.server;
+      if (outbound.tls.certificate_public_key_sha256)
+        outbound.tls.certificate_public_key_sha256 = ["REDACTED"];
+      if (outbound.tls.certificate_sha256)
+        outbound.tls.certificate_sha256 = ["REDACTED"];
+      if (outbound.tls.ech && typeof outbound.tls.ech === "object") {
+        if (outbound.tls.ech.config) outbound.tls.ech.config = ["REDACTED"];
+        if (outbound.tls.ech.query_server_name)
+          outbound.tls.ech.query_server_name = outbound.server;
+      }
+    }
   }
   for (const [literal, simulated] of literalNames) {
     if (aliases.has(simulated)) aliases.set(literal, aliases.get(simulated)!);
@@ -240,7 +263,7 @@ engine.registerFilter("indent", (v, n) => {
     .map((l) => " ".repeat(width) + l)
     .join("\n");
 });
-const singBoxTemplate = `{
+export const defaultSingBoxTemplate = `{
   "log": {"level": "warn"},
   "dns": {"servers": [{"type": "https", "tag": "cloudflare", "server": "1.1.1.1"}], "final": "cloudflare"},
   "inbounds": [{"type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30"], "auto_route": true}],
@@ -264,7 +287,7 @@ const singBoxTemplate = `{
 export function seedTemplate(s: Store) {
   for (const [format, body] of [
     ["mihomo", defaultTemplate],
-    ["sing-box", singBoxTemplate],
+    ["sing-box", defaultSingBoxTemplate],
   ]) {
     if (!s.list("template").some((t) => t.format === format && t.builtin))
       s.put("template", {
@@ -304,12 +327,39 @@ function proxies(
         literalNames.set(n.name, name);
       }
     }
+    const pinned = hasPinnedTls(n);
+    const ech = hasEch(n);
+    const server = simulated ? `node-${i + 1}.invalid` : n.address;
     if (format === "sing-box") {
+      const tls = pinned
+        ? {
+            enabled: true,
+            server_name: simulated ? server : n.sni,
+            insecure: false,
+            certificate_public_key_sha256: [
+              simulated ? "REDACTED" : n.certSpkiSha256,
+            ],
+            ...(ech
+              ? {
+                  ech: {
+                    enabled: true,
+                    config: simulated
+                      ? ["REDACTED"]
+                      : [
+                          "-----BEGIN ECH CONFIGS-----",
+                          n.echConfig,
+                          "-----END ECH CONFIGS-----",
+                        ],
+                  },
+                }
+              : {}),
+          }
+        : { enabled: true, insecure: true };
       return {
         name,
         tag: name,
         type: "hysteria2",
-        server: simulated ? "node-" + (i + 1) + ".invalid" : n.address,
+        server,
         ...(!simulated && n.hopping
           ? {
               server_ports: [n.hopping.replace("-", ":")],
@@ -317,14 +367,14 @@ function proxies(
             }
           : { server_port: simulated ? 443 : n.port }),
         password: mode === "live" ? s.secrets(u.id).vpnToken : "REDACTED",
-        tls: { enabled: true, insecure: true },
+        tls,
         ...(n.congestion === "bbr" ? {} : { up_mbps: 1000, down_mbps: 1000 }),
       };
     }
     return {
       name,
       type: "hysteria2",
-      server: simulated ? `node-${i + 1}.invalid` : n.address,
+      server,
       ...(!simulated && n.hopping
         ? {
             ports: n.hopping,
@@ -332,7 +382,21 @@ function proxies(
           }
         : { port: simulated ? 443 : n.port }),
       password: mode === "live" ? s.secrets(u.id).vpnToken : "REDACTED",
-      "skip-cert-verify": true,
+      ...(pinned
+        ? {
+            sni: simulated ? server : n.sni,
+            fingerprint: simulated ? "REDACTED" : n.certSha256,
+            "skip-cert-verify": false,
+            ...(ech
+              ? {
+                  "ech-opts": {
+                    enable: true,
+                    config: simulated ? "REDACTED" : n.echConfig,
+                  },
+                }
+              : {}),
+          }
+        : { "skip-cert-verify": true }),
       udp: true,
       ...(n.congestion === "bbr"
         ? { "bbr-profile": "standard" }

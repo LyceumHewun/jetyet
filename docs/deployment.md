@@ -22,7 +22,7 @@
 - Long-running operations support cancellation at safe step boundaries; retain and display remote changes already completed rather than promising automatic rollback.
 - Retrying or cleaning up a partially completed operation requires a subsequent explicit management action.
 - Serve the management interface and subscription download endpoints under one domain over HTTPS, terminated by a reverse proxy.
-- Management and subscription HTTPS use a normally validated certificate; the self-signed, verification-skipping policy applies only to VPN node connections.
+- Management and subscription HTTPS use a normally validated certificate; locally generated self-signed certificates apply only to VPN node connections.
 - Administrator credentials are configured in a local configuration file.
 - Setup prompts for the administrator username. Change it later through `admin.username` and restart Web. Usernames are case-insensitive, and Web rejects conflicts with subscription usernames.
 - An administrator can supply a new password as plaintext in that file; after a successful application startup processes it, the application replaces the plaintext with a protected representation.
@@ -78,10 +78,21 @@
 - A dual-stack VPS produces one node subscription entry with one administrator-selected advertised IPv4 or IPv6 address; SSH may use a different address.
 - The advertised ingress address does not constrain egress: a dual-stack VPS may reach both IPv4 and IPv6 destinations, subject to its actual network connectivity.
 - Let normal node resolution and routing choose the egress address family; do not implement per-user or per-site forced IPv4/IPv6 egress policy management.
-- Generate a self-signed TLS certificate during deployment.
-- Generated mihomo node configurations must set `skip-cert-verify: true`, as explicitly requested by the administrator.
-- Skipping certificate verification leaves clients unable to authenticate the server certificate and permits server impersonation by an active intermediary.
-- Do not require domain provisioning, ACME issuance, or automated public certificate renewal.
+- Generate a self-signed TLS certificate locally during deployment; do not require domain provisioning, ACME issuance, or automated public certificate renewal.
+- New deployments enable TLS security (forced SNI + `pinSHA256` pinning) by default, using a platform default SNI when the administrator leaves SNI blank. Generate the self-signed certificate with the selected SNI as CN and DNS SAN, and enforce SNI matching on the server (`sniGuard: strict`).
+- Keep existing legacy deployments without verified TLS security working without drift alerts or broken subscriptions: render legacy nodes with `skip-cert-verify: true` (mihomo), `tls.insecure: true` (sing-box), and `insecure=1` (Shadowrocket).
+- For nodes with verified TLS security, render strict certificate pinning and SNI across all supported formats:
+  - mihomo: `sni`, `fingerprint` (leaf certificate DER SHA-256 hex), and `skip-cert-verify: false`.
+  - sing-box (1.13+ only; older sing-box versions are not supported): `tls.server_name`, `tls.certificate_public_key_sha256` (SPKI SHA-256 Base64 array), and `tls.insecure: false`.
+  - Shadowrocket: `sni=<sni>&pinSHA256=<cert-sha256-hex>&insecure=1` (standard Hysteria 2 URI form for self-signed leaf pinning).
+- Support ECH (Encrypted Client Hello) as an independent per-node option (disabled by default, requires TLS security enabled and Hysteria 2 v2.12.3 or later). Configure an outer decoy public name (with a platform default when omitted), generate `/etc/jetyet/ech.pem` locally on the VPS, keep ECH private keys on the VPS only, and collect only the public ECHConfigList Base64 into the control plane.
+- For nodes with verified ECH, render client ECH settings across all supported formats:
+  - mihomo: `ech-opts: { enable: true, config: "<base64>" }`.
+  - sing-box: `tls.ech: { enabled: true, config: ["-----BEGIN ECH CONFIGS-----", "<base64>", "-----END ECH CONFIGS-----"] }`.
+  - Shadowrocket: append `&ech=<url-encoded-base64>` (requires a current Shadowrocket build supporting Hysteria 2 ECH).
+- Preserve existing valid `/etc/jetyet/server.{crt,key}` and `/etc/jetyet/ech.pem` across normal upgrades and reapplies when the SNI and ECH public name are unchanged, avoiding unnecessary fingerprint or ECH config rotation. Re-issue only when switching from legacy, changing SNI or ECH public name, or explicitly rotating.
+- Publish changed TLS security or ECH settings to subscriptions only after remote deployment, upgrade, or manual detection verifies the running node and collects its actual certificate fingerprints and public ECH config. Switching a node from legacy to pinned SNI/ECH requires subscribers to refresh their subscription.
+- Node connection probes (`probeNode`) use the node's verified SNI, `pinSHA256`, and ECH settings (with `insecure: true` so Go TLS skips system CA verification for the self-signed certificate while strictly enforcing leaf `pinSHA256`, falling back to unpinned `insecure: true` only for legacy nodes). The management host's local `hysteria`, `mihomo`, and `sing-box` (1.13+) binaries must support these fields.
 - Port hopping is optional per node and disabled by default.
 - Administrators can configure a node's hopping port range; the platform manages corresponding server forwarding rules and subscription parameters together.
 - The mihomo subscription renders `ports` and `hop-interval` for hopping nodes, and `port` for single-port nodes.
@@ -96,7 +107,7 @@
 - On VPS hosts below 2 GiB with no existing swap, create a swap file the size of physical memory only if at least 2 GiB of disk space will remain after allocation. Skip swap creation at 2 GiB of RAM or more. Log the applied settings and reasons for skipped changes.
 - Disabling adaptive performance tuning skips it in future deployments. Preserve any UDP buffer changes and swap already applied to the VPS when tuning is disabled or the node is deleted.
 - For administrator-executed deployment, first create the VPS record and confirm SSH access. The platform shows a short shell command that retrieves the node-specific script over HTTPS and executes it on the target VPS.
-- The installation link is bound to the node and the options selected when it was issued, including version, performance tuning, and congestion control. It expires after 15 minutes and permits repeated downloads before expiry so the administrator can retry.
+- The installation link is bound to the node and the options selected when it was issued, including version, performance tuning, congestion control, TLS security (SNI/pinSHA256), and ECH settings. It expires after 15 minutes and permits repeated downloads before expiry so the administrator can retry.
 - After running the command, the administrator selects Detect installation in the platform. SSH inspection verifies the deployment.
 - Do not introduce a separate deployment registration callback service.
 - Failed deployments retain execution progress and errors and support retry after inspecting the host's actual state.
@@ -107,6 +118,6 @@
 - Initial SSH connection requires administrator confirmation of the host key fingerprint before credentials are sent or management commands are executed.
 - Pin the confirmed host key. A changed fingerprint suspends SSH connections until the administrator explicitly verifies and accepts the replacement, including after host reinstallation.
 - Hysteria 2 upgrades are administrator-triggered and selectable per node; do not automatically upgrade all nodes.
-- Show the target version and execution result, preserve the current configuration before upgrading, and record an in-platform alert on failure.
+- A per-node upgrade can update the Hysteria 2 version and adopt or change TLS security (SNI + `pinSHA256`) and ECH options in one operation, preserving the current configuration backup before upgrading and recording an in-platform alert on failure.
 
-Reference: [Hysteria2 deployment notes](https://qlan.cc/post/hysteria2/). The reference generates a self-signed certificate but shows `skip-cert-verify: false` in its client example; this project explicitly uses `true` instead. Other settings in that article are not automatically adopted.
+Reference: [Hysteria2 deployment notes](https://qlan.cc/post/hysteria2/). Locally generated self-signed certificates are retained without requiring domains or ACME; new and upgraded nodes use forced SNI with `pinSHA256` (and optional ECH) instead of skipping certificate verification, while legacy nodes remain compatible until upgraded.

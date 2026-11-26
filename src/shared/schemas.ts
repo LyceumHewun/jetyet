@@ -99,16 +99,83 @@ export const nodeSchema = z.object({
   hopInterval: z.number().int().min(5).max(3600).default(30),
   enabled: z.boolean().default(true),
 });
-export const deploymentOptionsSchema = z.object({
+import {
+  DEFAULT_ECH_PUBLIC_NAME,
+  DEFAULT_HYSTERIA_VERSION,
+  DEFAULT_TLS_SNI,
+  MIN_BBR_VERSION,
+  MIN_ECH_VERSION,
+  compareHysteriaVersion,
+  isValidDnsName,
+  type TlsSecurityMode,
+} from "./tls";
+
+export {
+  DEFAULT_ECH_PUBLIC_NAME,
+  DEFAULT_HYSTERIA_VERSION,
+  DEFAULT_TLS_SNI,
+  MIN_BBR_VERSION,
+  MIN_ECH_VERSION,
+  compareHysteriaVersion,
+  isValidDnsName,
+  type TlsSecurityMode,
+};
+
+export const tlsSecuritySchema = z.enum(["legacy", "pinned"]);
+
+const optionalDnsNameSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .default("")
+  .refine((v) => !v || isValidDnsName(v), "Enter a valid domain name");
+
+const deploymentOptionsShape = {
   protocol: z.literal("hysteria2"),
   tuning: z.boolean(),
   congestion: z.enum(["brutal", "bbr"]),
-});
+  tlsSecurity: tlsSecuritySchema.default("legacy"),
+  sni: optionalDnsNameSchema,
+  ech: z.boolean().default(false),
+  echPublicName: optionalDnsNameSchema,
+};
+
+function normalizeDeploymentOptions<
+  T extends {
+    tlsSecurity: TlsSecurityMode;
+    sni: string;
+    ech: boolean;
+    echPublicName: string;
+  },
+>(value: T): T {
+  const pinned = value.tlsSecurity === "pinned";
+  return {
+    ...value,
+    sni: pinned ? value.sni || DEFAULT_TLS_SNI : "",
+    echPublicName: value.ech ? value.echPublicName || DEFAULT_ECH_PUBLIC_NAME : "",
+  };
+}
+
+export const deploymentOptionsSchema = z
+  .object(deploymentOptionsShape)
+  .refine(
+    (v) => !v.ech || v.tlsSecurity === "pinned",
+    "ECH requires forced SNI and pinSHA256 TLS security",
+  )
+  .transform(normalizeDeploymentOptions);
 export const deploymentVersionSchema = z.string().regex(/^v2\.\d+\.\d+$/);
-export const deploymentRequestSchema = deploymentOptionsSchema.extend({
-  version: deploymentVersionSchema,
-});
+export const deploymentRequestSchema = z
+  .object({
+    ...deploymentOptionsShape,
+    version: deploymentVersionSchema,
+  })
+  .refine(
+    (v) => !v.ech || v.tlsSecurity === "pinned",
+    "ECH requires forced SNI and pinSHA256 TLS security",
+  )
+  .transform(normalizeDeploymentOptions);
 export type DeploymentOptions = z.infer<typeof deploymentOptionsSchema>;
+export type DeploymentOptionsInput = z.input<typeof deploymentOptionsSchema>;
 export const usernameSchema = z
   .string()
   .trim()

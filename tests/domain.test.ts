@@ -33,7 +33,11 @@ import {
 import { digest, token, vault } from "../src/server/crypto";
 import { storage, strip, type Store } from "../src/server/db";
 import { claim, enqueue, finish } from "../src/server/tasks";
-import { defaultTemplate, render } from "../src/server/templates";
+import {
+  defaultSingBoxTemplate,
+  defaultTemplate,
+  render,
+} from "../src/server/templates";
 import { runOperation } from "../src/workers/operations";
 
 let s: Store, dir: string;
@@ -782,6 +786,15 @@ describe("queue and encryption", () => {
         "v2.13.0",
         true,
       ),
+      deploymentScript(s, node, "v2.14.0", false, {
+        protocol: "hysteria2",
+        congestion: "bbr",
+        tuning: false,
+        tlsSecurity: "pinned",
+        sni: "cdn.example.com",
+        ech: true,
+        echPublicName: "cloudflare-ech.com",
+      }),
       detectionScript,
       removeScript(node.id),
     ]) {
@@ -1177,5 +1190,174 @@ describe("detect operation and concurrent safety", () => {
     finish(s, t3, "failed");
     expect(s.get(node.id)?.deleting).toBe(true);
     expect(s.get(node.id)?.status).toBe("draft");
+  });
+
+  test("per-node upgrade transitions legacy nodes to pinned SNI + pinSHA256 + ECH across all subscription formats", async () => {
+    const { host, node, user } = fixture();
+    const app = createApp(s);
+    const certSha256 = "ab".repeat(32);
+    const certSpkiSha256 = Buffer.alloc(32, 7).toString("base64");
+    const echConfig = Buffer.from("ech-config-list-fixture").toString("base64");
+    const subBase = `/sub/${s.secrets(user.id).subscriptionToken}`;
+
+    // Legacy node stays compatible before upgrade
+    const legacyMihomo = YAML.parse(
+      await (await app.request(`${subBase}?format=mihomo`)).text(),
+    ).proxies[0];
+    expect(legacyMihomo["skip-cert-verify"]).toBe(true);
+    expect(legacyMihomo.fingerprint).toBeUndefined();
+    expect(legacyMihomo["ech-opts"]).toBeUndefined();
+
+    const legacySingBox = JSON.parse(
+      await (await app.request(`${subBase}?format=sing-box`)).text(),
+    ).outbounds.find((o: any) => o.type === "hysteria2");
+    expect(legacySingBox.tls).toEqual({ enabled: true, insecure: true });
+
+    const legacyShadowrocket = Buffer.from(
+      await (await app.request(`${subBase}?format=shadowrocket`)).text(),
+      "base64",
+    ).toString("utf8");
+    expect(legacyShadowrocket).toContain("?insecure=1#");
+    expect(legacyShadowrocket).not.toContain("pinSHA256=");
+
+    // Enqueue one-click upgrade via API with default SNI + ECH
+    const login = await app.request("/api/login", {
+      method: "POST",
+      headers: { origin: s.config.origin },
+      body: JSON.stringify({ username: "ADMIN", password: "correct-password" }),
+    });
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+
+    // Reject ECH on unsupported Hysteria 2 version
+    const tooOld = await app.request(`/api/nodes/${node.id}/operation`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+      body: JSON.stringify({
+        kind: "upgrade",
+        version: "v2.12.2",
+        protocol: "hysteria2",
+        congestion: "brutal",
+        tuning: false,
+        tlsSecurity: "pinned",
+        sni: "",
+        ech: true,
+        echPublicName: "",
+      }),
+    });
+    expect(tooOld.status).toBe(400);
+
+    const queued = await app.request(`/api/nodes/${node.id}/operation`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+      body: JSON.stringify({
+        kind: "upgrade",
+        version: "v2.14.0",
+        protocol: "hysteria2",
+        congestion: "bbr",
+        tuning: false,
+        tlsSecurity: "pinned",
+        sni: "",
+        ech: true,
+        echPublicName: "",
+      }),
+    });
+    expect(queued.status).toBe(202);
+
+    const upgradedOptions = {
+      protocol: "hysteria2" as const,
+      congestion: "bbr" as const,
+      tuning: false,
+      tlsSecurity: "pinned" as const,
+      sni: "bing.com",
+      ech: true,
+      echPublicName: "cloudflare-ech.com",
+    };
+    const expectedHash = digest(serverConfig(s, node, upgradedOptions));
+    const task = claim(s, false, "ops")!;
+    await runOperation(s, task, async (script) => {
+      if (script !== detectionScript) return "Deployment verified";
+      return JSON.stringify({
+        ...upgradedOptions,
+        owner: "jetyet",
+        phase: "ready",
+        version: "v2.14.0",
+        actualVersion: "v2.14.0",
+        nodeId: node.id,
+        hostId: host.id,
+        address: node.address,
+        port: node.port,
+        hopping: node.hopping,
+        configHash: expectedHash,
+        actualHash: expectedHash,
+        certSha256,
+        certSpkiSha256,
+        certDnsSans: ["bing.com"],
+        echConfig,
+        echDetectedPublicName: "cloudflare-ech.com",
+        active: true,
+      });
+    });
+
+    // Subscriptions now publish pinned SNI + pinSHA256 + ECH across all formats
+    const mihomoProxy = YAML.parse(
+      await (await app.request(`${subBase}?format=mihomo`)).text(),
+    ).proxies[0];
+    expect(mihomoProxy).toMatchObject({
+      sni: "bing.com",
+      fingerprint: certSha256,
+      "skip-cert-verify": false,
+      "ech-opts": { enable: true, config: echConfig },
+    });
+
+    const singBoxOutbound = JSON.parse(
+      await (await app.request(`${subBase}?format=sing-box`)).text(),
+    ).outbounds.find((o: any) => o.type === "hysteria2");
+    expect(singBoxOutbound.tls).toEqual({
+      enabled: true,
+      server_name: "bing.com",
+      insecure: false,
+      certificate_public_key_sha256: [certSpkiSha256],
+      ech: {
+        enabled: true,
+        config: [
+          "-----BEGIN ECH CONFIGS-----",
+          echConfig,
+          "-----END ECH CONFIGS-----",
+        ],
+      },
+    });
+
+    const shadowrocketUri = Buffer.from(
+      await (await app.request(`${subBase}?format=shadowrocket`)).text(),
+      "base64",
+    ).toString("utf8");
+    const parsedUri = new URL(shadowrocketUri);
+    expect(parsedUri.searchParams.get("sni")).toBe("bing.com");
+    expect(parsedUri.searchParams.get("insecure")).toBe("1");
+    expect(parsedUri.searchParams.get("pinSHA256")).toBe(certSha256);
+    expect(parsedUri.searchParams.get("ech")).toBe(echConfig);
+
+    // Portal previews hide real SNI, pins, and ECH config
+    const mihomoPreview = render(
+      s,
+      user,
+      defaultTemplate,
+      "portal-preview",
+      "mihomo",
+    );
+    expect(mihomoPreview).not.toContain("bing.com");
+    expect(mihomoPreview).not.toContain(certSha256);
+    expect(mihomoPreview).not.toContain(echConfig);
+
+    const singBoxPreview = render(
+      s,
+      user,
+      defaultSingBoxTemplate,
+      "portal-preview",
+      "sing-box",
+    );
+    expect(singBoxPreview).not.toContain("bing.com");
+    expect(singBoxPreview).not.toContain(certSpkiSha256);
+    expect(singBoxPreview).not.toContain(echConfig);
   });
 });

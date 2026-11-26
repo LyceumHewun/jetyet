@@ -27,6 +27,25 @@ function matchesDeployment(
   version: string,
 ) {
   const expectedHash = digest(serverConfig(s, node, options));
+  const actualTlsSecurity =
+    actual.tlsSecurity === "pinned" ? "pinned" : "legacy";
+  const actualSni = typeof actual.sni === "string" ? actual.sni : "";
+  const actualEch = actual.ech === true;
+  const actualEchPublicName =
+    typeof actual.echPublicName === "string" ? actual.echPublicName : "";
+  const pinnedOk =
+    options.tlsSecurity !== "pinned" ||
+    (typeof actual.certSha256 === "string" &&
+      /^[a-f0-9]{64}$/.test(actual.certSha256) &&
+      typeof actual.certSpkiSha256 === "string" &&
+      /^[A-Za-z0-9+/]{43}=$/.test(actual.certSpkiSha256) &&
+      Array.isArray(actual.certDnsSans) &&
+      actual.certDnsSans.includes(options.sni));
+  const echOk =
+    !options.ech ||
+    (typeof actual.echConfig === "string" &&
+      actual.echConfig.length > 0 &&
+      actual.echDetectedPublicName === options.echPublicName);
   return (
     actual.owner === "jetyet" &&
     actual.phase === "ready" &&
@@ -38,12 +57,39 @@ function matchesDeployment(
     actual.protocol === options.protocol &&
     actual.congestion === options.congestion &&
     actual.tuning === options.tuning &&
+    actualTlsSecurity === options.tlsSecurity &&
+    actualSni === options.sni &&
+    actualEch === options.ech &&
+    actualEchPublicName === options.echPublicName &&
+    pinnedOk &&
+    echOk &&
     actual.version === version &&
     typeof actual.actualVersion === "string" &&
     actual.actualVersion.split(/[^\w.-]+/).includes(version) &&
     actual.configHash === expectedHash &&
     actual.actualHash === expectedHash
   );
+}
+
+function verifiedSecurityFields(
+  options: DeploymentOptions,
+  actual: Record<string, unknown>,
+) {
+  return {
+    certSha256:
+      options.tlsSecurity === "pinned" && typeof actual.certSha256 === "string"
+        ? actual.certSha256
+        : "",
+    certSpkiSha256:
+      options.tlsSecurity === "pinned" &&
+      typeof actual.certSpkiSha256 === "string"
+        ? actual.certSpkiSha256
+        : "",
+    echConfig:
+      options.ech && typeof actual.echConfig === "string"
+        ? actual.echConfig
+        : "",
+  };
 }
 
 export async function runOperation(
@@ -80,7 +126,9 @@ export async function runOperation(
       const options =
         t.kind === "deploy"
           ? deploymentOptionsSchema.parse(p)
-          : nodeDeploymentOptions(n);
+          : t.kind === "upgrade" && "protocol" in p
+            ? deploymentOptionsSchema.parse(p)
+            : nodeDeploymentOptions(n);
       checkpoint(
         1,
         "Applying native Hysteria 2 deployment; existing connections may be interrupted",
@@ -135,6 +183,7 @@ export async function runOperation(
             {
               ...strip(latestNode),
               ...options,
+              ...verifiedSecurityFields(options, actual),
               status: "ready",
               version,
               configHash: actual.configHash,
@@ -213,6 +262,7 @@ export async function runOperation(
             {
               ...strip(latest.node),
               ...options,
+              ...verifiedSecurityFields(options, actual),
               status: "ready",
               version,
               configHash: actual.configHash,

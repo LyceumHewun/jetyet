@@ -67,8 +67,8 @@ export const zhHans = {
   "∞ Unlimited": "∞ 不限",
   nodes: "个节点",
   templates: "个模板",
-  "Native Hysteria 2 · self-signed cert. Network changes require a reapply operation.":
-    "原生 Hysteria 2 · 自签名证书。修改网络设置后须重新应用配置。",
+  "Native Hysteria 2 · self-signed cert with forced SNI & pinSHA256. Network changes require a reapply operation.":
+    "原生 Hysteria 2 · 带强制 SNI 与 pinSHA256 的自签名证书。修改网络设置后须重新应用配置。",
   "Sign-in username must be 1–100 characters using ASCII letters, digits, ., _, or -.":
     "用户名须为 1 至 100 个字符，只能使用 ASCII 字母、数字、点号、下划线或连字符。",
   Profile: "基本资料",
@@ -700,6 +700,35 @@ export const zhHans = {
     "mihomo 配置验证失败；请检查代理组、规则和 DNS 设置。",
   "sing-box configuration validation failed; check groups, rules and DNS settings.":
     "sing-box 配置验证失败；请检查出站组、规则和 DNS 设置。",
+  "Enter a valid domain name": "请输入有效的域名",
+  "ECH requires forced SNI and pinSHA256 TLS security":
+    "启用 ECH 需要同时启用强制 SNI 和 pinSHA256 TLS 安全模式",
+  "ECH requires Hysteria 2 v2.12.3 or later":
+    "ECH 要求 Hysteria 2 v2.12.3 或更高版本",
+  "ECH requires Hysteria 2 v2.12.3 or later.":
+    "ECH 要求 Hysteria 2 v2.12.3 或更高版本。",
+  "TLS security": "TLS 安全模式",
+  "Pinned mode enforces SNI matching on the server and pins the self-signed certificate in subscriptions. Legacy mode preserves older verification-skipping deployments.":
+    "固定指纹模式会在服务端强制校验 SNI，并在订阅中下发自签名证书指纹（pinSHA256）。兼容模式保留旧版跳过证书验证的部署方式。",
+  "Forced SNI + pinSHA256 (Recommended)": "强制 SNI + pinSHA256（推荐）",
+  "Legacy (skip-cert-verify)": "兼容模式（跳过证书校验）",
+  "Legacy TLS": "旧版 TLS",
+  "Forced SNI": "强制 SNI",
+  "Optional. Leave blank to use the default SNI ({0}). Changing SNI re-issues the self-signed certificate.":
+    "可选，留空将使用默认 SNI（{0}）。修改 SNI 会重新签发自签名证书。",
+  "Encrypted Client Hello (ECH)": "加密客户端问候（ECH）",
+  "Optional and independent. Hides the inner SNI behind an outer decoy domain; private keys stay on the VPS.":
+    "独立可选项。将真实内层 SNI 隐藏在外层伪装域名之后，私钥仅保留在 VPS 本地。",
+  "Requires Forced SNI + pinSHA256 TLS security.":
+    "需要先启用「强制 SNI + pinSHA256」TLS 安全模式。",
+  "Enable ECH": "启用 ECH",
+  "ECH public name": "ECH 外层伪装域名",
+  "Optional outer decoy SNI visible on the network. Leave blank to use {0}.":
+    "可选，网络上可见的外层伪装 SNI。留空将使用默认值 {0}。",
+  "TLS & SECURITY": "TLS 与安全",
+  "TRANSPORT & TUNING": "传输与调优",
+  "Upgrading from legacy TLS will issue a pinned SNI certificate. Subscribers must refresh their subscription after the upgrade succeeds.":
+    "从旧版 TLS 升级会重新签发带 SNI 的自签名证书，升级成功后订阅用户需刷新一次订阅。",
 } as const;
 
 export type Message = keyof typeof zhHans;
