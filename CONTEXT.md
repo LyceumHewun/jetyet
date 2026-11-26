@@ -191,8 +191,7 @@ The proportion of expected reachability observations actually performed during a
 - Detection identifies the configuration and state of those deployments; adopting arbitrary pre-existing VPN services is outside the product scope.
 - Administrators explicitly assign an allowed set of **Nodes** to each **Subscription User**, with a select-all action available.
 - Subscription output, VPN credential provisioning, and actual connection authorization all follow the user's allowed node set.
-- A **Subscription User** with no assigned nodes cannot retrieve subscriptions in any output format.
-- If all assigned nodes are disabled, subscription retrieval is unavailable in every output format until an assigned node is enabled and eligible again.
+- When a **Subscription User** has no eligible assigned nodes (none assigned or all assigned nodes disabled), built-in **mihomo** and **sing-box** subscriptions route traffic through `DIRECT`, while **Shadowrocket** subscriptions remain unavailable until an assigned node is enabled and eligible again.
 - Select-all assigns only nodes that currently exist; newly created nodes require explicit assignment and are not automatically shared.
 - Each **Subscription User** has one subscription entry point, one allowed node set, and one shared traffic allowance across output formats.
 - A template-specific subscription URL always uses the selected template's type as its output format, regardless of the client User-Agent. An explicit format that conflicts with the selected template type returns HTTP 400.

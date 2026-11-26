@@ -470,8 +470,19 @@ describe("authorization and templates", () => {
     ).toContain("text/yaml");
     expect((await app.request(selected + "&format=sing-box")).status).toBe(400);
     s.put("node", { ...strip(node), enabled: false }, undefined, node.id);
-    for (const format of ["mihomo", "sing-box", "shadowrocket"])
-      expect((await app.request(path + "?format=" + format)).status).toBe(403);
+    const emptyMihomo = await app.request(path + "?format=mihomo");
+    expect(emptyMihomo.status).toBe(200);
+    expect(YAML.parse(await emptyMihomo.text())["proxy-groups"][0].proxies).toEqual([
+      "DIRECT",
+    ]);
+    const emptySingBox = await app.request(path + "?format=sing-box");
+    expect(emptySingBox.status).toBe(200);
+    expect(
+      (await emptySingBox.json()).outbounds.find(
+        (outbound: { tag: string }) => outbound.tag === "Proxy",
+      ).outbounds,
+    ).toEqual(["DIRECT"]);
+    expect((await app.request(path + "?format=shadowrocket")).status).toBe(403);
   });
   test("subscription emits fields for the node's port and congestion modes", async () => {
     const { node, user } = fixture();
