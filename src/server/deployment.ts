@@ -248,7 +248,7 @@ if test -e /etc/jetyet/manifest.json; then
   ${
     reapply
       ? "true"
-      : `python3 -c ${quote(`import json,hashlib,os; m=json.load(open('/etc/jetyet/manifest.json')); p='/etc/jetyet/config.yaml'; allowed=['${previousHash}','${desiredHash}']; hashes=[m['configHash']] if m['phase']=='ready' else allowed; sec=lambda o: (o.get('tlsSecurity') if o.get('tlsSecurity')=='pinned' else 'legacy', o.get('sni') or '', bool(o.get('ech')), o.get('echPublicName') or ''); prev_ver=${JSON.stringify(previousVersion)}; prev_id=${JSON.stringify(previousDeploymentId)}; next_id=${JSON.stringify(deploymentId)}; prev_sec=sec(json.loads(${JSON.stringify(JSON.stringify(previousOptions))})); next_sec=sec(json.loads(${JSON.stringify(JSON.stringify(options))})); cur_ver=m.get('version') or ''; cur_id=m.get('deploymentId') or ''; cur_sec=sec(m); same_retry=(cur_id==next_id and cur_ver==${JSON.stringify(version)} and m['configHash']=='${desiredHash}' and cur_sec==next_sec); prev_match=(bool(prev_ver) and cur_ver==prev_ver and m['configHash']=='${previousHash}' and cur_sec==prev_sec and (not prev_id or cur_id==prev_id)); ready_ok=(prev_match or same_retry); install_ok=((cur_id==next_id and cur_ver==${JSON.stringify(version)} and cur_sec==next_sec) or (bool(prev_ver) and m['configHash']=='${previousHash}' and cur_sec==prev_sec)); assert ((ready_ok and os.path.exists(p) and hashlib.sha256(open(p,'rb').read()).hexdigest() in hashes) if m['phase']=='ready' else (m['phase']=='installing' and install_ok and (not os.path.exists(p) or hashlib.sha256(open(p,'rb').read()).hexdigest() in allowed))), 'Configuration drift: explicitly reapply platform configuration'`)}`
+      : `python3 -c ${quote(`import json,hashlib,os; m=json.load(open('/etc/jetyet/manifest.json')); p='/etc/jetyet/config.yaml'; allowed=['${previousHash}','${desiredHash}']; hashes=[m['configHash']] if m['phase']=='ready' else allowed; sec=lambda o: (o.get('tlsSecurity') if o.get('tlsSecurity')=='pinned' else 'legacy', o.get('sni') or '', bool(o.get('ech')), o.get('echPublicName') or ''); prev_ver=${JSON.stringify(previousVersion)}; prev_id=${JSON.stringify(previousDeploymentId)}; next_id=${JSON.stringify(deploymentId)}; prev_sec=sec(json.loads(${JSON.stringify(JSON.stringify(previousOptions))})); next_sec=sec(json.loads(${JSON.stringify(JSON.stringify(options))})); cur_ver=m.get('version') or ''; cur_id=m.get('deploymentId') or ''; cur_sec=sec(m); same_retry=(cur_id==next_id and cur_ver==${JSON.stringify(version)} and m['configHash']=='${desiredHash}' and cur_sec==next_sec); prev_match=(bool(prev_ver) and cur_ver==prev_ver and m['configHash']=='${previousHash}' and cur_sec==prev_sec and cur_id==prev_id); ready_ok=(prev_match or same_retry); install_ok=((cur_id==next_id and cur_ver==${JSON.stringify(version)} and cur_sec==next_sec) or (not cur_id and not prev_id and bool(prev_ver) and m['configHash']=='${previousHash}' and cur_sec==prev_sec)); assert ((ready_ok and os.path.exists(p) and hashlib.sha256(open(p,'rb').read()).hexdigest() in hashes) if m['phase']=='ready' else (m['phase']=='installing' and install_ok and (not os.path.exists(p) or hashlib.sha256(open(p,'rb').read()).hexdigest() in allowed))), 'Configuration drift: explicitly reapply platform configuration'`)}`
   }
 else
   if test -e /etc/hysteria/config.yaml || systemctl is-active --quiet hysteria-server.service || test -e /etc/jetyet/config.yaml || command -v hysteria >/dev/null; then echo 'Existing unmanaged Hysteria installation; refusing overwrite' >&2; exit 1; fi
@@ -438,10 +438,17 @@ def inspect_remote(run_live_probe=True):
     if m.get('tlsSecurity')=='pinned':
      forbidden=set(m.get('certDnsSans') or [])
      if m.get('sni'): forbidden.add(m['sni'].lower())
+     def san_covers(pattern, candidate):
+      pattern=pattern.lower()
+      if pattern==candidate: return True
+      if pattern.startswith('*.'):
+       suffix=pattern[1:]
+       return candidate.endswith(suffix) and len(candidate)>len(suffix)
+      return False
      neg_sni='jetyet-sni-mismatch.invalid'
      idx=1
-     while neg_sni in forbidden:
-      neg_sni=f'jetyet-sni-mismatch-{idx}.invalid'
+     while any(san_covers(s, neg_sni) for s in forbidden):
+      neg_sni=f'jetyet-sni-mismatch-{idx}.probe-{idx}.invalid'
       idx+=1
      neg_tls=dict(pos_tls)
      neg_tls['sni']=neg_sni

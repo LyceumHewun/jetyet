@@ -42,12 +42,12 @@ cpu=list(map(int,read('/proc/stat').splitlines()[0].split()[1:9]))
 mem={line.split(':')[0]:int(line.split()[1]) for line in read('/proc/meminfo').splitlines()}
 disk=os.statvfs('/')
 out={'inbound':rx,'outbound':tx,'ifaceEpoch':','.join(sorted(interfaces)),'boot':read('/proc/sys/kernel/random/boot_id'),'uptime':float(read('/proc/uptime').split()[0]),'cpuTotal':sum(cpu),'cpuIdle':cpu[3]+cpu[4],'memory':100*(1-mem.get('MemAvailable',mem['MemFree'])/mem['MemTotal']),'disk':100*(1-disk.f_bavail/disk.f_blocks)}
-out['service']=subprocess.run(['systemctl','is-active','--quiet','jetyet-hysteria.service']).returncode==0
 out['operationLockBusy']=False
 lock_fd=None
 try:
  lock_fd=os.open('/run/jetyet-operation.lock',os.O_CREAT|os.O_RDWR,0o600)
  fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+ out['service']=subprocess.run(['systemctl','is-active','--quiet','jetyet-hysteria.service']).returncode==0
  if os.path.exists('/etc/jetyet/manifest.json'):
   out['manifest']=json.loads(read('/etc/jetyet/manifest.json'))
   if os.path.exists('/etc/jetyet/config.yaml'):
@@ -177,7 +177,7 @@ export async function collectHost(
       .immediate();
     s.resolveAlert(h.id, "unreachable");
     s.resolveAlert(h.id, "stale");
-    if (n) {
+    if (n && data.operationLockBusy !== true) {
       const current = s.get(n.id);
       const latestHost = s.get(h.id);
       const activeOpAfter = !!s.db
@@ -193,12 +193,7 @@ export async function collectHost(
         latestHost.deleted ||
         nodeVerifiedRevision(s, current, latestHost) !== initialRevision;
       if (current && !current.deleted && !current.deleting) {
-        if (
-          !activeOpBefore &&
-          !activeOpAfter &&
-          !revisionChanged &&
-          data.operationLockBusy !== true
-        ) {
+        if (!activeOpBefore && !activeOpAfter && !revisionChanged) {
           const incompleteInstall = data.manifest?.phase !== "ready";
           const pinnedDrift =
             current.tlsSecurity === "pinned" &&
@@ -257,7 +252,11 @@ export async function collectHost(
           );
         }
       }
-      if (data.service) {
+      if (
+        data.service &&
+        typeof data.serviceEpoch === "string" &&
+        data.serviceEpoch.length > 0
+      ) {
         try {
           // /traffic tx is client upload (server inbound); rx is client download (server outbound).
           const traffic = (await statsApi(s, n, "/traffic")) as Record<

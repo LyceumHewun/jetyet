@@ -1658,11 +1658,22 @@ proxy-providers:
     );
     expect(s.get(node.id)?.drift).not.toBe(true);
     finish(s, runningOp, "failed");
-    // Monitor skips drift while remote manual-install lock is busy, and alerts once unlocked with abandoned installing phase
+    // Monitor skips node updates and accounting while remote lock is busy (preserving existing counter epochs), then alerts drift once unlocked
+    addObservation(s, node, `node:${node.id}`, "boot-1:inv-1", 500, 700, now);
     await collectHost(s, s.get(host.id)!, async () =>
-      JSON.stringify({ ...baseSample, operationLockBusy: true }),
+      JSON.stringify({
+        ...baseSample,
+        service: true,
+        operationLockBusy: true,
+      }),
     );
     expect(s.get(node.id)?.drift).not.toBe(true);
+    const counterAfterBusy = s.db
+      .query<{ epoch: string }, [string]>(
+        "SELECT epoch FROM counters WHERE source=?",
+      )
+      .get(`node:${node.id}`);
+    expect(counterAfterBusy?.epoch).toBe("boot-1:inv-1");
     await collectHost(s, s.get(host.id)!, async () =>
       JSON.stringify(baseSample),
     );
