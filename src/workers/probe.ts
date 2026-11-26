@@ -18,26 +18,11 @@ import {
 import { hasEch, hasPinnedTls } from "../server/subscriptions";
 import type { Entity, Store } from "../server/db";
 
-async function snapshotProbeBinary(
-  binary: string,
-  dir: string,
-): Promise<string> {
-  const located = binary.includes("/") ? binary : Bun.which(binary);
-  if (!located) throw Error("Management host Hysteria 2 binary was not found");
-  const resolved = await realpath(located);
-  const snapshot = join(dir, "hysteria");
-  await copyFile(resolved, snapshot);
-  await chmod(snapshot, 0o500);
-  return snapshot;
-}
-
-async function verifySnapshotVersion(
-  snapshot: string,
-  pinned: boolean,
+async function checkBinaryVersion(
+  binaryPath: string,
   ech: boolean,
-) {
-  if (!pinned) return;
-  const proc = Bun.spawn([snapshot, "version"], {
+): Promise<void> {
+  const proc = Bun.spawn([binaryPath, "version"], {
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -69,6 +54,35 @@ async function verifySnapshotVersion(
     );
 }
 
+async function preparePinnedProbeBinary(
+  binary: string,
+  dir: string,
+  ech: boolean,
+): Promise<string> {
+  const located = binary.includes("/") ? binary : Bun.which(binary);
+  if (!located) throw Error("Management host Hysteria 2 binary was not found");
+  const resolved = await realpath(located);
+  const snapshot = join(dir, "hysteria");
+  let candidate = resolved;
+  try {
+    await copyFile(resolved, snapshot);
+    await chmod(snapshot, 0o500);
+    await checkBinaryVersion(snapshot, ech);
+    return snapshot;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    const message = err instanceof Error ? err.message : "";
+    const isNoExec =
+      code === "EACCES" ||
+      code === "EPERM" ||
+      /EACCES|permission denied/i.test(message);
+    if (!isNoExec) throw err;
+    await rm(snapshot, { force: true }).catch(() => {});
+  }
+  await checkBinaryVersion(candidate, ech);
+  return candidate;
+}
+
 async function freePort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((res, rej) => {
@@ -97,8 +111,9 @@ export async function probeNode(s: Store, n: Entity) {
   const dir = await mkdtemp(join(tmpdir(), "jetyet-probe-"));
   let child: ReturnType<typeof Bun.spawn> | undefined;
   try {
-    const snapshot = await snapshotProbeBinary(s.config.hysteriaBinary, dir);
-    await verifySnapshotVersion(snapshot, pinned, ech);
+    const executable = pinned
+      ? await preparePinnedProbeBinary(s.config.hysteriaBinary, dir, ech)
+      : s.config.hysteriaBinary;
     const path = join(dir, "config.yaml"),
       address = n.address.includes(":") ? `[${n.address}]` : n.address;
     const tls = pinned
@@ -122,7 +137,7 @@ export async function probeNode(s: Store, n: Entity) {
         }),
         { mode: 0o600 },
       );
-      child = Bun.spawn([snapshot, "client", "-c", path], {
+      child = Bun.spawn([executable, "client", "-c", path], {
         stdout: "ignore",
         stderr: "ignore",
       });
