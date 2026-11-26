@@ -9,6 +9,7 @@ import { strip, type Entity } from "../db";
 import {
   deploymentScript,
   nodeDeploymentOptions,
+  nodeVerifiedRevision,
   redactedConfig,
   serverConfig,
   validateDeploymentVersion,
@@ -19,23 +20,7 @@ import { templateGroupNames } from "../templates";
 import type { Routes } from "./context";
 
 export function registerNodesRoutes({ app, s, entity }: Routes) {
-  const revision = (n: Entity, host: Entity) =>
-    digest(
-      JSON.stringify([
-        serverConfig(s, n, {
-          protocol: "hysteria2",
-          tuning: false,
-          congestion: "brutal",
-          tlsSecurity: "legacy",
-          sni: "",
-          ech: false,
-          echPublicName: "",
-        }),
-        n.address,
-        n.hopping,
-        host.fingerprint,
-      ]),
-    );
+  const revision = (n: Entity, host: Entity) => nodeVerifiedRevision(s, n, host);
 
   app.get("/deploy/:file", (c) => {
     c.header("Cache-Control", "no-store");
@@ -114,6 +99,7 @@ export function registerNodesRoutes({ app, s, entity }: Routes) {
 
   app.post("/api/nodes/:id/operation", async (c) => {
     const n = entity(c.req.param("id"), "node");
+    const h = entity(n.hostId, "host");
     if (n.deleting)
       throw Error("A node pending deletion cannot run operations");
     const raw = await c.req.json();
@@ -122,11 +108,12 @@ export function registerNodesRoutes({ app, s, entity }: Routes) {
         kind: z.enum(["deploy", "upgrade", "reapply", "detect"]),
       })
       .parse(raw);
+    const expectedRevision = revision(n, h);
     let payload: Record<string, unknown> = { nodeId: n.id };
     if (kind === "deploy") {
       const request = deploymentRequestSchema.parse(raw);
       validateDeploymentVersion(request.version, request);
-      payload = { nodeId: n.id, ...request };
+      payload = { nodeId: n.id, expectedRevision, ...request };
     } else if (kind === "upgrade") {
       const current = nodeDeploymentOptions(n);
       const request = deploymentRequestSchema.parse({
@@ -134,13 +121,13 @@ export function registerNodesRoutes({ app, s, entity }: Routes) {
         ...(raw && typeof raw === "object" ? raw : {}),
       });
       validateDeploymentVersion(request.version, request);
-      payload = { nodeId: n.id, ...request };
+      payload = { nodeId: n.id, expectedRevision, ...request };
     } else if (kind === "reapply") {
       const { version } = z
         .object({ version: deploymentVersionSchema })
         .parse(raw);
       validateDeploymentVersion(version, nodeDeploymentOptions(n));
-      payload = { nodeId: n.id, version };
+      payload = { nodeId: n.id, expectedRevision, version };
     }
     const id = enqueue(s, n.hostId, kind, payload);
     return c.json({ id }, 202);

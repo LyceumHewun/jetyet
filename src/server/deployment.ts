@@ -4,6 +4,7 @@ import {
   DEFAULT_TLS_SNI,
   MIN_BBR_VERSION,
   MIN_ECH_VERSION,
+  MIN_PINNED_TLS_VERSION,
   compareHysteriaVersion,
   deploymentOptionsSchema,
   type DeploymentOptions,
@@ -13,6 +14,55 @@ import { digest } from "./crypto";
 import type { Entity, Store } from "./db";
 import { adaptiveTuningScript } from "./deployment-tuning";
 import { quote } from "./ssh";
+
+export const echKeysParserPy = `def parse_ech_keys_file(path):
+ try:
+  text=open(path).read()
+  hk=re.search(r'-----BEGIN ECH KEYS-----(.*?)-----END ECH KEYS-----',text,re.S)
+  if not hk: return None
+  blob=base64.b64decode(''.join(hk.group(1).split()))
+  off=0
+  configs=bytearray()
+  public_names=[]
+  count=0
+  while off<len(blob):
+   if off+2>len(blob): return None
+   priv_len,=struct.unpack_from('!H',blob,off); off+=2
+   if priv_len==0 or off+priv_len+2>len(blob): return None
+   off+=priv_len
+   cfg_len,=struct.unpack_from('!H',blob,off); off+=2
+   if cfg_len<4 or off+cfg_len>len(blob): return None
+   cfg=blob[off:off+cfg_len]; off+=cfg_len
+   ver,clen=struct.unpack_from('!HH',cfg,0)
+   if 4+clen!=len(cfg): return None
+   if ver==0xfe0d:
+    pos=4
+    end=4+clen
+    if pos+5>end: return None
+    pos+=3
+    pk_len,=struct.unpack_from('!H',cfg,pos); pos+=2
+    if pk_len==0 or pos+pk_len+2>end: return None
+    pos+=pk_len
+    cs_len,=struct.unpack_from('!H',cfg,pos); pos+=2
+    if cs_len<4 or cs_len%4!=0 or pos+cs_len+2>end: return None
+    pos+=cs_len
+    pos+=1
+    pn_len=cfg[pos]; pos+=1
+    if pn_len==0 or pos+pn_len+2>end: return None
+    pn=cfg[pos:pos+pn_len].decode('ascii').lower(); pos+=pn_len
+    ext_len,=struct.unpack_from('!H',cfg,pos); pos+=2
+    if pos+ext_len!=end: return None
+    public_names.append(pn)
+   configs.extend(cfg)
+   count+=1
+  if count==0 or not public_names: return None
+  full_list=struct.pack('!H',len(configs))+bytes(configs)
+  b64=base64.b64encode(full_list).decode('ascii')
+  hc=re.search(r'-----BEGIN ECH CONFIGS-----(.*?)-----END ECH CONFIGS-----',text,re.S)
+  configs_match=(hc is not None and base64.b64decode(''.join(hc.group(1).split()))==full_list)
+  return {'echConfig': b64, 'publicNames': public_names, 'configsBlockMatches': configs_match}
+ except Exception:
+  return None`;
 
 export function nodeDeploymentOptions(node: Entity): DeploymentOptions {
   const tlsSecurity = node.tlsSecurity === "pinned" ? "pinned" : "legacy";
@@ -37,6 +87,23 @@ export function nodeDeploymentOptions(node: Entity): DeploymentOptions {
   };
 }
 
+export function nodeVerifiedRevision(s: Store, n: Entity, host: Entity) {
+  const options = nodeDeploymentOptions(n);
+  return digest(
+    JSON.stringify([
+      serverConfig(s, n, options),
+      options,
+      n.address,
+      n.hopping,
+      host.fingerprint ?? "",
+      n.version ?? "",
+      n.configHash ?? "",
+      n.certSha256 ?? "",
+      n.echConfig ?? "",
+    ]),
+  );
+}
+
 export function validateDeploymentVersion(
   version: string,
   rawOptions: DeploymentOptionsInput,
@@ -46,6 +113,11 @@ export function validateDeploymentVersion(
     throw Error("Specify an explicit Hysteria 2 version");
   if (options.ech && options.tlsSecurity !== "pinned")
     throw Error("ECH requires forced SNI and pinSHA256 TLS security");
+  if (
+    options.tlsSecurity === "pinned" &&
+    compareHysteriaVersion(version, MIN_PINNED_TLS_VERSION) < 0
+  )
+    throw Error("Forced SNI and pinSHA256 require Hysteria 2 v2.5.2 or later");
   if (
     options.congestion === "bbr" &&
     compareHysteriaVersion(version, MIN_BBR_VERSION) < 0
@@ -108,6 +180,7 @@ export function deploymentScript(
   rawOptions: DeploymentOptionsInput = nodeDeploymentOptions(n),
 ) {
   const options = deploymentOptionsSchema.parse(rawOptions);
+  const previousOptions = nodeDeploymentOptions(n);
   validateDeploymentVersion(version, options);
   const config = serverConfig(s, n, options),
     desiredHash = digest(config),
@@ -151,7 +224,11 @@ for cmd in iptables ip6tables; do command -v "$cmd" >/dev/null || { echo "Missin
 }
 if test -e /etc/jetyet/manifest.json; then
   python3 -c ${quote(`import json; m=json.load(open('/etc/jetyet/manifest.json')); assert m['owner']=='jetyet' and m['nodeId']=='${n.id}' and m['hostId']=='${n.hostId}', 'Foreign deployment'`)}
-  ${reapply ? "true" : `python3 -c ${quote(`import json,hashlib,os; m=json.load(open('/etc/jetyet/manifest.json')); p='/etc/jetyet/config.yaml'; allowed=['${previousHash}','${desiredHash}']; hashes=[m['configHash']] if m['phase']=='ready' else allowed; assert (m['configHash'] in allowed and hashlib.sha256(open(p,'rb').read()).hexdigest() in hashes if os.path.exists(p) else m['phase']=='installing'), 'Configuration drift: explicitly reapply platform configuration'`)}`}
+  ${
+    reapply
+      ? "true"
+      : `python3 -c ${quote(`import json,hashlib,os; m=json.load(open('/etc/jetyet/manifest.json')); p='/etc/jetyet/config.yaml'; allowed=['${previousHash}','${desiredHash}']; hashes=[m['configHash']] if m['phase']=='ready' else allowed; sec=lambda o: (o.get('tlsSecurity') if o.get('tlsSecurity')=='pinned' else 'legacy', o.get('sni') or '', bool(o.get('ech')), o.get('echPublicName') or ''); allowed_sec={sec(json.loads(${JSON.stringify(JSON.stringify(previousOptions))})), sec(json.loads(${JSON.stringify(JSON.stringify(options))}))}; assert (m['configHash'] in allowed and sec(m) in allowed_sec and hashlib.sha256(open(p,'rb').read()).hexdigest() in hashes if os.path.exists(p) else m['phase']=='installing'), 'Configuration drift: explicitly reapply platform configuration'`)}`
+  }
 else
   if test -e /etc/hysteria/config.yaml || systemctl is-active --quiet hysteria-server.service || test -e /etc/jetyet/config.yaml || command -v hysteria >/dev/null; then echo 'Existing unmanaged Hysteria installation; refusing overwrite' >&2; exit 1; fi
   if ss -H -lun | awk '{print $4}' | grep -Eq ':(${n.port}|9999)$'; then echo 'Port conflict' >&2; exit 1; fi
@@ -232,15 +309,18 @@ EOF
 }
 function certificateStep(n: Entity, options: DeploymentOptions) {
   if (options.tlsSecurity === "pinned") {
+    const cn = options.sni.length <= 64 ? options.sni : "jetyet-node";
     const checkSan =
       "import re,subprocess,sys; out=subprocess.run(['openssl','x509','-noout','-ext','subjectAltName','-in',sys.argv[1]],capture_output=True,text=True); sans=[m.lower() for m in re.findall(r'DNS:([^,\\s]+)', out.stdout)]; sys.exit(0 if out.returncode==0 and sys.argv[2].lower() in sans else 1)";
     return `if ! test -s /etc/jetyet/server.key || ! openssl x509 -checkend 0 -noout -in /etc/jetyet/server.crt >/dev/null 2>&1 || ! cmp -s <(openssl x509 -pubkey -noout -in /etc/jetyet/server.crt 2>/dev/null) <(openssl pkey -pubout -in /etc/jetyet/server.key 2>/dev/null) || ! python3 -c ${quote(checkSan)} /etc/jetyet/server.crt ${quote(options.sni)}; then
-  openssl req -x509 -nodes -newkey rsa:4096 -keyout /etc/jetyet/server.key.next -out /etc/jetyet/server.crt.next -days 3650 -subj ${quote("/CN=" + options.sni)} -addext ${quote("subjectAltName=DNS:" + options.sni)} 2>/dev/null
+  openssl req -x509 -nodes -newkey rsa:4096 -keyout /etc/jetyet/server.key.next -out /etc/jetyet/server.crt.next -days 3650 -subj ${quote("/CN=" + cn)} -addext ${quote("subjectAltName=DNS:" + options.sni)} 2>/dev/null
   mv /etc/jetyet/server.key.next /etc/jetyet/server.key
   mv /etc/jetyet/server.crt.next /etc/jetyet/server.crt
 fi`;
   }
-  return `if ! test -s /etc/jetyet/server.key || ! openssl x509 -checkend 0 -noout -in /etc/jetyet/server.crt >/dev/null 2>&1 || ! cmp -s <(openssl x509 -pubkey -noout -in /etc/jetyet/server.crt 2>/dev/null) <(openssl pkey -pubout -in /etc/jetyet/server.key 2>/dev/null); then
+  const checkNoDnsSan =
+    "import re,subprocess,sys; out=subprocess.run(['openssl','x509','-noout','-ext','subjectAltName','-in',sys.argv[1]],capture_output=True,text=True); sans=re.findall(r'DNS:([^,\\s]+)', out.stdout) if out.returncode==0 else []; sys.exit(0 if len(sans)==0 else 1)";
+  return `if ! test -s /etc/jetyet/server.key || ! openssl x509 -checkend 0 -noout -in /etc/jetyet/server.crt >/dev/null 2>&1 || ! cmp -s <(openssl x509 -pubkey -noout -in /etc/jetyet/server.crt 2>/dev/null) <(openssl pkey -pubout -in /etc/jetyet/server.key 2>/dev/null) || ! python3 -c ${quote(checkNoDnsSan)} /etc/jetyet/server.crt; then
   openssl req -x509 -nodes -newkey rsa:4096 -keyout /etc/jetyet/server.key.next -out /etc/jetyet/server.crt.next -days 3650 -subj ${quote("/CN=" + n.address)} 2>/dev/null
   mv /etc/jetyet/server.key.next /etc/jetyet/server.key
   mv /etc/jetyet/server.crt.next /etc/jetyet/server.crt
@@ -250,26 +330,12 @@ function echStep(options: DeploymentOptions) {
   if (!options.ech) {
     return "rm -f /etc/jetyet/ech.pem /etc/jetyet/ech.pem.next";
   }
-  const checkEch = [
-    "import base64,re,struct,sys",
-    "text=open(sys.argv[1]).read()",
-    "hk=re.search(r'-----BEGIN ECH KEYS-----(.*?)-----END ECH KEYS-----',text,re.S)",
-    "hc=re.search(r'-----BEGIN ECH CONFIGS-----(.*?)-----END ECH CONFIGS-----',text,re.S)",
-    "assert hk and hc",
-    "raw=base64.b64decode(''.join(hc.group(1).split()))",
-    "llen,=struct.unpack_from('!H',raw,0)",
-    "assert llen+2==len(raw) and llen>=4",
-    "ver,clen=struct.unpack_from('!HH',raw,2)",
-    "assert ver==0xfe0d and 6+clen<=len(raw)",
-    "pos=9",
-    "pk,=struct.unpack_from('!H',raw,pos); pos+=2+pk",
-    "cs,=struct.unpack_from('!H',raw,pos); pos+=2+cs",
-    "pos+=1",
-    "pn_len=raw[pos]; pos+=1",
-    "pn=raw[pos:pos+pn_len].decode('ascii').lower()",
-    "sys.exit(0 if pn==sys.argv[2].lower() else 1)",
-  ].join("; ");
-  return `if ! test -s /etc/jetyet/ech.pem || ! python3 -c ${quote(checkEch)} /etc/jetyet/ech.pem ${quote(options.echPublicName)} 2>/dev/null; then
+  const checkEchScript = `import base64,re,struct,sys
+${echKeysParserPy}
+parsed=parse_ech_keys_file(sys.argv[1])
+target=sys.argv[2].lower()
+sys.exit(0 if parsed and parsed['configsBlockMatches'] and all(pn==target for pn in parsed['publicNames']) else 1)`;
+  return `if ! test -s /etc/jetyet/ech.pem || ! python3 -c ${quote(checkEchScript)} /etc/jetyet/ech.pem ${quote(options.echPublicName)} 2>/dev/null; then
   /usr/local/bin/hysteria ech --public-name ${quote(options.echPublicName)} -o /etc/jetyet/ech.pem.next --overwrite >/dev/null
   chmod 600 /etc/jetyet/ech.pem.next
   mv /etc/jetyet/ech.pem.next /etc/jetyet/ech.pem
@@ -278,7 +344,8 @@ chmod 600 /etc/jetyet/ech.pem`;
 }
 export const detectionScript = `set -euo pipefail
 python3 - <<'PY'
-import base64,ipaddress,json,hashlib,os,re,struct,subprocess
+import base64,ipaddress,json,hashlib,os,re,struct,subprocess,tempfile
+${echKeysParserPy}
 m=json.load(open('/etc/jetyet/manifest.json'))
 p='/etc/jetyet/config.yaml'
 m['actualHash']=hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.exists(p) else None
@@ -295,25 +362,39 @@ if os.path.exists(cert_path):
  m['certDnsSans']=sorted({s.lower() for s in re.findall(r'DNS:([^,\\s]+)', san_out.stdout)}) if san_out.returncode==0 else []
 ech_path='/etc/jetyet/ech.pem'
 if os.path.exists(ech_path):
- try:
-  text=open(ech_path).read()
-  hk=re.search(r'-----BEGIN ECH KEYS-----(.*?)-----END ECH KEYS-----',text,re.S)
-  hc=re.search(r'-----BEGIN ECH CONFIGS-----(.*?)-----END ECH CONFIGS-----',text,re.S)
-  if hk and hc:
-   b64=''.join(hc.group(1).split())
-   raw=base64.b64decode(b64)
-   llen,=struct.unpack_from('!H',raw,0)
-   ver,clen=struct.unpack_from('!HH',raw,2)
-   if llen+2==len(raw) and ver==0xfe0d and 6+clen<=len(raw):
-    pos=9
-    pk,=struct.unpack_from('!H',raw,pos); pos+=2+pk
-    cs,=struct.unpack_from('!H',raw,pos); pos+=2+cs
-    pos+=1
-    pn_len=raw[pos]; pos+=1
-    m['echConfig']=b64
-    m['echDetectedPublicName']=raw[pos:pos+pn_len].decode('ascii').lower()
- except Exception:
-  pass
+ parsed=parse_ech_keys_file(ech_path)
+ if parsed:
+  m['echConfig']=parsed['echConfig']
+  m['echDetectedPublicNames']=parsed['publicNames']
+  m['echDetectedPublicName']=parsed['publicNames'][0]
+if m['active']:
+ pid_out=subprocess.run(['systemctl','show','--value','--property=MainPID','jetyet-hysteria.service'],capture_output=True,text=True).stdout.strip()
+ start_s=os.stat(f'/proc/{pid_out}').st_mtime if pid_out.isdigit() and int(pid_out)>0 and os.path.exists(f'/proc/{pid_out}') else None
+ checked_files=[p, cert_path, '/etc/jetyet/server.key']
+ if m.get('ech') is True: checked_files.append(ech_path)
+ m['runtimeFresh']=bool(start_s is not None and all(os.path.exists(fp) and os.path.getmtime(fp)<=start_s+0.5 for fp in checked_files))
+ live_ok=False
+ if m.get('port'):
+  tls_cfg={'insecure': True}
+  if m.get('tlsSecurity')=='pinned':
+   tls_cfg['sni']=m.get('sni') or ''
+   tls_cfg['pinSHA256']=m.get('certSha256') or ''
+   if m.get('ech') is True:
+    tls_cfg['ech']=m.get('echConfig') or ''
+  with tempfile.TemporaryDirectory(prefix='jetyet-tls-verify-') as td:
+   cfg_path=os.path.join(td,'client.json')
+   for host in ('127.0.0.1','[::1]'):
+    with open(cfg_path,'w') as f:
+     json.dump({'server': f'{host}:{m["port"]}', 'auth': 'jetyet-live-tls-verify', 'tls': tls_cfg}, f)
+    try:
+     r=subprocess.run(['/usr/local/bin/hysteria','client','-c',cfg_path],capture_output=True,text=True,timeout=6)
+     combined=(r.stdout or '')+'\\n'+(r.stderr or '')
+     if 'authentication error, HTTP status code:' in combined:
+      live_ok=True
+      break
+    except subprocess.TimeoutExpired:
+     pass
+ m['liveTlsVerified']=live_ok
 if m['active'] and m.get('hopping'):
  dport=m['hopping'].replace('-',':')
  comment='jetyet-'+m['nodeId']

@@ -727,8 +727,14 @@ export const zhHans = {
     "可选，网络上可见的外层伪装 SNI。留空将使用默认值 {0}。",
   "TLS & SECURITY": "TLS 与安全",
   "TRANSPORT & TUNING": "传输与调优",
-  "Upgrading from legacy TLS will issue a pinned SNI certificate. Subscribers must refresh their subscription after the upgrade succeeds.":
-    "从旧版 TLS 升级会重新签发带 SNI 的自签名证书，升级成功后订阅用户需刷新一次订阅。",
+  "Forced SNI and pinSHA256 require Hysteria 2 v2.5.2 or later":
+    "强制 SNI 与 pinSHA256 要求 Hysteria 2 v2.5.2 或更高版本",
+  "Forced SNI + pinSHA256 requires Hysteria 2 v2.5.2 or later.":
+    "强制 SNI 与 pinSHA256 要求 Hysteria 2 v2.5.2 或更高版本。",
+  "Node state changed since this operation was queued; retry with current settings":
+    "任务入队后节点状态已变更，请按最新配置重试",
+  "Changing TLS mode, SNI, or ECH updates server certificates or ECH keys. Subscribers must refresh their subscription after the upgrade succeeds.":
+    "更改 TLS 模式、SNI 或 ECH 会更新服务端证书或 ECH 密钥，升级成功后订阅用户需刷新一次订阅。",
 } as const;
 
 export type Message = keyof typeof zhHans;

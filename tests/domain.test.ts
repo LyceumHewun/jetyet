@@ -27,6 +27,7 @@ import type { Config } from "../src/server/config";
 import {
   deploymentScript,
   detectionScript,
+  echKeysParserPy,
   removeScript,
   serverConfig,
 } from "../src/server/deployment";
@@ -791,10 +792,31 @@ describe("queue and encryption", () => {
         congestion: "bbr",
         tuning: false,
         tlsSecurity: "pinned",
-        sni: "cdn.example.com",
+        sni: `${"a".repeat(63)}.example.com`,
         ech: true,
         echPublicName: "cloudflare-ech.com",
       }),
+      deploymentScript(
+        s,
+        {
+          ...node,
+          tlsSecurity: "pinned",
+          sni: "bing.com",
+          ech: true,
+          echPublicName: "cloudflare-ech.com",
+        },
+        "v2.14.0",
+        false,
+        {
+          protocol: "hysteria2",
+          congestion: "brutal",
+          tuning: false,
+          tlsSecurity: "legacy",
+          sni: "",
+          ech: false,
+          echPublicName: "",
+        },
+      ),
       detectionScript,
       removeScript(node.id),
     ]) {
@@ -1192,13 +1214,94 @@ describe("detect operation and concurrent safety", () => {
     expect(s.get(node.id)?.status).toBe("draft");
   });
 
-  test("per-node upgrade transitions legacy nodes to pinned SNI + pinSHA256 + ECH across all subscription formats", async () => {
+  test("per-node upgrade transitions legacy nodes to pinned SNI + pinSHA256 + ECH, rejects stale/unverified state, supports downgrade, and scrubs literal preview TLS metadata", async () => {
     const { host, node, user } = fixture();
     const app = createApp(s);
     const certSha256 = "ab".repeat(32);
     const certSpkiSha256 = Buffer.alloc(32, 7).toString("base64");
-    const echConfig = Buffer.from("ech-config-list-fixture").toString("base64");
     const subBase = `/sub/${s.secrets(user.id).subscriptionToken}`;
+
+    // Construct a real RFC 9849 ECHConfigList + ECH KEYS PEM with an unknown leading version entry
+    const u16 = (n: number) => Buffer.from([(n >> 8) & 0xff, n & 0xff]);
+    const buildEchConfig = (publicName: string, version = 0xfe0d) => {
+      if (version !== 0xfe0d) {
+        const body = Buffer.from([1, 2, 3, 4]);
+        return Buffer.concat([u16(version), u16(body.length), body]);
+      }
+      const pk = Buffer.alloc(32, 0x42);
+      const cs = Buffer.from([0x00, 0x01, 0x00, 0x01]);
+      const pn = Buffer.from(publicName, "ascii");
+      const contents = Buffer.concat([
+        Buffer.from([0x01]),
+        u16(0x0020),
+        u16(pk.length),
+        pk,
+        u16(cs.length),
+        cs,
+        Buffer.from([64]),
+        Buffer.from([pn.length]),
+        pn,
+        u16(0),
+      ]);
+      return Buffer.concat([u16(0xfe0d), u16(contents.length), contents]);
+    };
+    const unknownCfg = buildEchConfig("ignored.example", 0xfe0c);
+    const realCfg = buildEchConfig("cloudflare-ech.com", 0xfe0d);
+    const allCfgs = Buffer.concat([unknownCfg, realCfg]);
+    const authoritativeList = Buffer.concat([u16(allCfgs.length), allCfgs]);
+    const echConfig = authoritativeList.toString("base64");
+
+    // Verify the Python authoritative ECH KEYS parser derives the exact list even when ECH CONFIGS differs
+    const priv = Buffer.alloc(32, 0x11);
+    const keysBlob = Buffer.concat([
+      u16(priv.length),
+      priv,
+      u16(unknownCfg.length),
+      unknownCfg,
+      u16(priv.length),
+      priv,
+      u16(realCfg.length),
+      realCfg,
+    ]);
+    const staleList = Buffer.concat([
+      u16(buildEchConfig("stale.example").length),
+      buildEchConfig("stale.example"),
+    ]);
+    const mismatchedPem = [
+      "-----BEGIN ECH KEYS-----",
+      keysBlob.toString("base64"),
+      "-----END ECH KEYS-----",
+      "-----BEGIN ECH CONFIGS-----",
+      staleList.toString("base64"),
+      "-----END ECH CONFIGS-----",
+    ].join("\n");
+    const parseRes = Bun.spawnSync(
+      [
+        "python3",
+        "-c",
+        `import base64,json,re,struct,sys,tempfile\n${echKeysParserPy}\nwith tempfile.NamedTemporaryFile('w') as f:\n f.write(sys.stdin.read()); f.flush()\n print(json.dumps(parse_ech_keys_file(f.name)))`,
+      ],
+      { stdin: Buffer.from(mismatchedPem), stdout: "pipe", stderr: "pipe" },
+    );
+    expect(parseRes.exitCode).toBe(0);
+    const parsedEch = JSON.parse(parseRes.stdout.toString());
+    expect(parsedEch.echConfig).toBe(echConfig);
+    expect(parsedEch.publicNames).toEqual(["cloudflare-ech.com"]);
+    expect(parsedEch.configsBlockMatches).toBe(false);
+
+    // Long SNI (>64 chars) keeps a bounded CN <= 64 while preserving full DNS SAN
+    const longSni = `${"a".repeat(63)}.example.com`;
+    const longSniScript = deploymentScript(s, node, "v2.14.0", false, {
+      protocol: "hysteria2",
+      congestion: "brutal",
+      tuning: false,
+      tlsSecurity: "pinned",
+      sni: longSni,
+      ech: false,
+      echPublicName: "",
+    });
+    expect(longSniScript).toContain("'/CN=jetyet-node'");
+    expect(longSniScript).toContain(`'subjectAltName=DNS:${longSni}'`);
 
     // Legacy node stays compatible before upgrade
     const legacyMihomo = YAML.parse(
@@ -1220,7 +1323,6 @@ describe("detect operation and concurrent safety", () => {
     expect(legacyShadowrocket).toContain("?insecure=1#");
     expect(legacyShadowrocket).not.toContain("pinSHA256=");
 
-    // Enqueue one-click upgrade via API with default SNI + ECH
     const login = await app.request("/api/login", {
       method: "POST",
       headers: { origin: s.config.origin },
@@ -1228,8 +1330,46 @@ describe("detect operation and concurrent safety", () => {
     });
     const cookie = login.headers.get("set-cookie")!.split(";")[0];
 
-    // Reject ECH on unsupported Hysteria 2 version
-    const tooOld = await app.request(`/api/nodes/${node.id}/operation`, {
+    // Mint a legacy manual install link BEFORE upgrade to verify it becomes stale afterward
+    const issuedLegacy = await app.request(`/api/nodes/${node.id}/command`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+      body: JSON.stringify({
+        version: "v2.13.0",
+        protocol: "hysteria2",
+        congestion: "brutal",
+        tuning: false,
+        tlsSecurity: "legacy",
+        sni: "",
+        ech: false,
+        echPublicName: "",
+      }),
+    });
+    expect(issuedLegacy.status).toBe(200);
+    const legacyLinkPath = new URL(
+      (await issuedLegacy.json()).command.match(/https:\/\/[^']+/)[0],
+    ).pathname;
+    expect((await app.request(legacyLinkPath)).status).toBe(200);
+
+    // Reject pinned TLS on Hysteria < v2.5.2 and ECH on Hysteria < v2.12.3
+    const tooOldPinned = await app.request(`/api/nodes/${node.id}/operation`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+      body: JSON.stringify({
+        kind: "upgrade",
+        version: "v2.5.1",
+        protocol: "hysteria2",
+        congestion: "brutal",
+        tuning: false,
+        tlsSecurity: "pinned",
+        sni: "",
+        ech: false,
+        echPublicName: "",
+      }),
+    });
+    expect(tooOldPinned.status).toBe(400);
+
+    const tooOldEch = await app.request(`/api/nodes/${node.id}/operation`, {
       method: "POST",
       headers: { origin: s.config.origin, cookie },
       body: JSON.stringify({
@@ -1244,8 +1384,9 @@ describe("detect operation and concurrent safety", () => {
         echPublicName: "",
       }),
     });
-    expect(tooOld.status).toBe(400);
+    expect(tooOldEch.status).toBe(400);
 
+    // Queue two concurrent upgrades from the same snapshot; second must be rejected as stale
     const queued = await app.request(`/api/nodes/${node.id}/operation`, {
       method: "POST",
       headers: { origin: s.config.origin, cookie },
@@ -1262,6 +1403,22 @@ describe("detect operation and concurrent safety", () => {
       }),
     });
     expect(queued.status).toBe(202);
+    const staleQueued = await app.request(`/api/nodes/${node.id}/operation`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+      body: JSON.stringify({
+        kind: "upgrade",
+        version: "v2.13.0",
+        protocol: "hysteria2",
+        congestion: "brutal",
+        tuning: false,
+        tlsSecurity: "legacy",
+        sni: "",
+        ech: false,
+        echPublicName: "",
+      }),
+    });
+    expect(staleQueued.status).toBe(202);
 
     const upgradedOptions = {
       protocol: "hysteria2" as const,
@@ -1274,7 +1431,57 @@ describe("detect operation and concurrent safety", () => {
     };
     const expectedHash = digest(serverConfig(s, node, upgradedOptions));
     const task = claim(s, false, "ops")!;
-    await runOperation(s, task, async (script) => {
+    // Reject if live TLS handshake verification fails
+    await expect(
+      runOperation(s, task, async (script) => {
+        if (script !== detectionScript) return "Deployment verified";
+        return JSON.stringify({
+          ...upgradedOptions,
+          owner: "jetyet",
+          phase: "ready",
+          version: "v2.14.0",
+          actualVersion: "v2.14.0",
+          nodeId: node.id,
+          hostId: host.id,
+          address: node.address,
+          port: node.port,
+          hopping: node.hopping,
+          configHash: expectedHash,
+          actualHash: expectedHash,
+          certSha256,
+          certSpkiSha256,
+          certDnsSans: ["bing.com"],
+          echConfig,
+          echDetectedPublicNames: ["cloudflare-ech.com"],
+          echDetectedPublicName: "cloudflare-ech.com",
+          runtimeFresh: true,
+          liveTlsVerified: false,
+          active: true,
+        });
+      }),
+    ).rejects.toThrow("Deployed configuration verification failed");
+    finish(s, task, "failed");
+
+    const staleTask = claim(s, false, "ops")!;
+    finish(s, staleTask, "cancelled");
+    const retryQueued = await app.request(`/api/nodes/${node.id}/operation`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+      body: JSON.stringify({
+        kind: "upgrade",
+        version: "v2.14.0",
+        protocol: "hysteria2",
+        congestion: "bbr",
+        tuning: false,
+        tlsSecurity: "pinned",
+        sni: "",
+        ech: true,
+        echPublicName: "",
+      }),
+    });
+    expect(retryQueued.status).toBe(202);
+    const upgradeTask = claim(s, false, "ops")!;
+    await runOperation(s, upgradeTask, async (script) => {
       if (script !== detectionScript) return "Deployment verified";
       return JSON.stringify({
         ...upgradedOptions,
@@ -1293,10 +1500,21 @@ describe("detect operation and concurrent safety", () => {
         certSpkiSha256,
         certDnsSans: ["bing.com"],
         echConfig,
+        echDetectedPublicNames: ["cloudflare-ech.com"],
         echDetectedPublicName: "cloudflare-ech.com",
+        runtimeFresh: true,
+        liveTlsVerified: true,
         active: true,
       });
     });
+    finish(s, upgradeTask, "succeeded");
+
+    // Stale manual link minted before upgrade now returns 404
+    expect((await app.request(legacyLinkPath)).status).toBe(404);
+    // Re-running a task carrying the pre-upgrade expectedRevision is rejected
+    await expect(
+      runOperation(s, staleTask, async () => "should not execute"),
+    ).rejects.toThrow("Node state changed since this operation was queued");
 
     // Subscriptions now publish pinned SNI + pinSHA256 + ECH across all formats
     const mihomoProxy = YAML.parse(
@@ -1337,27 +1555,123 @@ describe("detect operation and concurrent safety", () => {
     expect(parsedUri.searchParams.get("pinSHA256")).toBe(certSha256);
     expect(parsedUri.searchParams.get("ech")).toBe(echConfig);
 
-    // Portal previews hide real SNI, pins, and ECH config
+    // Portal previews hide real SNI, pins, ECH config, and literal template TLS fields / URIs
+    const literalMihomoTemplate = `${defaultTemplate}
+proxy-providers:
+  ext:
+    type: http
+    url: "hysteria2://pw@1.2.3.4:443/?sni=secret.sni.example&pinSHA256=${certSha256}&ech=${encodeURIComponent(echConfig)}"
+`;
     const mihomoPreview = render(
       s,
       user,
-      defaultTemplate,
-      "portal-preview",
+      literalMihomoTemplate.replace(
+        "{{ proxies | yaml | indent: 2 }}",
+        `{{ proxies | yaml | indent: 2 }}\n  - name: Literal\n    type: hysteria2\n    server: 198.51.100.9\n    port: 443\n    password: p\n    sni: literal.sni.example\n    name-cert-verify: verify.sni.example\n    fingerprint: ${certSha256}`,
+      ),
+      "assigned-preview",
       "mihomo",
     );
     expect(mihomoPreview).not.toContain("bing.com");
+    expect(mihomoPreview).not.toContain("secret.sni.example");
+    expect(mihomoPreview).not.toContain("literal.sni.example");
+    expect(mihomoPreview).not.toContain("verify.sni.example");
     expect(mihomoPreview).not.toContain(certSha256);
     expect(mihomoPreview).not.toContain(echConfig);
 
     const singBoxPreview = render(
       s,
       user,
-      defaultSingBoxTemplate,
-      "portal-preview",
+      defaultSingBoxTemplate.replace(
+        '"final": "Proxy"',
+        `"rule_set": [{"type": "remote", "tag": "rs", "url": "https://example.com/rules.srs?sni=secret.sb.example&pinSHA256=${certSha256}&ech=${encodeURIComponent(echConfig)}"}], "final": "Proxy"`,
+      ),
+      "assigned-preview",
       "sing-box",
     );
     expect(singBoxPreview).not.toContain("bing.com");
+    expect(singBoxPreview).not.toContain("secret.sb.example");
     expect(singBoxPreview).not.toContain(certSpkiSha256);
+    expect(singBoxPreview).not.toContain(certSha256);
     expect(singBoxPreview).not.toContain(echConfig);
+
+    // Downgrade pinned node back to legacy: refuses stale DNS-SAN cert, succeeds once legacy cert has no DNS SAN
+    const downgradeQueued = await app.request(
+      `/api/nodes/${node.id}/operation`,
+      {
+        method: "POST",
+        headers: { origin: s.config.origin, cookie },
+        body: JSON.stringify({
+          kind: "upgrade",
+          version: "v2.14.0",
+          protocol: "hysteria2",
+          congestion: "brutal",
+          tuning: false,
+          tlsSecurity: "legacy",
+          sni: "",
+          ech: false,
+          echPublicName: "",
+        }),
+      },
+    );
+    expect(downgradeQueued.status).toBe(202);
+    const legacyOptions = {
+      protocol: "hysteria2" as const,
+      congestion: "brutal" as const,
+      tuning: false,
+      tlsSecurity: "legacy" as const,
+      sni: "",
+      ech: false,
+      echPublicName: "",
+    };
+    const legacyHash = digest(serverConfig(s, node, legacyOptions));
+    const downgradeTask = claim(s, false, "ops")!;
+    await expect(
+      runOperation(s, downgradeTask, async (script) => {
+        if (script !== detectionScript) return "Deployment verified";
+        return JSON.stringify({
+          ...legacyOptions,
+          owner: "jetyet",
+          phase: "ready",
+          version: "v2.14.0",
+          actualVersion: "v2.14.0",
+          nodeId: node.id,
+          hostId: host.id,
+          address: node.address,
+          port: node.port,
+          hopping: node.hopping,
+          configHash: legacyHash,
+          actualHash: legacyHash,
+          certDnsSans: ["bing.com"],
+          runtimeFresh: true,
+          liveTlsVerified: true,
+          active: true,
+        });
+      }),
+    ).rejects.toThrow("Deployed configuration verification failed");
+    await runOperation(s, downgradeTask, async (script) => {
+      if (script !== detectionScript) return "Deployment verified";
+      return JSON.stringify({
+        ...legacyOptions,
+        owner: "jetyet",
+        phase: "ready",
+        version: "v2.14.0",
+        actualVersion: "v2.14.0",
+        nodeId: node.id,
+        hostId: host.id,
+        address: node.address,
+        port: node.port,
+        hopping: node.hopping,
+        configHash: legacyHash,
+        actualHash: legacyHash,
+        certDnsSans: [],
+        runtimeFresh: true,
+        liveTlsVerified: true,
+        active: true,
+      });
+    });
+    expect(s.get(node.id)?.tlsSecurity).toBe("legacy");
+    expect(s.get(node.id)?.ech).toBe(false);
+    expect(s.get(node.id)?.certSha256).toBe("");
   });
 });

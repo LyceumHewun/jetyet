@@ -11,6 +11,7 @@ import {
   deploymentScript,
   detectionScript,
   nodeDeploymentOptions,
+  nodeVerifiedRevision,
   removeScript,
   serverConfig,
   validateDeploymentVersion,
@@ -33,6 +34,10 @@ function matchesDeployment(
   const actualEch = actual.ech === true;
   const actualEchPublicName =
     typeof actual.echPublicName === "string" ? actual.echPublicName : "";
+  const legacyCertOk =
+    options.tlsSecurity !== "legacy" ||
+    !Array.isArray(actual.certDnsSans) ||
+    actual.certDnsSans.length === 0;
   const pinnedOk =
     options.tlsSecurity !== "pinned" ||
     (typeof actual.certSha256 === "string" &&
@@ -41,11 +46,23 @@ function matchesDeployment(
       /^[A-Za-z0-9+/]{43}=$/.test(actual.certSpkiSha256) &&
       Array.isArray(actual.certDnsSans) &&
       actual.certDnsSans.includes(options.sni));
+  const echNames = Array.isArray(actual.echDetectedPublicNames)
+    ? actual.echDetectedPublicNames
+    : typeof actual.echDetectedPublicName === "string"
+      ? [actual.echDetectedPublicName]
+      : [];
   const echOk =
     !options.ech ||
     (typeof actual.echConfig === "string" &&
       actual.echConfig.length > 0 &&
-      actual.echDetectedPublicName === options.echPublicName);
+      echNames.length > 0 &&
+      echNames.every((name) => name === options.echPublicName));
+  const runtimeOk =
+    actual.active !== true
+      ? actual.runtimeFresh !== false && actual.liveTlsVerified !== false
+      : options.tlsSecurity === "pinned"
+        ? actual.runtimeFresh === true && actual.liveTlsVerified === true
+        : actual.runtimeFresh !== false && actual.liveTlsVerified !== false;
   return (
     actual.owner === "jetyet" &&
     actual.phase === "ready" &&
@@ -61,8 +78,10 @@ function matchesDeployment(
     actualSni === options.sni &&
     actualEch === options.ech &&
     actualEchPublicName === options.echPublicName &&
+    legacyCertOk &&
     pinnedOk &&
     echOk &&
+    runtimeOk &&
     actual.version === version &&
     typeof actual.actualVersion === "string" &&
     actual.actualVersion.split(/[^\w.-]+/).includes(version) &&
@@ -122,6 +141,14 @@ export async function runOperation(
   const execRemote = async (run: (script: string) => Promise<string>) => {
     if (["deploy", "upgrade", "reapply"].includes(t.kind)) {
       if (!n || n.deleted || n.deleting) throw Error("Node removed");
+      if (
+        typeof p.expectedRevision === "string" &&
+        p.expectedRevision &&
+        nodeVerifiedRevision(s, n, h) !== p.expectedRevision
+      )
+        throw Error(
+          "Node state changed since this operation was queued; retry with current settings",
+        );
       const version = deploymentVersionSchema.parse(p.version);
       const options =
         t.kind === "deploy"

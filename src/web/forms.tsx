@@ -8,6 +8,7 @@ import {
   DEFAULT_TLS_SNI,
   MIN_BBR_VERSION,
   MIN_ECH_VERSION,
+  MIN_PINNED_TLS_VERSION,
   compareHysteriaVersion,
   isValidDnsName,
   type TlsSecurityMode,
@@ -1282,6 +1283,9 @@ export function OperationForm({
   const echPublicNameId = useId();
   const echPublicNameHintId = useId();
   const versionHints = [
+    hasDeployOptions || tlsSecurity === "pinned"
+      ? translate("Forced SNI + pinSHA256 requires Hysteria 2 v2.5.2 or later.")
+      : "",
     hasDeployOptions || congestion === "bbr"
       ? translate("BBR requires Hysteria 2 v2.8.0 or later.")
       : "",
@@ -1291,11 +1295,30 @@ export function OperationForm({
   ]
     .filter(Boolean)
     .join(" ");
-  const upgradingFromLegacy =
+  const resolvedSni =
+    tlsSecurity === "pinned" ? sni.trim().toLowerCase() || DEFAULT_TLS_SNI : "";
+  const resolvedEch = tlsSecurity === "pinned" && ech;
+  const resolvedEchPublicName = resolvedEch
+    ? echPublicName.trim().toLowerCase() || DEFAULT_ECH_PUBLIC_NAME
+    : "";
+  const currentSni =
+    currentTlsSecurity === "pinned"
+      ? (typeof node.sni === "string" && node.sni.trim().toLowerCase()) ||
+        DEFAULT_TLS_SNI
+      : "";
+  const currentEch = currentTlsSecurity === "pinned" && Boolean(node.ech);
+  const currentEchPublicName = currentEch
+    ? (typeof node.echPublicName === "string" &&
+        node.echPublicName.trim().toLowerCase()) ||
+      DEFAULT_ECH_PUBLIC_NAME
+    : "";
+  const tlsInvalidatesCachedProfiles =
     kind === "upgrade" &&
     isVerified &&
-    currentTlsSecurity === "legacy" &&
-    tlsSecurity === "pinned";
+    (tlsSecurity !== currentTlsSecurity ||
+      resolvedSni !== currentSni ||
+      resolvedEch !== currentEch ||
+      resolvedEchPublicName !== currentEchPublicName);
 
   return (
     <Modal
@@ -1317,6 +1340,15 @@ export function OperationForm({
             : "";
           if (!/^v2\.\d+\.\d+$/.test(trimmedVersion)) {
             setError("Specify an explicit Hysteria 2 version");
+            return;
+          }
+          if (
+            tlsSecurity === "pinned" &&
+            compareHysteriaVersion(trimmedVersion, MIN_PINNED_TLS_VERSION) < 0
+          ) {
+            setError(
+              "Forced SNI and pinSHA256 require Hysteria 2 v2.5.2 or later",
+            );
             return;
           }
           if (
@@ -1549,10 +1581,10 @@ export function OperationForm({
               </>
             )}
           </div>
-          {upgradingFromLegacy && (
+          {tlsInvalidatesCachedProfiles && (
             <p className="form-note warning">
               {translate(
-                "Upgrading from legacy TLS will issue a pinned SNI certificate. Subscribers must refresh their subscription after the upgrade succeeds.",
+                "Changing TLS mode, SNI, or ECH updates server certificates or ECH keys. Subscribers must refresh their subscription after the upgrade succeeds.",
               )}
             </p>
           )}

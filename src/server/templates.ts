@@ -23,7 +23,12 @@ function isCredentialField(key: string) {
   return credentialField.test(key.replace(/([a-z0-9])([A-Z])/g, "$1-$2"));
 }
 
-function redactQueryCredentials(value: string) {
+const previewTlsQueryField =
+  /^(?:sni|peer|servername|server[-_]?name|name[-_]?cert[-_]?verify|pinsha256|fingerprint|ech|ech[-_]?config|query[-_]?server[-_]?name)$/i;
+const previewTlsObjectField =
+  /^(?:pinsha256|fingerprint|(?:client_)?certificate(?:_(?:public_key_)?sha256)?)$/i;
+
+function redactQueryCredentials(value: string, includeTls = false) {
   return value.replace(
     /([?&])([^=&#\s]+)=[^&#\s]+/g,
     (match, delimiter: string, key: string) => {
@@ -33,7 +38,10 @@ function redactQueryCredentials(value: string) {
       } catch {
         // Malformed escapes can still contain a recognizable credential key.
       }
-      return isCredentialField(decoded) ? `${delimiter}${key}=REDACTED` : match;
+      return isCredentialField(decoded) ||
+        (includeTls && previewTlsQueryField.test(decoded))
+        ? `${delimiter}${key}=REDACTED`
+        : match;
     },
   );
 }
@@ -53,7 +61,7 @@ function ruleTarget(parts: string[]) {
   return commaPayloadRules.has(type) ? parts.length - 1 : 2;
 }
 
-function redact(value: unknown): unknown {
+function redact(value: unknown, previewTls = false): unknown {
   if (typeof value === "string") {
     return redactQueryCredentials(
       value
@@ -62,9 +70,10 @@ function redact(value: unknown): unknown {
           "[REDACTED]",
         )
         .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1REDACTED@"),
+      previewTls,
     );
   }
-  if (Array.isArray(value)) return value.map(redact);
+  if (Array.isArray(value)) return value.map((item) => redact(item, previewTls));
   if (value && typeof value === "object")
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
@@ -73,7 +82,11 @@ function redact(value: unknown): unknown {
           ? Array.isArray(item)
             ? []
             : "REDACTED"
-          : redact(item),
+          : previewTls && previewTlsObjectField.test(key) && item
+            ? Array.isArray(item)
+              ? ["REDACTED"]
+              : "REDACTED"
+            : redact(item, previewTls),
       ]),
     );
   return value;
@@ -99,8 +112,13 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
     if ("sni" in proxy) proxy.sni = host;
     if ("servername" in proxy) proxy.servername = host;
     if ("server-name" in proxy) proxy["server-name"] = host;
+    if ("name-cert-verify" in proxy && proxy["name-cert-verify"])
+      proxy["name-cert-verify"] = host;
     if ("fingerprint" in proxy && proxy.fingerprint)
       proxy.fingerprint = "REDACTED";
+    if ("pinSHA256" in proxy && proxy.pinSHA256) proxy.pinSHA256 = "REDACTED";
+    if ("certificate" in proxy && proxy.certificate)
+      proxy.certificate = "REDACTED";
     if (proxy["ech-opts"] && typeof proxy["ech-opts"] === "object") {
       if ("config" in proxy["ech-opts"] && proxy["ech-opts"].config)
         proxy["ech-opts"].config = "REDACTED";
@@ -109,6 +127,13 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
         proxy["ech-opts"]["query-server-name"]
       )
         proxy["ech-opts"]["query-server-name"] = host;
+    }
+    if (proxy["realm-opts"] && typeof proxy["realm-opts"] === "object") {
+      if (proxy["realm-opts"].sni) proxy["realm-opts"].sni = host;
+      if (proxy["realm-opts"]["name-cert-verify"])
+        proxy["realm-opts"]["name-cert-verify"] = host;
+      if (proxy["realm-opts"].fingerprint)
+        proxy["realm-opts"].fingerprint = "REDACTED";
     }
   }
   for (const [literal, simulated] of literalNames) {
@@ -142,7 +167,7 @@ function redactPreview(text: string, literalNames: Map<string, string>) {
       }
     }
   }
-  return YAML.stringify(redact(config));
+  return YAML.stringify(redact(config, true));
 }
 type SingBoxConfig = Record<string, any> & { outbounds: Record<string, any>[] };
 
@@ -205,6 +230,10 @@ function redactSingBoxPreview(
         outbound.tls.certificate_public_key_sha256 = ["REDACTED"];
       if (outbound.tls.certificate_sha256)
         outbound.tls.certificate_sha256 = ["REDACTED"];
+      if (outbound.tls.certificate)
+        outbound.tls.certificate = Array.isArray(outbound.tls.certificate)
+          ? ["REDACTED"]
+          : "REDACTED";
       if (outbound.tls.ech && typeof outbound.tls.ech === "object") {
         if (outbound.tls.ech.config) outbound.tls.ech.config = ["REDACTED"];
         if (outbound.tls.ech.query_server_name)
@@ -461,7 +490,9 @@ export function render(
         throw Error("Invalid sing-box outbound reference");
       return tag;
     });
-    return mode === "live" ? text : JSON.stringify(redact(config), null, 2);
+    return mode === "live"
+      ? text
+      : JSON.stringify(redact(config, isPortalPreview(mode)), null, 2);
   }
   const output = isPortalPreview(mode)
     ? redactPreview(text, literalNames)

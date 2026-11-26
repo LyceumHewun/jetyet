@@ -11,14 +11,19 @@ import {
 import { loadWorkerConfig } from "../server/config";
 import { digest } from "../server/crypto";
 import { storage, strip, type Entity, type Store } from "../server/db";
-import { serverConfig } from "../server/deployment";
+import {
+  echKeysParserPy,
+  nodeVerifiedRevision,
+  serverConfig,
+} from "../server/deployment";
 import { execute, statsApi, withHost } from "../server/ssh";
 import { beat, claim, enqueue, finish, type Task } from "../server/tasks";
 import { probeNode } from "./probe";
 
 const hostScript = `set -euo pipefail
 python3 - <<'PY'
-import json,subprocess,time,os,hashlib,re
+import base64,json,struct,subprocess,time,os,hashlib,re
+${echKeysParserPy}
 def read(p):
  with open(p) as f:return f.read().strip()
 routes=[]
@@ -50,8 +55,8 @@ if os.path.exists('/etc/jetyet/manifest.json'):
   r=subprocess.run(['openssl','x509','-in','/etc/jetyet/server.crt','-outform','DER'],capture_output=True)
   if r.returncode==0: out['certSha256']=hashlib.sha256(r.stdout).hexdigest()
  if os.path.exists('/etc/jetyet/ech.pem'):
-  hc=re.search(r'-----BEGIN ECH CONFIGS-----(.*?)-----END ECH CONFIGS-----',open('/etc/jetyet/ech.pem').read(),re.S)
-  if hc: out['echConfig']=''.join(hc.group(1).split())
+  parsed=parse_ech_keys_file('/etc/jetyet/ech.pem')
+  if parsed: out['echConfig']=parsed['echConfig']
  out['serviceEpoch']=subprocess.run(['systemctl','show','--value','--property=InvocationID','jetyet-hysteria.service'],capture_output=True,text=True).stdout.strip()
 print(json.dumps(out))
 PY
@@ -97,6 +102,12 @@ export async function collectHost(s: Store, h: Entity) {
     n = s
       .list("node")
       .find((n) => n.hostId === h.id && !n.deleting && n.status !== "draft");
+  const initialRevision = n ? nodeVerifiedRevision(s, n, h) : null;
+  const activeOpBefore = !!s.db
+    .query<{ id: string }, [string]>(
+      "SELECT id FROM tasks WHERE host=? AND urgent=0 AND status='running' LIMIT 1",
+    )
+    .get(h.id);
   try {
     const data = await withHost(s, h, (c) =>
       execute(c, hostScript, h.username !== "root", 30000).then(JSON.parse),
@@ -149,46 +160,81 @@ export async function collectHost(s: Store, h: Entity) {
     s.resolveAlert(h.id, "unreachable");
     s.resolveAlert(h.id, "stale");
     if (n) {
-      const pinnedDrift =
-        n.tlsSecurity === "pinned" &&
-        (data.manifest?.tlsSecurity !== "pinned" ||
-          data.manifest?.sni !== n.sni ||
-          (n.certSha256 && data.certSha256 !== n.certSha256));
-      const echDrift =
-        n.ech === true &&
-        (data.manifest?.ech !== true ||
-          data.manifest?.echPublicName !== n.echPublicName ||
-          (n.echConfig && data.echConfig !== n.echConfig));
-      const drift =
-        data.configHash !== digest(serverConfig(s, n)) ||
-        data.manifest?.nodeId !== n.id ||
-        data.manifest?.hopping !== n.hopping ||
-        data.manifest?.port !== n.port ||
-        pinnedDrift ||
-        echDrift;
-      if (drift)
-        s.alert(
-          n.id,
-          "drift",
-          "Remote configuration differs from the platform configuration.",
-        );
-      else s.resolveAlert(n.id, "drift");
-      const current = s.get(n.id)!;
-      s.put(
-        "node",
-        {
-          ...strip(current),
-          service: data.service,
-          drift,
-          lastSeen: at,
-          ...(data.service ? {} : { online: {} }),
-        },
-        {
-          ...s.secrets(n.id),
-          observedConfig: typeof data.config === "string" ? data.config : "",
-        },
-        n.id,
-      );
+      const current = s.get(n.id);
+      const latestHost = s.get(h.id);
+      const activeOpAfter = !!s.db
+        .query<{ id: string }, [string]>(
+          "SELECT id FROM tasks WHERE host=? AND urgent=0 AND status='running' LIMIT 1",
+        )
+        .get(h.id);
+      const revisionChanged =
+        !current ||
+        current.deleted ||
+        current.deleting ||
+        !latestHost ||
+        latestHost.deleted ||
+        nodeVerifiedRevision(s, current, latestHost) !== initialRevision;
+      if (current && !current.deleted && !current.deleting) {
+        if (
+          !activeOpBefore &&
+          !activeOpAfter &&
+          !revisionChanged &&
+          data.manifest?.phase !== "installing"
+        ) {
+          const pinnedDrift =
+            current.tlsSecurity === "pinned" &&
+            (data.manifest?.tlsSecurity !== "pinned" ||
+              data.manifest?.sni !== current.sni ||
+              (current.certSha256 && data.certSha256 !== current.certSha256));
+          const echDrift =
+            current.ech === true &&
+            (data.manifest?.ech !== true ||
+              data.manifest?.echPublicName !== current.echPublicName ||
+              (current.echConfig && data.echConfig !== current.echConfig));
+          const drift =
+            data.configHash !== digest(serverConfig(s, current)) ||
+            data.manifest?.nodeId !== current.id ||
+            data.manifest?.hopping !== current.hopping ||
+            data.manifest?.port !== current.port ||
+            pinnedDrift ||
+            echDrift;
+          if (drift)
+            s.alert(
+              current.id,
+              "drift",
+              "Remote configuration differs from the platform configuration.",
+            );
+          else s.resolveAlert(current.id, "drift");
+          s.put(
+            "node",
+            {
+              ...strip(current),
+              service: data.service,
+              drift,
+              lastSeen: at,
+              ...(data.service ? {} : { online: {} }),
+            },
+            {
+              ...s.secrets(current.id),
+              observedConfig:
+                typeof data.config === "string" ? data.config : "",
+            },
+            current.id,
+          );
+        } else {
+          s.put(
+            "node",
+            {
+              ...strip(current),
+              service: data.service,
+              lastSeen: at,
+              ...(data.service ? {} : { online: {} }),
+            },
+            undefined,
+            current.id,
+          );
+        }
+      }
       if (data.service) {
         try {
           // /traffic tx is client upload (server inbound); rx is client download (server outbound).
