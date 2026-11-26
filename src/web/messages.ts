@@ -727,12 +727,18 @@ export const zhHans = {
     "可选，网络上可见的外层伪装 SNI。留空将使用默认值 {0}。",
   "TLS & SECURITY": "TLS 与安全",
   "TRANSPORT & TUNING": "传输与调优",
-  "Forced SNI and pinSHA256 require Hysteria 2 v2.5.2 or later":
-    "强制 SNI 与 pinSHA256 要求 Hysteria 2 v2.5.2 或更高版本",
-  "Forced SNI + pinSHA256 requires Hysteria 2 v2.5.2 or later.":
-    "强制 SNI 与 pinSHA256 要求 Hysteria 2 v2.5.2 或更高版本。",
+  "Forced SNI and pinSHA256 require Hysteria 2 v2.6.4 or later":
+    "强制 SNI 与 pinSHA256 要求 Hysteria 2 v2.6.4 或更高版本",
+  "Forced SNI + pinSHA256 requires Hysteria 2 v2.6.4 or later.":
+    "强制 SNI 与 pinSHA256 要求 Hysteria 2 v2.6.4 或更高版本。",
   "Node state changed since this operation was queued; retry with current settings":
     "任务入队后节点状态已变更，请按最新配置重试",
+  "Node settings changed since this task was created; reopen the node operation form to queue a new task":
+    "此任务创建后节点配置已变更，请重新打开节点操作表单发起新任务",
+  "Management host Hysteria 2 binary must be v2.6.4 or later to probe pinned nodes":
+    "控制面宿主机 Hysteria 2 二进制需为 v2.6.4 或更高版本才能探测固定指纹节点",
+  "Management host Hysteria 2 binary must be v2.12.3 or later to probe ECH nodes":
+    "控制面宿主机 Hysteria 2 二进制需为 v2.12.3 或更高版本才能探测 ECH 节点",
   "Changing TLS mode, SNI, or ECH updates server certificates or ECH keys. Subscribers must refresh their subscription after the upgrade succeeds.":
     "更改 TLS 模式、SNI 或 ECH 会更新服务端证书或 ECH 密钥，升级成功后订阅用户需刷新一次订阅。",
 } as const;

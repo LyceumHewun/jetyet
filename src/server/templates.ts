@@ -206,6 +206,23 @@ function mapOutboundReferences(
   rules(config.route.rules);
 }
 
+function redactSingBoxTls(tls: unknown, placeholderHost: string) {
+  if (!tls || typeof tls !== "object" || Array.isArray(tls)) return;
+  const obj = tls as Record<string, any>;
+  if (obj.server_name) obj.server_name = placeholderHost;
+  if (obj.certificate_public_key_sha256)
+    obj.certificate_public_key_sha256 = ["REDACTED"];
+  if (obj.certificate_sha256) obj.certificate_sha256 = ["REDACTED"];
+  if (obj.certificate)
+    obj.certificate = Array.isArray(obj.certificate)
+      ? ["REDACTED"]
+      : "REDACTED";
+  if (obj.ech && typeof obj.ech === "object" && !Array.isArray(obj.ech)) {
+    if (obj.ech.config) obj.ech.config = ["REDACTED"];
+    if (obj.ech.query_server_name) obj.ech.query_server_name = placeholderHost;
+  }
+}
+
 function redactSingBoxPreview(
   config: SingBoxConfig,
   tags: Set<string>,
@@ -213,7 +230,10 @@ function redactSingBoxPreview(
 ) {
   const aliases = new Map<string, string>();
   for (const outbound of config.outbounds) {
-    if (!("server" in outbound)) continue;
+    if (!("server" in outbound)) {
+      redactSingBoxTls(outbound?.tls, "outbound.invalid");
+      continue;
+    }
     const index = aliases.size + 1;
     let tag = "Preview node " + index;
     while (tags.has(tag)) tag += " (preview)";
@@ -224,22 +244,19 @@ function redactSingBoxPreview(
     outbound.server = "node-" + index + ".invalid";
     if ("server_port" in outbound) outbound.server_port = 443;
     if ("server_ports" in outbound) outbound.server_ports = ["443:444"];
-    if (outbound.tls && typeof outbound.tls === "object") {
-      if (outbound.tls.server_name) outbound.tls.server_name = outbound.server;
-      if (outbound.tls.certificate_public_key_sha256)
-        outbound.tls.certificate_public_key_sha256 = ["REDACTED"];
-      if (outbound.tls.certificate_sha256)
-        outbound.tls.certificate_sha256 = ["REDACTED"];
-      if (outbound.tls.certificate)
-        outbound.tls.certificate = Array.isArray(outbound.tls.certificate)
-          ? ["REDACTED"]
-          : "REDACTED";
-      if (outbound.tls.ech && typeof outbound.tls.ech === "object") {
-        if (outbound.tls.ech.config) outbound.tls.ech.config = ["REDACTED"];
-        if (outbound.tls.ech.query_server_name)
-          outbound.tls.ech.query_server_name = outbound.server;
-      }
-    }
+    redactSingBoxTls(outbound.tls, outbound.server);
+  }
+  if (Array.isArray(config.dns?.servers)) {
+    config.dns.servers.forEach((server: Record<string, any>, idx: number) => {
+      if (server && typeof server === "object")
+        redactSingBoxTls(server.tls, `dns-${idx + 1}.invalid`);
+    });
+  }
+  if (Array.isArray(config.endpoints)) {
+    config.endpoints.forEach((endpoint: Record<string, any>, idx: number) => {
+      if (endpoint && typeof endpoint === "object")
+        redactSingBoxTls(endpoint.tls, `endpoint-${idx + 1}.invalid`);
+    });
   }
   for (const [literal, simulated] of literalNames) {
     if (aliases.has(simulated)) aliases.set(literal, aliases.get(simulated)!);

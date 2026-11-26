@@ -3,8 +3,34 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
+import {
+  MIN_ECH_VERSION,
+  MIN_PINNED_TLS_VERSION,
+  compareHysteriaVersion,
+} from "../shared/tls";
 import { hasEch, hasPinnedTls } from "../server/subscriptions";
 import type { Entity, Store } from "../server/db";
+
+const probeBinaryVersions = new Map<string, string>();
+
+async function probeBinaryVersion(binary: string): Promise<string> {
+  const cached = probeBinaryVersions.get(binary);
+  if (cached) return cached;
+  const proc = Bun.spawn([binary, "version"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [out, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    proc.exited,
+  ]);
+  const match = code === 0 ? out.match(/\bv2\.\d+\.\d+\b/) : null;
+  if (!match)
+    throw Error("Unable to determine management host Hysteria 2 binary version");
+  probeBinaryVersions.set(binary, match[0]);
+  return match[0];
+}
+
 async function freePort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((res, rej) => {
@@ -28,17 +54,30 @@ async function stopChild(child: ReturnType<typeof Bun.spawn>) {
   }
 }
 export async function probeNode(s: Store, n: Entity) {
+  const pinned = hasPinnedTls(n);
+  const ech = hasEch(n);
+  if (pinned) {
+    const version = await probeBinaryVersion(s.config.hysteriaBinary);
+    if (compareHysteriaVersion(version, MIN_PINNED_TLS_VERSION) < 0)
+      throw Error(
+        "Management host Hysteria 2 binary must be v2.6.4 or later to probe pinned nodes",
+      );
+    if (ech && compareHysteriaVersion(version, MIN_ECH_VERSION) < 0)
+      throw Error(
+        "Management host Hysteria 2 binary must be v2.12.3 or later to probe ECH nodes",
+      );
+  }
   const dir = await mkdtemp(join(tmpdir(), "jetyet-probe-"));
   let child: ReturnType<typeof Bun.spawn> | undefined;
   try {
     const path = join(dir, "config.yaml"),
       address = n.address.includes(":") ? `[${n.address}]` : n.address;
-    const tls = hasPinnedTls(n)
+    const tls = pinned
       ? {
           sni: n.sni,
           insecure: true,
           pinSHA256: n.certSha256,
-          ...(hasEch(n) ? { ech: n.echConfig } : {}),
+          ...(ech ? { ech: n.echConfig } : {}),
         }
       : { insecure: true };
     let port = 0;

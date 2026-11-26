@@ -97,21 +97,27 @@ function isUserStale(
   );
 }
 
-export async function collectHost(s: Store, h: Entity) {
+export async function collectHost(
+  s: Store,
+  h: Entity,
+  runner?: (script: string) => Promise<string>,
+) {
   const at = Date.now(),
     n = s
       .list("node")
       .find((n) => n.hostId === h.id && !n.deleting && n.status !== "draft");
-  const initialRevision = n ? nodeVerifiedRevision(s, n, h) : null;
-  const activeOpBefore = !!s.db
-    .query<{ id: string }, [string]>(
-      "SELECT id FROM tasks WHERE host=? AND urgent=0 AND status='running' LIMIT 1",
-    )
-    .get(h.id);
   try {
-    const data = await withHost(s, h, (c) =>
-      execute(c, hostScript, h.username !== "root", 30000).then(JSON.parse),
-    );
+    const initialRevision = n ? nodeVerifiedRevision(s, n, h) : null;
+    const activeOpBefore = !!s.db
+      .query<{ id: string }, [string]>(
+        "SELECT id FROM tasks WHERE host=? AND kind!='kick' AND state='running' LIMIT 1",
+      )
+      .get(h.id);
+    const data = runner
+      ? JSON.parse(await runner(hostScript))
+      : await withHost(s, h, (c) =>
+          execute(c, hostScript, h.username !== "root", 30000).then(JSON.parse),
+        );
     const totalDelta = data.cpuTotal - (h.cpuTotal ?? data.cpuTotal),
       idleDelta = data.cpuIdle - (h.cpuIdle ?? data.cpuIdle);
     const cpu =
@@ -164,7 +170,7 @@ export async function collectHost(s: Store, h: Entity) {
       const latestHost = s.get(h.id);
       const activeOpAfter = !!s.db
         .query<{ id: string }, [string]>(
-          "SELECT id FROM tasks WHERE host=? AND urgent=0 AND status='running' LIMIT 1",
+          "SELECT id FROM tasks WHERE host=? AND kind!='kick' AND state='running' LIMIT 1",
         )
         .get(h.id);
       const revisionChanged =
@@ -175,12 +181,8 @@ export async function collectHost(s: Store, h: Entity) {
         latestHost.deleted ||
         nodeVerifiedRevision(s, current, latestHost) !== initialRevision;
       if (current && !current.deleted && !current.deleting) {
-        if (
-          !activeOpBefore &&
-          !activeOpAfter &&
-          !revisionChanged &&
-          data.manifest?.phase !== "installing"
-        ) {
+        if (!activeOpBefore && !activeOpAfter && !revisionChanged) {
+          const incompleteInstall = data.manifest?.phase !== "ready";
           const pinnedDrift =
             current.tlsSecurity === "pinned" &&
             (data.manifest?.tlsSecurity !== "pinned" ||
@@ -192,6 +194,7 @@ export async function collectHost(s: Store, h: Entity) {
               data.manifest?.echPublicName !== current.echPublicName ||
               (current.echConfig && data.echConfig !== current.echConfig));
           const drift =
+            incompleteInstall ||
             data.configHash !== digest(serverConfig(s, current)) ||
             data.manifest?.nodeId !== current.id ||
             data.manifest?.hopping !== current.hopping ||
@@ -202,7 +205,9 @@ export async function collectHost(s: Store, h: Entity) {
             s.alert(
               current.id,
               "drift",
-              "Remote configuration differs from the platform configuration.",
+              incompleteInstall
+                ? "Remote deployment is incomplete and differs from the platform configuration."
+                : "Remote configuration differs from the platform configuration.",
             );
           else s.resolveAlert(current.id, "drift");
           s.put(

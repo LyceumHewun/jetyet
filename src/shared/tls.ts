@@ -1,7 +1,7 @@
 export const DEFAULT_HYSTERIA_VERSION = "v2.14.0";
 export const DEFAULT_TLS_SNI = "bing.com";
 export const DEFAULT_ECH_PUBLIC_NAME = "cloudflare-ech.com";
-export const MIN_PINNED_TLS_VERSION = "v2.5.2";
+export const MIN_PINNED_TLS_VERSION = "v2.6.4";
 export const MIN_BBR_VERSION = "v2.8.0";
 export const MIN_ECH_VERSION = "v2.12.3";
 

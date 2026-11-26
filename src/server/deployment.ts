@@ -117,7 +117,7 @@ export function validateDeploymentVersion(
     options.tlsSecurity === "pinned" &&
     compareHysteriaVersion(version, MIN_PINNED_TLS_VERSION) < 0
   )
-    throw Error("Forced SNI and pinSHA256 require Hysteria 2 v2.5.2 or later");
+    throw Error("Forced SNI and pinSHA256 require Hysteria 2 v2.6.4 or later");
   if (
     options.congestion === "bbr" &&
     compareHysteriaVersion(version, MIN_BBR_VERSION) < 0
@@ -227,7 +227,7 @@ if test -e /etc/jetyet/manifest.json; then
   ${
     reapply
       ? "true"
-      : `python3 -c ${quote(`import json,hashlib,os; m=json.load(open('/etc/jetyet/manifest.json')); p='/etc/jetyet/config.yaml'; allowed=['${previousHash}','${desiredHash}']; hashes=[m['configHash']] if m['phase']=='ready' else allowed; sec=lambda o: (o.get('tlsSecurity') if o.get('tlsSecurity')=='pinned' else 'legacy', o.get('sni') or '', bool(o.get('ech')), o.get('echPublicName') or ''); allowed_sec={sec(json.loads(${JSON.stringify(JSON.stringify(previousOptions))})), sec(json.loads(${JSON.stringify(JSON.stringify(options))}))}; assert (m['configHash'] in allowed and sec(m) in allowed_sec and hashlib.sha256(open(p,'rb').read()).hexdigest() in hashes if os.path.exists(p) else m['phase']=='installing'), 'Configuration drift: explicitly reapply platform configuration'`)}`
+      : `python3 -c ${quote(`import json,hashlib,os; m=json.load(open('/etc/jetyet/manifest.json')); p='/etc/jetyet/config.yaml'; allowed=['${previousHash}','${desiredHash}']; hashes=[m['configHash']] if m['phase']=='ready' else allowed; sec=lambda o: (o.get('tlsSecurity') if o.get('tlsSecurity')=='pinned' else 'legacy', o.get('sni') or '', bool(o.get('ech')), o.get('echPublicName') or ''); prev_ver=${JSON.stringify(typeof n.version === "string" ? n.version : "")}; prev_sec=sec(json.loads(${JSON.stringify(JSON.stringify(previousOptions))})); next_sec=sec(json.loads(${JSON.stringify(JSON.stringify(options))})); cur_ver=m.get('version') or ''; cur_sec=sec(m); ready_ok=((cur_ver==prev_ver or not prev_ver) and m['configHash']=='${previousHash}' and cur_sec==prev_sec) or (cur_ver==${JSON.stringify(version)} and m['configHash']=='${desiredHash}' and cur_sec==next_sec); install_ok=(cur_ver==${JSON.stringify(version)} and cur_sec==next_sec) or (m['configHash']=='${previousHash}' and cur_sec==prev_sec); assert ((ready_ok and os.path.exists(p) and hashlib.sha256(open(p,'rb').read()).hexdigest() in hashes) if m['phase']=='ready' else (m['phase']=='installing' and install_ok and (not os.path.exists(p) or hashlib.sha256(open(p,'rb').read()).hexdigest() in allowed))), 'Configuration drift: explicitly reapply platform configuration'`)}`
   }
 else
   if test -e /etc/hysteria/config.yaml || systemctl is-active --quiet hysteria-server.service || test -e /etc/jetyet/config.yaml || command -v hysteria >/dev/null; then echo 'Existing unmanaged Hysteria installation; refusing overwrite' >&2; exit 1; fi
@@ -330,12 +330,25 @@ function echStep(options: DeploymentOptions) {
   if (!options.ech) {
     return "rm -f /etc/jetyet/ech.pem /etc/jetyet/ech.pem.next";
   }
-  const checkEchScript = `import base64,re,struct,sys
+  const reuseOrRepairEchScript = `import base64,os,re,struct,sys
 ${echKeysParserPy}
-parsed=parse_ech_keys_file(sys.argv[1])
+path=sys.argv[1]
 target=sys.argv[2].lower()
-sys.exit(0 if parsed and parsed['configsBlockMatches'] and all(pn==target for pn in parsed['publicNames']) else 1)`;
-  return `if ! test -s /etc/jetyet/ech.pem || ! python3 -c ${quote(checkEchScript)} /etc/jetyet/ech.pem ${quote(options.echPublicName)} 2>/dev/null; then
+parsed=parse_ech_keys_file(path)
+if not parsed or not all(pn==target for pn in parsed['publicNames']):
+ sys.exit(1)
+if not parsed['configsBlockMatches']:
+ text=open(path).read()
+ hk=re.search(r'-----BEGIN ECH KEYS-----.*?-----END ECH KEYS-----',text,re.S)
+ if not hk: sys.exit(1)
+ lines=[parsed['echConfig'][i:i+64] for i in range(0,len(parsed['echConfig']),64)]
+ rebuilt=hk.group(0).strip()+'\\n-----BEGIN ECH CONFIGS-----\\n'+'\\n'.join(lines)+'\\n-----END ECH CONFIGS-----\\n'
+ tmp=path+'.next'
+ fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+ with os.fdopen(fd,'w') as f: f.write(rebuilt)
+ os.replace(tmp,path)
+sys.exit(0)`;
+  return `if ! test -s /etc/jetyet/ech.pem || ! python3 -c ${quote(reuseOrRepairEchScript)} /etc/jetyet/ech.pem ${quote(options.echPublicName)} 2>/dev/null; then
   /usr/local/bin/hysteria ech --public-name ${quote(options.echPublicName)} -o /etc/jetyet/ech.pem.next --overwrite >/dev/null
   chmod 600 /etc/jetyet/ech.pem.next
   mv /etc/jetyet/ech.pem.next /etc/jetyet/ech.pem
@@ -343,8 +356,10 @@ fi
 chmod 600 /etc/jetyet/ech.pem`;
 }
 export const detectionScript = `set -euo pipefail
+exec 9>/run/jetyet-operation.lock
+flock -w 15 9
 python3 - <<'PY'
-import base64,ipaddress,json,hashlib,os,re,struct,subprocess,tempfile
+import base64,ipaddress,json,hashlib,os,re,struct,subprocess,tempfile,time
 ${echKeysParserPy}
 m=json.load(open('/etc/jetyet/manifest.json'))
 p='/etc/jetyet/config.yaml'
@@ -368,33 +383,47 @@ if os.path.exists(ech_path):
   m['echDetectedPublicNames']=parsed['publicNames']
   m['echDetectedPublicName']=parsed['publicNames'][0]
 if m['active']:
- pid_out=subprocess.run(['systemctl','show','--value','--property=MainPID','jetyet-hysteria.service'],capture_output=True,text=True).stdout.strip()
- start_s=os.stat(f'/proc/{pid_out}').st_mtime if pid_out.isdigit() and int(pid_out)>0 and os.path.exists(f'/proc/{pid_out}') else None
+ inv_before=subprocess.run(['systemctl','show','--value','--property=InvocationID','jetyet-hysteria.service'],capture_output=True,text=True).stdout.strip()
+ mono_us_out=subprocess.run(['systemctl','show','--value','--property=ActiveEnterTimestampMonotonic','jetyet-hysteria.service'],capture_output=True,text=True).stdout.strip()
+ start_s=None
+ if mono_us_out.isdigit() and int(mono_us_out)>0:
+  age_s=time.clock_gettime(time.CLOCK_MONOTONIC)-(int(mono_us_out)/1_000_000.0)
+  if age_s>=-0.5:
+   start_s=time.time()-age_s
  checked_files=[p, cert_path, '/etc/jetyet/server.key']
  if m.get('ech') is True: checked_files.append(ech_path)
  m['runtimeFresh']=bool(start_s is not None and all(os.path.exists(fp) and os.path.getmtime(fp)<=start_s+0.5 for fp in checked_files))
  live_ok=False
  if m.get('port'):
-  tls_cfg={'insecure': True}
-  if m.get('tlsSecurity')=='pinned':
-   tls_cfg['sni']=m.get('sni') or ''
-   tls_cfg['pinSHA256']=m.get('certSha256') or ''
-   if m.get('ech') is True:
-    tls_cfg['ech']=m.get('echConfig') or ''
-  with tempfile.TemporaryDirectory(prefix='jetyet-tls-verify-') as td:
-   cfg_path=os.path.join(td,'client.json')
-   for host in ('127.0.0.1','[::1]'):
+  def probe_once(host, tls_cfg):
+   with tempfile.TemporaryDirectory(prefix='jetyet-tls-verify-') as td:
+    cfg_path=os.path.join(td,'client.json')
     with open(cfg_path,'w') as f:
      json.dump({'server': f'{host}:{m["port"]}', 'auth': 'jetyet-live-tls-verify', 'tls': tls_cfg}, f)
     try:
      r=subprocess.run(['/usr/local/bin/hysteria','client','-c',cfg_path],capture_output=True,text=True,timeout=6)
-     combined=(r.stdout or '')+'\\n'+(r.stderr or '')
-     if 'authentication error, HTTP status code:' in combined:
-      live_ok=True
-      break
+     return (r.stdout or '')+'\\n'+(r.stderr or '')
     except subprocess.TimeoutExpired:
-     pass
- m['liveTlsVerified']=live_ok
+     return ''
+  pos_tls={'insecure': True}
+  if m.get('tlsSecurity')=='pinned':
+   pos_tls['sni']=m.get('sni') or ''
+   pos_tls['pinSHA256']=m.get('certSha256') or ''
+   if m.get('ech') is True:
+    pos_tls['ech']=m.get('echConfig') or ''
+  matched_host=None
+  for host in ('127.0.0.1','[::1]'):
+   if 'authentication error, HTTP status code:' in probe_once(host, pos_tls):
+    matched_host=host
+    break
+  if matched_host:
+   if m.get('tlsSecurity')=='pinned':
+    neg_out=probe_once(matched_host, {'sni': 'invalid-sni-probe.invalid', 'insecure': True})
+    live_ok=('authentication error, HTTP status code:' not in neg_out) and ('connect error:' in neg_out)
+   else:
+    live_ok=True
+ inv_after=subprocess.run(['systemctl','show','--value','--property=InvocationID','jetyet-hysteria.service'],capture_output=True,text=True).stdout.strip()
+ m['liveTlsVerified']=bool(live_ok and inv_before and inv_before==inv_after)
 if m['active'] and m.get('hopping'):
  dport=m['hopping'].replace('-',':')
  comment='jetyet-'+m['nodeId']

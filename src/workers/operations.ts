@@ -255,7 +255,13 @@ export async function runOperation(
         throw Error("Remote deployment does not match the planned node");
       const { version, ...options } = detected.data;
       validateDeploymentVersion(version, options);
-      const verifyState = async (wantActive: boolean) => {
+      const needsLiveTlsProof =
+        options.tlsSecurity === "pinned" || options.ech === true;
+      let liveTlsAttested =
+        actual.active === true &&
+        actual.runtimeFresh === true &&
+        actual.liveTlsVerified === true;
+      const runServiceState = async (wantActive: boolean) => {
         if (actual.active === wantActive) return;
         await run(
           `set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl ${wantActive ? "start" : "stop"} jetyet-hysteria.service\n`,
@@ -270,12 +276,34 @@ export async function runOperation(
               ? "Remote deployment failed to start with verified rules"
               : "Remote deployment failed to stop",
           );
+        if (
+          wantActive &&
+          actual.runtimeFresh === true &&
+          actual.liveTlsVerified === true
+        )
+          liveTlsAttested = true;
       };
-      await verifyState(planned.active);
+      if (needsLiveTlsProof && !liveTlsAttested) {
+        if (actual.active === true)
+          throw Error("Live TLS verification failed for running deployment");
+        try {
+          await runServiceState(true);
+        } catch (err) {
+          if (!planned.active) {
+            await run(
+              "set -e\nexec 9>/run/jetyet-operation.lock\nflock -w 15 9\nsystemctl stop jetyet-hysteria.service\n",
+            ).catch(() => {});
+          }
+          throw err;
+        }
+      }
+      await runServiceState(planned.active);
       const beforePublish = current();
       if (!matchesDeployment(s, beforePublish.node, actual, options, version))
         throw Error("Planned node configuration changed during detection");
-      await verifyState(beforePublish.active);
+      await runServiceState(beforePublish.active);
+      if (needsLiveTlsProof && !liveTlsAttested)
+        throw Error("Live TLS verification failed for detected deployment");
       s.db
         .transaction(() => {
           const latest = current();

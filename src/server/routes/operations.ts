@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { strip } from "../db";
+import { nodeVerifiedRevision } from "../deployment";
 import { revokePortalAccess } from "../sign-in";
 import { enqueue, kickUser } from "../tasks";
 import type { Routes } from "./context";
@@ -129,9 +130,22 @@ export function registerOperationsRoutes({
       .get(c.req.param("id"));
     if (!task || !["failed", "cancelled"].includes(task.state))
       throw Error("Only failed or cancelled tasks can be retried");
-    entity(task.host, "host");
+    const host = entity(task.host, "host");
+    const payload = JSON.parse(task.payload);
+    if (
+      ["deploy", "upgrade", "reapply"].includes(task.kind) &&
+      typeof payload?.expectedRevision === "string" &&
+      payload.expectedRevision &&
+      typeof payload?.nodeId === "string"
+    ) {
+      const node = entity(payload.nodeId, "node");
+      if (nodeVerifiedRevision(s, node, host) !== payload.expectedRevision)
+        throw Error(
+          "Node settings changed since this task was created; reopen the node operation form to queue a new task",
+        );
+    }
     return c.json({
-      id: enqueue(s, task.host, task.kind, JSON.parse(task.payload)),
+      id: enqueue(s, task.host, task.kind, payload),
     });
   });
 

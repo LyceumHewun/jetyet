@@ -7,6 +7,7 @@ import {
   spyOn,
   test,
 } from "bun:test";
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,6 +40,7 @@ import {
   defaultTemplate,
   render,
 } from "../src/server/templates";
+import { collectHost } from "../src/workers/monitor";
 import { runOperation } from "../src/workers/operations";
 
 let s: Store, dir: string;
@@ -1221,21 +1223,33 @@ describe("detect operation and concurrent safety", () => {
     const certSpkiSha256 = Buffer.alloc(32, 7).toString("base64");
     const subBase = `/sub/${s.secrets(user.id).subscriptionToken}`;
 
-    // Construct a real RFC 9849 ECHConfigList + ECH KEYS PEM with an unknown leading version entry
+    // Construct a real RFC 9849 ECHConfigList + ECH KEYS PEM using matched X25519 keypairs and a leading unknown version entry
     const u16 = (n: number) => Buffer.from([(n >> 8) & 0xff, n & 0xff]);
-    const buildEchConfig = (publicName: string, version = 0xfe0d) => {
+    const makeX25519Pair = () => {
+      const pair = generateKeyPairSync("x25519");
+      const privDer = pair.privateKey.export({ format: "der", type: "pkcs8" });
+      const pubDer = pair.publicKey.export({ format: "der", type: "spki" });
+      return {
+        priv: Buffer.from(privDer.subarray(privDer.length - 32)),
+        pub: Buffer.from(pubDer.subarray(pubDer.length - 32)),
+      };
+    };
+    const buildEchConfig = (
+      publicName: string,
+      pub: Buffer,
+      version = 0xfe0d,
+    ) => {
       if (version !== 0xfe0d) {
         const body = Buffer.from([1, 2, 3, 4]);
         return Buffer.concat([u16(version), u16(body.length), body]);
       }
-      const pk = Buffer.alloc(32, 0x42);
       const cs = Buffer.from([0x00, 0x01, 0x00, 0x01]);
       const pn = Buffer.from(publicName, "ascii");
       const contents = Buffer.concat([
         Buffer.from([0x01]),
         u16(0x0020),
-        u16(pk.length),
-        pk,
+        u16(pub.length),
+        pub,
         u16(cs.length),
         cs,
         Buffer.from([64]),
@@ -1245,27 +1259,28 @@ describe("detect operation and concurrent safety", () => {
       ]);
       return Buffer.concat([u16(0xfe0d), u16(contents.length), contents]);
     };
-    const unknownCfg = buildEchConfig("ignored.example", 0xfe0c);
-    const realCfg = buildEchConfig("cloudflare-ech.com", 0xfe0d);
+    const k1 = makeX25519Pair();
+    const k2 = makeX25519Pair();
+    const unknownCfg = buildEchConfig("ignored.example", k1.pub, 0xfe0c);
+    const realCfg = buildEchConfig("cloudflare-ech.com", k2.pub, 0xfe0d);
     const allCfgs = Buffer.concat([unknownCfg, realCfg]);
     const authoritativeList = Buffer.concat([u16(allCfgs.length), allCfgs]);
     const echConfig = authoritativeList.toString("base64");
 
     // Verify the Python authoritative ECH KEYS parser derives the exact list even when ECH CONFIGS differs
-    const priv = Buffer.alloc(32, 0x11);
     const keysBlob = Buffer.concat([
-      u16(priv.length),
-      priv,
+      u16(k1.priv.length),
+      k1.priv,
       u16(unknownCfg.length),
       unknownCfg,
-      u16(priv.length),
-      priv,
+      u16(k2.priv.length),
+      k2.priv,
       u16(realCfg.length),
       realCfg,
     ]);
     const staleList = Buffer.concat([
-      u16(buildEchConfig("stale.example").length),
-      buildEchConfig("stale.example"),
+      u16(buildEchConfig("stale.example", k1.pub).length),
+      buildEchConfig("stale.example", k1.pub),
     ]);
     const mismatchedPem = [
       "-----BEGIN ECH KEYS-----",
@@ -1351,13 +1366,13 @@ describe("detect operation and concurrent safety", () => {
     ).pathname;
     expect((await app.request(legacyLinkPath)).status).toBe(200);
 
-    // Reject pinned TLS on Hysteria < v2.5.2 and ECH on Hysteria < v2.12.3
+    // Reject pinned TLS on Hysteria < v2.6.4 and ECH on Hysteria < v2.12.3
     const tooOldPinned = await app.request(`/api/nodes/${node.id}/operation`, {
       method: "POST",
       headers: { origin: s.config.origin, cookie },
       body: JSON.stringify({
         kind: "upgrade",
-        version: "v2.5.1",
+        version: "v2.6.3",
         protocol: "hysteria2",
         congestion: "brutal",
         tuning: false,
@@ -1516,6 +1531,13 @@ describe("detect operation and concurrent safety", () => {
       runOperation(s, staleTask, async () => "should not execute"),
     ).rejects.toThrow("Node state changed since this operation was queued");
 
+    // Activity retry API rejects stale pre-upgrade tasks instead of requeuing them
+    const staleRetryRes = await app.request(`/api/tasks/${staleTask.id}/retry`, {
+      method: "POST",
+      headers: { origin: s.config.origin, cookie },
+    });
+    expect(staleRetryRes.status).toBe(400);
+
     // Subscriptions now publish pinned SNI + pinSHA256 + ECH across all formats
     const mihomoProxy = YAML.parse(
       await (await app.request(`${subBase}?format=mihomo`)).text(),
@@ -1555,7 +1577,7 @@ describe("detect operation and concurrent safety", () => {
     expect(parsedUri.searchParams.get("pinSHA256")).toBe(certSha256);
     expect(parsedUri.searchParams.get("ech")).toBe(echConfig);
 
-    // Portal previews hide real SNI, pins, ECH config, and literal template TLS fields / URIs
+    // Portal previews hide real SNI, pins, ECH config, and literal template TLS fields / URIs / DNS TLS
     const literalMihomoTemplate = `${defaultTemplate}
 proxy-providers:
   ext:
@@ -1582,18 +1604,119 @@ proxy-providers:
     const singBoxPreview = render(
       s,
       user,
-      defaultSingBoxTemplate.replace(
-        '"final": "Proxy"',
-        `"rule_set": [{"type": "remote", "tag": "rs", "url": "https://example.com/rules.srs?sni=secret.sb.example&pinSHA256=${certSha256}&ech=${encodeURIComponent(echConfig)}"}], "final": "Proxy"`,
-      ),
+      defaultSingBoxTemplate
+        .replace(
+          '{"type": "https", "tag": "cloudflare", "server": "1.1.1.1"}',
+          `{"type": "https", "tag": "cloudflare", "server": "1.1.1.1", "tls": {"enabled": true, "server_name": "dns-secret.example", "ech": {"enabled": true, "config": ["-----BEGIN ECH CONFIGS-----", "${echConfig}", "-----END ECH CONFIGS-----"]}}}`,
+        )
+        .replace(
+          '"final": "Proxy"',
+          `"rule_set": [{"type": "remote", "tag": "rs", "url": "https://example.com/rules.srs?sni=secret.sb.example&pinSHA256=${certSha256}&ech=${encodeURIComponent(echConfig)}"}], "final": "Proxy"`,
+        ),
       "assigned-preview",
       "sing-box",
     );
     expect(singBoxPreview).not.toContain("bing.com");
+    expect(singBoxPreview).not.toContain("dns-secret.example");
     expect(singBoxPreview).not.toContain("secret.sb.example");
     expect(singBoxPreview).not.toContain(certSpkiSha256);
     expect(singBoxPreview).not.toContain(certSha256);
     expect(singBoxPreview).not.toContain(echConfig);
+
+    // Monitor collector runs against real SQLite tasks schema: skips drift while an op runs, flags abandoned installing phase
+    const baseSample = {
+      inbound: 100,
+      outbound: 200,
+      ifaceEpoch: "eth0",
+      boot: "boot-1",
+      uptime: 1000,
+      cpuTotal: 100,
+      cpuIdle: 50,
+      memory: 20,
+      disk: 10,
+      service: false,
+      configHash: expectedHash,
+      config: serverConfig(s, s.get(node.id)!),
+      certSha256,
+      echConfig,
+      manifest: {
+        ...upgradedOptions,
+        owner: "jetyet",
+        phase: "installing",
+        nodeId: node.id,
+        hostId: host.id,
+        port: node.port,
+        hopping: node.hopping,
+      },
+    };
+    enqueue(s, host.id, "upgrade", { nodeId: node.id });
+    const runningOp = claim(s, false, "ops")!;
+    await collectHost(s, s.get(host.id)!, async () =>
+      JSON.stringify(baseSample),
+    );
+    expect(s.get(node.id)?.drift).not.toBe(true);
+    finish(s, runningOp, "failed");
+    await collectHost(s, s.get(host.id)!, async () =>
+      JSON.stringify(baseSample),
+    );
+    expect(s.get(node.id)?.drift).toBe(true);
+
+    // Disabled node Detect performs controlled start -> live TLS verify -> stop before publishing
+    s.put(
+      "node",
+      { ...strip(s.get(node.id)!), enabled: false },
+      undefined,
+      node.id,
+    );
+    enqueue(s, host.id, "detect", { nodeId: node.id });
+    const disabledDetect = claim(s, false, "ops")!;
+    let detectActive = false;
+    let startedForProbe = false;
+    let stoppedAfterProbe = false;
+    await runOperation(s, disabledDetect, async (script) => {
+      if (script.includes("systemctl start jetyet-hysteria.service")) {
+        detectActive = true;
+        startedForProbe = true;
+        return "";
+      }
+      if (script.includes("systemctl stop jetyet-hysteria.service")) {
+        detectActive = false;
+        stoppedAfterProbe = true;
+        return "";
+      }
+      return JSON.stringify({
+        ...upgradedOptions,
+        owner: "jetyet",
+        phase: "ready",
+        version: "v2.14.0",
+        actualVersion: "v2.14.0",
+        nodeId: node.id,
+        hostId: host.id,
+        address: node.address,
+        port: node.port,
+        hopping: node.hopping,
+        configHash: expectedHash,
+        actualHash: expectedHash,
+        certSha256,
+        certSpkiSha256,
+        certDnsSans: ["bing.com"],
+        echConfig,
+        echDetectedPublicNames: ["cloudflare-ech.com"],
+        echDetectedPublicName: "cloudflare-ech.com",
+        runtimeFresh: detectActive,
+        liveTlsVerified: detectActive,
+        active: detectActive,
+      });
+    });
+    finish(s, disabledDetect, "succeeded");
+    expect(startedForProbe).toBe(true);
+    expect(stoppedAfterProbe).toBe(true);
+    s.put(
+      "node",
+      { ...strip(s.get(node.id)!), enabled: true },
+      undefined,
+      node.id,
+    );
 
     // Downgrade pinned node back to legacy: refuses stale DNS-SAN cert, succeeds once legacy cert has no DNS SAN
     const downgradeQueued = await app.request(

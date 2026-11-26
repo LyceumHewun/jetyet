@@ -1258,7 +1258,9 @@ export function OperationForm({
     [tuning, setTuning] = useState<boolean>(
       isVerified ? Boolean(node.tuning) : false,
     ),
-    [tlsSecurity, setTlsSecurity] = useState<TlsSecurityMode>("pinned"),
+    [tlsSecurity, setTlsSecurity] = useState<TlsSecurityMode>(
+      hasDeployOptions ? "pinned" : currentTlsSecurity,
+    ),
     [sni, setSni] = useState<string>(
       isVerified && typeof node.sni === "string" ? node.sni : "",
     ),
@@ -1282,23 +1284,28 @@ export function OperationForm({
   const sniHintId = useId();
   const echPublicNameId = useId();
   const echPublicNameHintId = useId();
+  const effectiveTlsSecurity = hasDeployOptions
+    ? tlsSecurity
+    : currentTlsSecurity;
+  const effectiveEch = effectiveTlsSecurity === "pinned" && ech;
   const versionHints = [
-    hasDeployOptions || tlsSecurity === "pinned"
-      ? translate("Forced SNI + pinSHA256 requires Hysteria 2 v2.5.2 or later.")
+    hasDeployOptions || effectiveTlsSecurity === "pinned"
+      ? translate("Forced SNI + pinSHA256 requires Hysteria 2 v2.6.4 or later.")
       : "",
     hasDeployOptions || congestion === "bbr"
       ? translate("BBR requires Hysteria 2 v2.8.0 or later.")
       : "",
-    hasDeployOptions || ech
+    hasDeployOptions || effectiveEch
       ? translate("ECH requires Hysteria 2 v2.12.3 or later.")
       : "",
   ]
     .filter(Boolean)
     .join(" ");
   const resolvedSni =
-    tlsSecurity === "pinned" ? sni.trim().toLowerCase() || DEFAULT_TLS_SNI : "";
-  const resolvedEch = tlsSecurity === "pinned" && ech;
-  const resolvedEchPublicName = resolvedEch
+    effectiveTlsSecurity === "pinned"
+      ? sni.trim().toLowerCase() || DEFAULT_TLS_SNI
+      : "";
+  const resolvedEchPublicName = effectiveEch
     ? echPublicName.trim().toLowerCase() || DEFAULT_ECH_PUBLIC_NAME
     : "";
   const currentSni =
@@ -1313,11 +1320,11 @@ export function OperationForm({
       DEFAULT_ECH_PUBLIC_NAME
     : "";
   const tlsInvalidatesCachedProfiles =
-    kind === "upgrade" &&
+    hasDeployOptions &&
     isVerified &&
-    (tlsSecurity !== currentTlsSecurity ||
+    (effectiveTlsSecurity !== currentTlsSecurity ||
       resolvedSni !== currentSni ||
-      resolvedEch !== currentEch ||
+      effectiveEch !== currentEch ||
       resolvedEchPublicName !== currentEchPublicName);
 
   return (
@@ -1333,8 +1340,9 @@ export function OperationForm({
         onSubmit={(e) => {
           e.preventDefault();
           const trimmedVersion = version.trim();
-          const nextSni = tlsSecurity === "pinned" ? sni.trim().toLowerCase() : "";
-          const nextEch = tlsSecurity === "pinned" && ech;
+          const nextSni =
+            effectiveTlsSecurity === "pinned" ? sni.trim().toLowerCase() : "";
+          const nextEch = effectiveTlsSecurity === "pinned" && ech;
           const nextEchPublicName = nextEch
             ? echPublicName.trim().toLowerCase()
             : "";
@@ -1343,11 +1351,11 @@ export function OperationForm({
             return;
           }
           if (
-            tlsSecurity === "pinned" &&
+            effectiveTlsSecurity === "pinned" &&
             compareHysteriaVersion(trimmedVersion, MIN_PINNED_TLS_VERSION) < 0
           ) {
             setError(
-              "Forced SNI and pinSHA256 require Hysteria 2 v2.5.2 or later",
+              "Forced SNI and pinSHA256 require Hysteria 2 v2.6.4 or later",
             );
             return;
           }
@@ -1380,7 +1388,7 @@ export function OperationForm({
             protocol: "hysteria2",
             tuning,
             congestion,
-            tlsSecurity,
+            tlsSecurity: effectiveTlsSecurity,
             sni: nextSni,
             ech: nextEch,
             echPublicName: nextEchPublicName,
