@@ -8,7 +8,7 @@ import {
   test,
 } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
@@ -17,6 +17,7 @@ import {
   counted,
   exhausted,
   nextReset,
+  nodeDelta,
   refreshPeriods,
   resetUsage,
   retention,
@@ -43,6 +44,7 @@ import {
 } from "../src/server/templates";
 import { collectHost } from "../src/workers/monitor";
 import { runOperation } from "../src/workers/operations";
+import { probeNode } from "../src/workers/probe";
 
 let s: Store, dir: string;
 const now = Date.parse("2026-01-15T04:00:00Z");
@@ -1659,7 +1661,16 @@ proxy-providers:
     expect(s.get(node.id)?.drift).not.toBe(true);
     finish(s, runningOp, "failed");
     // Monitor skips node updates and accounting while remote lock is busy (preserving existing counter epochs), then alerts drift once unlocked
-    addObservation(s, node, `node:${node.id}`, "boot-1:inv-1", 500, 700, now);
+    nodeDelta(s, node.id, "boot-1:inv-1", 500, 700, now);
+    addObservation(
+      s,
+      user,
+      `node:${node.id}:user:${user.id}`,
+      "boot-1:inv-1",
+      500,
+      700,
+      now,
+    );
     await collectHost(s, s.get(host.id)!, async () =>
       JSON.stringify({
         ...baseSample,
@@ -1668,16 +1679,102 @@ proxy-providers:
       }),
     );
     expect(s.get(node.id)?.drift).not.toBe(true);
-    const counterAfterBusy = s.db
-      .query<{ epoch: string }, [string]>(
-        "SELECT epoch FROM counters WHERE source=?",
+    const totalAfterBusy = s.db
+      .query<{ epoch: string; inbound: number; outbound: number }, [string]>(
+        "SELECT epoch,inbound,outbound FROM counters WHERE source=?",
       )
-      .get(`node:${node.id}`);
-    expect(counterAfterBusy?.epoch).toBe("boot-1:inv-1");
+      .get(`node-total:${node.id}`);
+    expect(totalAfterBusy).toEqual({
+      epoch: "boot-1:inv-1",
+      inbound: 500,
+      outbound: 700,
+    });
+    const userAfterBusy = s.db
+      .query<{ epoch: string; inbound: number; outbound: number }, [string]>(
+        "SELECT epoch,inbound,outbound FROM counters WHERE source=?",
+      )
+      .get(`node:${node.id}:user:${user.id}`);
+    expect(userAfterBusy).toEqual({
+      epoch: "boot-1:inv-1",
+      inbound: 500,
+      outbound: 700,
+    });
+    const nextDelta = nodeDelta(s, node.id, "boot-1:inv-1", 650, 900, now + 60000);
+    expect(nextDelta).toEqual({ inbound: 150, outbound: 200 });
     await collectHost(s, s.get(host.id)!, async () =>
       JSON.stringify(baseSample),
     );
     expect(s.get(node.id)?.drift).toBe(true);
+
+    // Wildcard *.invalid SAN does not cause non-terminating negative SNI search
+    const wildcardCheck = Bun.spawnSync(
+      [
+        "python3",
+        "-c",
+        `forbidden={'bing.com','*.invalid'}
+def san_covers(pattern, candidate):
+ pattern=pattern.lower()
+ if pattern==candidate: return True
+ if pattern.startswith('*.'):
+  pl=pattern.split('.'); cl=candidate.split('.')
+  return len(pl)==len(cl) and pl[1:]==cl[1:]
+ return False
+neg=None
+for idx in range(64):
+ cand='jetyet-sni-mismatch.invalid' if idx==0 else f'jetyet-sni-mismatch-{idx}.probe-{idx}.invalid'
+ if not any(san_covers(s, cand) for s in forbidden):
+  neg=cand
+  break
+print(neg or '')`,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    expect(wildcardCheck.exitCode).toBe(0);
+    expect(wildcardCheck.stdout.toString().trim()).toBe(
+      "jetyet-sni-mismatch-1.probe-1.invalid",
+    );
+
+    // probeNode snapshots the executable so an in-place binary rollback after approval cannot bypass the version gate
+    const fakeBinPath = join(dir, "fake-hysteria");
+    writeFileSync(
+      fakeBinPath,
+      `#!/bin/sh
+if [ "$1" = "version" ]; then
+  echo "Version: v2.6.3"
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(fakeBinPath, 0o755);
+    const origBin = s.config.hysteriaBinary;
+    s.config.hysteriaBinary = fakeBinPath;
+    try {
+      await expect(probeNode(s, s.get(node.id)!)).rejects.toThrow(
+        "v2.6.4 or later",
+      );
+      // Replace fake binary with v2.14.0 that mutates the original path during version check; snapshot must still run v2.14.0 logic (not replaced file)
+      const ranMarker = join(dir, "probe-ran-v214");
+      writeFileSync(
+        fakeBinPath,
+        `#!/bin/sh
+if [ "$1" = "version" ]; then
+  printf '#!/bin/sh\\necho bad > ${ranMarker}\\nexit 1\\n' > "${fakeBinPath}"
+  echo "Version: v2.14.0"
+  exit 0
+fi
+echo "snapshot-ok" > "${ranMarker}"
+exit 1
+`,
+      );
+      chmodSync(fakeBinPath, 0o755);
+      await expect(probeNode(s, s.get(node.id)!)).rejects.toThrow(
+        "Probe client exited",
+      );
+      expect(await Bun.file(ranMarker).text()).toBe("snapshot-ok\n");
+    } finally {
+      s.config.hysteriaBinary = origBin;
+    }
 
     // Disabled node Detect performs lock-serialized controlledProbeScript before publishing and rejects failed live proof
     s.put(

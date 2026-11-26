@@ -1,4 +1,11 @@
-import { mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdtemp,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,61 +18,47 @@ import {
 import { hasEch, hasPinnedTls } from "../server/subscriptions";
 import type { Entity, Store } from "../server/db";
 
-const probeBinaryVersions = new Map<string, string>();
-
-async function resolveExecutable(
+async function snapshotProbeBinary(
   binary: string,
-): Promise<{ path: string; identity: string }> {
+  dir: string,
+): Promise<string> {
   const located = binary.includes("/") ? binary : Bun.which(binary);
   if (!located) throw Error("Management host Hysteria 2 binary was not found");
   const resolved = await realpath(located);
-  const st = await stat(resolved);
-  return {
-    path: resolved,
-    identity: `${resolved}:${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}`,
-  };
+  const snapshot = join(dir, "hysteria");
+  await copyFile(resolved, snapshot);
+  await chmod(snapshot, 0o500);
+  return snapshot;
 }
 
-async function verifiedProbeBinary(
-  binary: string,
+async function verifySnapshotVersion(
+  snapshot: string,
   pinned: boolean,
   ech: boolean,
-): Promise<{ path: string; identity: string }> {
-  const exec = await resolveExecutable(binary);
-  if (!pinned) return exec;
-  let version = probeBinaryVersions.get(exec.identity);
-  if (!version) {
-    const proc = Bun.spawn([exec.path, "version"], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const outPromise = new Response(proc.stdout).text();
-    const errPromise = new Response(proc.stderr).text();
-    const timedOut = await Promise.race([
-      proc.exited.then(() => false),
-      Bun.sleep(5000).then(() => true),
-    ]);
-    if (timedOut) {
-      await stopChild(proc);
-      await Promise.allSettled([outPromise, errPromise]);
-      throw Error(
-        "Timed out checking management host Hysteria 2 binary version",
-      );
-    }
-    const [out] = await Promise.all([outPromise, errPromise]);
-    const match = proc.exitCode === 0 ? out.match(/\bv2\.\d+\.\d+\b/) : null;
-    if (!match)
-      throw Error(
-        "Unable to determine management host Hysteria 2 binary version",
-      );
-    const after = await resolveExecutable(binary);
-    if (after.identity !== exec.identity)
-      throw Error(
-        "Management host Hysteria 2 binary changed during version verification",
-      );
-    version = match[0];
-    probeBinaryVersions.set(exec.identity, version);
+) {
+  if (!pinned) return;
+  const proc = Bun.spawn([snapshot, "version"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const outPromise = new Response(proc.stdout).text();
+  const errPromise = new Response(proc.stderr).text();
+  const timedOut = await Promise.race([
+    proc.exited.then(() => false),
+    Bun.sleep(5000).then(() => true),
+  ]);
+  if (timedOut) {
+    await stopChild(proc);
+    await Promise.allSettled([outPromise, errPromise]);
+    throw Error(
+      "Timed out checking management host Hysteria 2 binary version",
+    );
   }
+  const [out] = await Promise.all([outPromise, errPromise]);
+  const match = proc.exitCode === 0 ? out.match(/\bv2\.\d+\.\d+\b/) : null;
+  if (!match)
+    throw Error("Unable to determine management host Hysteria 2 binary version");
+  const version = match[0];
   if (compareHysteriaVersion(version, MIN_PINNED_TLS_VERSION) < 0)
     throw Error(
       "Management host Hysteria 2 binary must be v2.6.4 or later to probe pinned nodes",
@@ -74,7 +67,6 @@ async function verifiedProbeBinary(
     throw Error(
       "Management host Hysteria 2 binary must be v2.12.3 or later to probe ECH nodes",
     );
-  return exec;
 }
 
 async function freePort(): Promise<number> {
@@ -102,10 +94,11 @@ async function stopChild(child: ReturnType<typeof Bun.spawn>) {
 export async function probeNode(s: Store, n: Entity) {
   const pinned = hasPinnedTls(n);
   const ech = hasEch(n);
-  const exec = await verifiedProbeBinary(s.config.hysteriaBinary, pinned, ech);
   const dir = await mkdtemp(join(tmpdir(), "jetyet-probe-"));
   let child: ReturnType<typeof Bun.spawn> | undefined;
   try {
+    const snapshot = await snapshotProbeBinary(s.config.hysteriaBinary, dir);
+    await verifySnapshotVersion(snapshot, pinned, ech);
     const path = join(dir, "config.yaml"),
       address = n.address.includes(":") ? `[${n.address}]` : n.address;
     const tls = pinned
@@ -129,14 +122,7 @@ export async function probeNode(s: Store, n: Entity) {
         }),
         { mode: 0o600 },
       );
-      if (pinned) {
-        const currentExec = await resolveExecutable(s.config.hysteriaBinary);
-        if (currentExec.identity !== exec.identity)
-          throw Error(
-            "Management host Hysteria 2 binary changed before probe launch",
-          );
-      }
-      child = Bun.spawn([exec.path, "client", "-c", path], {
+      child = Bun.spawn([snapshot, "client", "-c", path], {
         stdout: "ignore",
         stderr: "ignore",
       });

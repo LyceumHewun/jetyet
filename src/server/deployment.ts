@@ -442,19 +442,21 @@ def inspect_remote(run_live_probe=True):
       pattern=pattern.lower()
       if pattern==candidate: return True
       if pattern.startswith('*.'):
-       suffix=pattern[1:]
-       return candidate.endswith(suffix) and len(candidate)>len(suffix)
+       pl=pattern.split('.'); cl=candidate.split('.')
+       return len(pl)==len(cl) and pl[1:]==cl[1:]
       return False
-     neg_sni='jetyet-sni-mismatch.invalid'
-     idx=1
-     while any(san_covers(s, neg_sni) for s in forbidden):
-      neg_sni=f'jetyet-sni-mismatch-{idx}.probe-{idx}.invalid'
-      idx+=1
-     neg_tls=dict(pos_tls)
-     neg_tls['sni']=neg_sni
-     neg_out=probe_once(matched_host, neg_tls)
-     tls_rejected=bool(re.search(r'CRYPTO_ERROR|remote error:|\\btls:|unrecognized name|handshake failure', neg_out, re.I))
-     live_ok=('authentication error, HTTP status code:' not in neg_out) and tls_rejected
+     neg_sni=None
+     for idx in range(64):
+      cand='jetyet-sni-mismatch.invalid' if idx==0 else f'jetyet-sni-mismatch-{idx}.probe-{idx}.invalid'
+      if not any(san_covers(s, cand) for s in forbidden):
+       neg_sni=cand
+       break
+     if neg_sni is not None:
+      neg_tls=dict(pos_tls)
+      neg_tls['sni']=neg_sni
+      neg_out=probe_once(matched_host, neg_tls)
+      tls_rejected=bool(re.search(r'CRYPTO_ERROR|remote error:|\\btls:|unrecognized name|handshake failure', neg_out, re.I))
+      live_ok=('authentication error, HTTP status code:' not in neg_out) and tls_rejected
     else:
      live_ok=True
   inv_after=subprocess.run(['systemctl','show','--value','--property=InvocationID','jetyet-hysteria.service'],capture_output=True,text=True).stdout.strip()
