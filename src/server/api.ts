@@ -1,3 +1,4 @@
+import { SQLiteError } from "bun:sqlite";
 import { Hono } from "hono";
 import { z } from "zod";
 import {
@@ -8,7 +9,7 @@ import {
   userAllowed,
 } from "./accounting";
 import { digest, same } from "./crypto";
-import { type Entity, type Store } from "./db";
+import { DATABASE_BUSY_TIMEOUT_MS, type Entity, type Store } from "./db";
 import { HttpError, requireOrigin, safeError } from "./errors";
 import { registerSignIn } from "./sign-in";
 import { registerPortalRoutes, subscriptionTemplate } from "./routes/portal";
@@ -74,46 +75,80 @@ export function createApp(s: Store) {
   const { isAdmin, sessionUser } = registerSignIn(app, s);
   registerPortalRoutes(app, s, sessionUser);
   app.post("/auth/hysteria/:node/:secret", async (c) => {
-    const n = s.get(c.req.param("node"));
-    if (
-      !n ||
-      n.kind !== "node" ||
-      n.deleted ||
-      !same(c.req.param("secret"), s.secrets(n.id).authSecret)
-    )
-      return c.json({ ok: false }, 403);
-    let input: { auth: string };
+    const verifiedNode = () => {
+      const n = s.get(c.req.param("node"));
+      if (!n || n.kind !== "node" || n.deleted) return null;
+      const secrets = s.secrets(n.id);
+      return same(c.req.param("secret"), secrets.authSecret)
+        ? { node: n, probeToken: secrets.probeToken }
+        : null;
+    };
+    const signal = c.req.raw.signal;
+    let body: string | undefined;
     try {
-      input = z
-        .object({ auth: z.string().max(2048) })
-        .parse(await c.req.json());
+      body = await c.req.text();
     } catch {
-      return c.json({ ok: false }, 400);
+      // Report a malformed body only after validating the node secret.
     }
-    refreshPeriods(s);
-    if (!nodeAllowed(s, n)) return c.json({ ok: false });
-    if (same(input.auth, s.secrets(n.id).probeToken))
-      return c.json({ ok: true, id: `probe:${n.id}` });
-    const row = s.db
-      .query<{ entity: string }, [string, string]>(
-        "SELECT entity FROM token_index WHERE hash=? AND kind=?",
-      )
-      .get(digest(input.auth), "vpn");
-    const candidate = row ? s.get(row.entity) : null;
-    const u =
-      candidate &&
-      candidate.kind === "user" &&
-      !candidate.deleted &&
-      same(input.auth, s.secrets(candidate.id).vpnToken)
-        ? candidate
-        : undefined;
-    if (u && u.nodeIds.includes(n.id) && userAllowed(s, u)) {
-      s.db
-        .query("INSERT OR IGNORE INTO first_auth VALUES(?,?,?)")
-        .run(n.id, u.id, Date.now());
-      return c.json({ ok: true, id: u.id });
+    let input: { auth: string } | undefined;
+    const deadline = performance.now() + DATABASE_BUSY_TIMEOUT_MS;
+    for (;;) {
+      if (signal.aborted) return new Response(null, { status: 499 });
+      // Avoid blocking other requests while a worker holds the SQLite write lock.
+      s.db.exec("PRAGMA busy_timeout=0");
+      try {
+        const verified = verifiedNode();
+        if (!verified) return c.json({ ok: false }, 403);
+        const { node: n, probeToken } = verified;
+        if (!input) {
+          try {
+            input = z
+              .object({ auth: z.string().max(2048) })
+              .parse(JSON.parse(body ?? ""));
+          } catch {
+            return c.json({ ok: false }, 400);
+          }
+        }
+        refreshPeriods(s);
+        if (!nodeAllowed(s, n)) return c.json({ ok: false });
+        if (same(input.auth, probeToken))
+          return c.json({ ok: true, id: `probe:${n.id}` });
+        const row = s.db
+          .query<{ entity: string }, [string, string]>(
+            "SELECT entity FROM token_index WHERE hash=? AND kind=?",
+          )
+          .get(digest(input.auth), "vpn");
+        const candidate = row ? s.get(row.entity) : null;
+        const u =
+          candidate &&
+          candidate.kind === "user" &&
+          !candidate.deleted &&
+          same(input.auth, s.secrets(candidate.id).vpnToken)
+            ? candidate
+            : undefined;
+        if (u && u.nodeIds.includes(n.id) && userAllowed(s, u)) {
+          const first = s.db
+            .query("SELECT 1 FROM first_auth WHERE node=? AND user=?")
+            .get(n.id, u.id);
+          if (!first)
+            s.db
+              .query("INSERT OR IGNORE INTO first_auth VALUES(?,?,?)")
+              .run(n.id, u.id, Date.now());
+          return c.json({ ok: true, id: u.id });
+        }
+        return c.json({ ok: false });
+      } catch (error) {
+        if (
+          !(error instanceof SQLiteError) ||
+          !error.code?.startsWith("SQLITE_BUSY") ||
+          performance.now() >= deadline
+        )
+          throw error;
+      } finally {
+        s.db.exec(`PRAGMA busy_timeout=${DATABASE_BUSY_TIMEOUT_MS}`);
+      }
+      await Bun.sleep(20 + Math.random() * 10);
     }
-    return c.json({ ok: false });
   });
   const checked = (text: string, format: TemplateFormat) =>
     validateCore(s, text, format);
@@ -208,7 +243,10 @@ export function createApp(s: Store) {
     refreshPeriods(s);
     await next();
   });
-  const view = (e: Entity) => {
+  const view = (
+    e: Entity,
+    state?: { nodes: Entity[]; hosts: Map<string, Entity> },
+  ) => {
     if (!["host", "user"].includes(e.kind)) return { ...e };
     const stale = (last: number | undefined, created: number) =>
       Date.now() - (last || created) > 180000;
@@ -222,27 +260,19 @@ export function createApp(s: Store) {
         : !e.deleted &&
           !e.deleting &&
           e.enabled &&
-          s
-            .list("node")
-            .filter(
-              (n) =>
-                e.nodeIds.includes(n.id) &&
-                n.enabled &&
-                n.status === "ready" &&
-                !n.deleting &&
-                n.service !== false &&
-                (() => {
-                  const h = s.get(n.hostId);
-                  return (
-                    !!h &&
-                    !h.deleted &&
-                    !h.deleting &&
-                    h.enabled &&
-                    !!h.fingerprint
-                  );
-                })(),
+          (state?.nodes ?? s.list("node")).some((n) => {
+            if (
+              !e.nodeIds.includes(n.id) ||
+              !n.enabled ||
+              n.status !== "ready" ||
+              n.deleting ||
+              n.service === false ||
+              !stale(n.trafficSeen, n.created)
             )
-            .some((n) => stale(n.trafficSeen, n.created));
+              return false;
+            const h = state ? state.hosts.get(n.hostId) : s.get(n.hostId);
+            return !!h && !h.deleted && !h.deleting && h.enabled && !!h.fingerprint;
+          });
     return { ...e, usage: usage(s, e), exhausted: exhausted(s, e), usageStale };
   };
   app.get("/api/state", (c) => {
@@ -299,11 +329,14 @@ export function createApp(s: Store) {
           "SELECT COUNT(*) AS c FROM tasks WHERE state='failed' AND updated>=?",
         )
         .get(recentCutoff)?.c ?? 0;
+    const hosts = s.list("host");
+    const nodes = s.list("node");
+    const state = { nodes, hosts: new Map(hosts.map((host) => [host.id, host])) };
     return c.json({
       controlPlane,
-      hosts: s.list("host").map(view),
-      nodes: s.list("node"),
-      users: s.list("user").map(view),
+      hosts: hosts.map((host) => view(host, state)),
+      nodes,
+      users: s.list("user").map((user) => view(user, state)),
       templates: s.list("template").map((e) => ({
         id: e.id,
         name: e.name,
