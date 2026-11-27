@@ -544,22 +544,23 @@ function readLocalUptime(): number {
   return os.uptime();
 }
 
+let fallbackBootId: string | null = null;
+
 function readLocalBootId(): string {
   try {
-    return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-  } catch {
-    return `${os.hostname()}:${Math.floor((Date.now() - os.uptime() * 1000) / 60000)}`;
+    const id = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    if (id) return id;
+  } catch {}
+  if (!fallbackBootId) {
+    fallbackBootId = `${os.hostname()}:${Math.floor((Date.now() - os.uptime() * 1000) / 60000)}`;
   }
+  return fallbackBootId;
 }
 
-function readLocalNetwork(): {
-  inbound: number;
-  outbound: number;
-  interfaces: string[];
-} | null {
-  try {
-    const allIfaces = new Set<string>();
-    for (const family of ["-4", "-6"]) {
+function discoverDefaultInterfaces(): Set<string> {
+  const allIfaces = new Set<string>();
+  for (const family of ["-4", "-6"]) {
+    try {
       const res = Bun.spawnSync(["ip", "-j", family, "route", "show", "default"], {
         stdout: "pipe",
         stderr: "ignore",
@@ -572,7 +573,101 @@ function readLocalNetwork(): {
           }
         }
       }
+    } catch {}
+  }
+  if (allIfaces.size) return allIfaces;
+
+  // Fallback 1: plain text `ip route show default` (older iproute2 / BusyBox without -j)
+  for (const family of ["-4", "-6"]) {
+    try {
+      const res = Bun.spawnSync(["ip", family, "route", "show", "default"], {
+        stdout: "pipe",
+        stderr: "ignore",
+      });
+      if (res.exitCode === 0) {
+        for (const line of res.stdout.toString().split("\n")) {
+          const m = line.match(/\bdev\s+(\S+)/);
+          if (m?.[1]) allIfaces.add(m[1]);
+        }
+      }
+    } catch {}
+  }
+  if (allIfaces.size) return allIfaces;
+
+  // Fallback 2: Linux procfs routing tables (no external `ip` binary required)
+  try {
+    const lines = readFileSync("/proc/net/route", "utf8").split("\n").slice(1);
+    for (const line of lines) {
+      const cols = line.trim().split(/\s+/);
+      if (cols.length < 4) continue;
+      const flags = parseInt(cols[3], 16);
+      if (cols[1] === "00000000" && Number.isFinite(flags) && (flags & 1) !== 0) {
+        allIfaces.add(cols[0]);
+      }
     }
+  } catch {}
+  try {
+    const lines = readFileSync("/proc/net/ipv6_route", "utf8").split("\n");
+    for (const line of lines) {
+      const cols = line.trim().split(/\s+/);
+      if (cols.length < 10) continue;
+      const flags = parseInt(cols[8], 16);
+      if (
+        cols[0] === "00000000000000000000000000000000" &&
+        cols[1] === "00" &&
+        Number.isFinite(flags) &&
+        (flags & 1) !== 0 &&
+        cols[9]
+      ) {
+        allIfaces.add(cols[9]);
+      }
+    }
+  } catch {}
+  return allIfaces;
+}
+
+function readInterfaceCounters(
+  name: string,
+): { rx: number; tx: number } | null {
+  try {
+    const rx = parseInt(
+      readFileSync(`/sys/class/net/${name}/statistics/rx_bytes`, "utf8").trim(),
+      10,
+    );
+    const tx = parseInt(
+      readFileSync(`/sys/class/net/${name}/statistics/tx_bytes`, "utf8").trim(),
+      10,
+    );
+    if (Number.isSafeInteger(rx) && Number.isSafeInteger(tx)) {
+      return { rx, tx };
+    }
+  } catch {}
+
+  // Fallback: /proc/net/dev
+  try {
+    for (const line of readFileSync("/proc/net/dev", "utf8").split("\n").slice(2)) {
+      const colon = line.indexOf(":");
+      if (colon === -1) continue;
+      if (line.slice(0, colon).trim() !== name) continue;
+      const fields = line.slice(colon + 1).trim().split(/\s+/);
+      if (fields.length < 9) continue;
+      const rx = parseInt(fields[0], 10);
+      const tx = parseInt(fields[8], 10);
+      if (Number.isSafeInteger(rx) && Number.isSafeInteger(tx)) {
+        return { rx, tx };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+function readLocalNetwork(): {
+  inbound: number;
+  outbound: number;
+  interfaces: string[];
+} | null {
+  try {
+    const allIfaces = discoverDefaultInterfaces();
     if (!allIfaces.size) return null;
     const filtered = [...allIfaces].filter(
       (n) =>
@@ -583,14 +678,10 @@ function readLocalNetwork(): {
     let inbound = 0;
     let outbound = 0;
     for (const name of interfaces) {
-      inbound += parseInt(
-        readFileSync(`/sys/class/net/${name}/statistics/rx_bytes`, "utf8").trim(),
-        10,
-      );
-      outbound += parseInt(
-        readFileSync(`/sys/class/net/${name}/statistics/tx_bytes`, "utf8").trim(),
-        10,
-      );
+      const c = readInterfaceCounters(name);
+      if (!c) return null;
+      inbound += c.rx;
+      outbound += c.tx;
     }
     if (!Number.isSafeInteger(inbound) || !Number.isSafeInteger(outbound))
       return null;
@@ -619,18 +710,23 @@ export function collectControlPlane(s: Store) {
     if (row) prevSnap = JSON.parse(row.value);
   } catch {}
 
+  const sameBoot =
+    typeof prevSnap?.bootId === "string" && prevSnap.bootId === boot;
   const totalDelta =
-    cpuRaw && typeof prevSnap?.cpuTotal === "number"
+    sameBoot && cpuRaw && typeof prevSnap?.cpuTotal === "number"
       ? cpuRaw.total - prevSnap.cpuTotal
       : 0;
   const idleDelta =
-    cpuRaw && typeof prevSnap?.cpuIdle === "number"
+    sameBoot && cpuRaw && typeof prevSnap?.cpuIdle === "number"
       ? cpuRaw.idle - prevSnap.cpuIdle
       : 0;
-  const cpu =
-    totalDelta > 0
+  const cpu: number | null =
+    sameBoot &&
+    totalDelta > 0 &&
+    idleDelta >= 0 &&
+    idleDelta <= totalDelta
       ? Math.max(0, Math.min(100, 100 * (1 - idleDelta / totalDelta)))
-      : 0;
+      : null;
 
   s.db
     .transaction(() => {
@@ -681,8 +777,10 @@ export function collectControlPlane(s: Store) {
         cpu,
         memory,
         disk,
+        bootId: boot,
         cpuTotal: cpuRaw?.total ?? null,
         cpuIdle: cpuRaw?.idle ?? null,
+        networkAvailable: Boolean(net),
         interfaces: net?.interfaces ?? [],
         inboundTotal: net?.inbound ?? null,
         outboundTotal: net?.outbound ?? null,

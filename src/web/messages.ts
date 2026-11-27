@@ -787,6 +787,8 @@ export const zhHans = {
   "Top Traffic (Current Period)": "当期流量排行",
   Platform: "平台",
   Stopped: "已停止",
+  "Traffic counters unavailable": "网卡流量不可用",
+  "Traffic counters unavailable on this host.": "当前宿主机无法读取网卡流量计数。",
 } as const;
 
 export type Message = keyof typeof zhHans;

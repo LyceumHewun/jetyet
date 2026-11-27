@@ -350,7 +350,13 @@ export function History({
                   <h2>{translate("Traffic (MiB{0})", unitSuffix)}</h2>
                 </div>
                 <div className="chart-pad">
-                  {!samples.length ? (
+                  {entity.kind === "control-plane" &&
+                  entity.networkAvailable === false &&
+                  samples.every((p) => !p.inbound && !p.outbound) ? (
+                    <Empty title={translate("Traffic counters unavailable")}>
+                      {translate("Traffic counters unavailable on this host.")}
+                    </Empty>
+                  ) : !samples.length ? (
                     <Empty title={translate("No observations")}>
                       {translate(
                         "Unknown periods are not recorded as downtime.",

@@ -250,18 +250,12 @@ export function registerOperationsRoutes({
       end,
       c.req.query("maxPoints") || "96",
     );
-    const ids = s
-      .list(scope === "users" ? "user" : "host")
-      .map((e) => e.id);
-    if (!ids.length) {
-      return c.json({ samples: [], resolution, bucketMs: bucket });
-    }
-    const placeholders = ids.map(() => "?").join(",");
+    const kind = scope === "users" ? "user" : "host";
     const samples = s.db
       .query(
-        `SELECT CAST(at/? AS INTEGER)*? AS at,SUM(inbound) AS inbound,SUM(outbound) AS outbound FROM samples WHERE entity IN (${placeholders}) AND at>=? AND at<=? GROUP BY CAST(at/? AS INTEGER) ORDER BY at`,
+        `SELECT CAST(sm.at/? AS INTEGER)*? AS at,SUM(sm.inbound) AS inbound,SUM(sm.outbound) AS outbound FROM samples sm INNER JOIN entities e ON e.id = sm.entity WHERE e.kind=? AND sm.at>=? AND sm.at<=? GROUP BY CAST(sm.at/? AS INTEGER) ORDER BY at`,
       )
-      .all(bucket, bucket, ...ids, start, end, bucket);
+      .all(bucket, bucket, kind, start, end, bucket);
     return c.json({ samples, resolution, bucketMs: bucket });
   });
 }

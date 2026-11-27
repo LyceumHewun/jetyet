@@ -57,36 +57,50 @@ export function Overview({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const end = Date.now();
-    const start = end - Number(range) * 3600000;
-    const controller = new AbortController();
     let cancelled = false;
-    setLoading(true);
-    api(
-      `overview/traffic?scope=${scope}&start=${start}&end=${end}&maxPoints=96`,
-      "GET",
-      undefined,
-      controller.signal,
-    )
-      .then((res) => {
-        if (!cancelled) {
-          setSamples(res.samples || []);
-          setResolution(res.resolution || "hour");
-          setBucketMs(
-            typeof res.bucketMs === "number" ? res.bucketMs : undefined,
-          );
-          setLoading(false);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setSamples([]);
-          setLoading(false);
-        }
-      });
+    let activeController: AbortController | null = null;
+
+    const load = (isInitial: boolean) => {
+      activeController?.abort();
+      const controller = new AbortController();
+      activeController = controller;
+      const end = Date.now();
+      const start = end - Number(range) * 3600000;
+      if (isInitial) setLoading(true);
+      api(
+        `overview/traffic?scope=${scope}&start=${start}&end=${end}&maxPoints=96`,
+        "GET",
+        undefined,
+        controller.signal,
+      )
+        .then((res) => {
+          if (!cancelled && activeController === controller) {
+            setSamples(res.samples || []);
+            setResolution(res.resolution || "hour");
+            setBucketMs(
+              typeof res.bucketMs === "number" ? res.bucketMs : undefined,
+            );
+            setLoading(false);
+          }
+        })
+        .catch((err) => {
+          if (
+            !cancelled &&
+            activeController === controller &&
+            err?.name !== "AbortError"
+          ) {
+            if (isInitial) setSamples([]);
+            setLoading(false);
+          }
+        });
+    };
+
+    load(true);
+    const timer = setInterval(() => load(false), 30000);
     return () => {
       cancelled = true;
-      controller.abort();
+      clearInterval(timer);
+      activeController?.abort();
     };
   }, [scope, range]);
 
@@ -463,6 +477,11 @@ export function Overview({
                     </Badge>
                   );
                 })}
+                {cp && cp.networkAvailable === false && (
+                  <Badge tone="warning">
+                    {translate("Traffic counters unavailable")}
+                  </Badge>
+                )}
               </div>
             </div>
           </div>

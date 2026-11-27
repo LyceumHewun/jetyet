@@ -270,7 +270,7 @@ export function createApp(s: Store) {
     if (cpRow) {
       try {
         const parsed = JSON.parse(cpRow.value);
-        const { cpuTotal: _t, cpuIdle: _i, ...pub } = parsed;
+        const { bootId: _b, cpuTotal: _t, cpuIdle: _i, ...pub } = parsed;
         controlPlane = pub;
       } catch {}
     }

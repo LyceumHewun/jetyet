@@ -1272,17 +1272,23 @@ function App() {
                                           )}
                                         </div>
                                         {Array.isArray(target.interfaces) &&
-                                          target.interfaces.length > 0 && (
-                                            <div className="chip-group">
-                                              {target.interfaces.map(
-                                                (iface: string) => (
-                                                  <Chip key={iface} mono>
-                                                    {iface}
-                                                  </Chip>
-                                                ),
-                                              )}
-                                            </div>
-                                          )}
+                                        target.interfaces.length > 0 ? (
+                                          <div className="chip-group">
+                                            {target.interfaces.map(
+                                              (iface: string) => (
+                                                <Chip key={iface} mono>
+                                                  {iface}
+                                                </Chip>
+                                              ),
+                                            )}
+                                          </div>
+                                        ) : target.networkAvailable === false ? (
+                                          <Badge tone="warning">
+                                            {translate(
+                                              "Traffic counters unavailable",
+                                            )}
+                                          </Badge>
+                                        ) : null}
                                       </div>
                                     </ScrollArea>
                                     <div className="expanded-quick-actions">

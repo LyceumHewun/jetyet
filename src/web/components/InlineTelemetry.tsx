@@ -149,23 +149,31 @@ export function InlineTelemetry({
               <MiniBar label="RAM" percent={entity.memory} />
               <MiniBar label={translate("Disk")} percent={entity.disk} />
               {isControlPlane ? (
-                <div className="io-split">
-                  <div className="io-split-head">
-                    <span className="io-legend">
-                      <i className="dot-accent" />
-                      {translate("↑ Out") + " "}
-                      <b className="mono">{fmt(rangeOut)}</b>
-                    </span>
-                    <span className="io-legend">
-                      <i className="dot-good" />
-                      {translate("↓ In") + " "}
-                      <b className="mono">{fmt(rangeIn)}</b>
-                    </span>
+                entity.networkAvailable === false ? (
+                  <div className="io-split">
+                    <small className="muted">
+                      {translate("Traffic counters unavailable")}
+                    </small>
                   </div>
-                  <div className="io-split-track">
-                    <i style={{ width: `${rangeOutShare}%` }} />
+                ) : (
+                  <div className="io-split">
+                    <div className="io-split-head">
+                      <span className="io-legend">
+                        <i className="dot-accent" />
+                        {translate("↑ Out") + " "}
+                        <b className="mono">{fmt(rangeOut)}</b>
+                      </span>
+                      <span className="io-legend">
+                        <i className="dot-good" />
+                        {translate("↓ In") + " "}
+                        <b className="mono">{fmt(rangeIn)}</b>
+                      </span>
+                    </div>
+                    <div className="io-split-track">
+                      <i style={{ width: `${rangeOutShare}%` }} />
+                    </div>
                   </div>
-                </div>
+                )
               ) : (
                 <QuotaBar row={entity} />
               )}
@@ -247,6 +255,13 @@ export function InlineTelemetry({
         {loading ? (
           <div className="chart-placeholder muted">
             {translate("Loading telemetry…")}
+          </div>
+        ) : metric !== "resources" &&
+          isControlPlane &&
+          entity.networkAvailable === false &&
+          rangeTotal === 0 ? (
+          <div className="chart-placeholder muted">
+            {translate("Traffic counters unavailable on this host.")}
           </div>
         ) : !samples.length ? (
           <div className="chart-placeholder muted">
