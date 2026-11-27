@@ -55,6 +55,13 @@ export type Tab =
   | "Operations"
   | "Alerts";
 
+export type ActivitySummary = {
+  openAlerts: number;
+  unreadAlerts: number;
+  activeTasks: number;
+  failedTasks24h: number;
+};
+
 export type State = {
   controlPlane: Row | null;
   hosts: Row[];
@@ -64,5 +71,6 @@ export type State = {
   alerts: Row[];
   tasks: Row[];
   workers: Row[];
+  activitySummary?: ActivitySummary;
   origin: string;
 };

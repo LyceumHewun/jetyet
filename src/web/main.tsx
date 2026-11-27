@@ -14,10 +14,8 @@ import {
   Archive,
   ArrowUpRight,
   Check,
-  CheckCircle2,
   ChevronDown,
   ChevronUp,
-  Clock,
   Cpu,
   FileCode2,
   KeyRound,
@@ -28,16 +26,12 @@ import {
   Moon,
   Plus,
   Radio,
-  RefreshCw,
-  RotateCw,
   Server,
   ShieldAlert,
   ShieldCheck,
   Sun,
-  Terminal,
   Users,
   X,
-  XCircle,
 } from "lucide-react";
 import {
   Fragment,
@@ -52,6 +46,7 @@ import { createRoot } from "react-dom/client";
 import { api, formatUptime, when } from "./client";
 import {
   Actions,
+  ActivityView,
   Badge,
   BrandMark,
   BrandWordmark,
@@ -64,7 +59,6 @@ import {
   InlineTelemetry,
   initDocumentScrollbars,
   LanguageControl,
-  LogsModal,
   MiniBar,
   Overview,
   PasswordLinkModal,
@@ -96,12 +90,9 @@ import { History } from "./history";
 import { SubscriptionPortal } from "./portal";
 import "./styles.css";
 import {
-  alertLabel,
   formatLabel,
-  operationLabel,
   probeLabel,
   SUBSCRIPTION_FORMATS,
-  taskLabel,
 } from "./labels";
 import type {
   PortalData,
@@ -379,7 +370,6 @@ function App() {
     [error, setError] = useState<UiError>(""),
     [search, setSearch] = useState(""),
     [inlineRange, setInlineRange] = useState("24"),
-    [alertFilter, setAlertFilter] = useState<"all" | "open">("all"),
     [templateFormatFilter, setTemplateFormatFilter] = useState<
       "all" | TemplateFormat
     >("all"),
@@ -873,16 +863,18 @@ function App() {
       ) as number),
     0,
   );
-  const runningTasks = state.tasks.filter((t) =>
-    ["queued", "running"].includes(t.state),
-  ).length;
+  const runningTasks =
+    state.activitySummary?.activeTasks ??
+    state.tasks.filter((t) => ["queued", "running"].includes(t.state)).length;
+  const openAlertCount =
+    state.activitySummary?.openAlerts ?? activeAlerts.length;
 
   const tabCount: Record<string, number> = {
     Overview: 0,
     Infra: state.hosts.length,
     Users: state.users.length,
     Templates: state.templates.length,
-    Activity: activeAlerts.length + runningTasks,
+    Activity: openAlertCount + runningTasks,
   };
 
   const openArchive = (kind: "hosts" | "nodes" | "users") =>
@@ -2315,200 +2307,16 @@ function App() {
               )}
 
               {tab === "Activity" && (
-                <div className="activity-split">
-                  <section className="panel">
-                    <div className="panel-heading compact">
-                      <div className="chip-group">
-                        <h2>{translate("Alerts")}</h2>
-                        <span
-                          className={
-                            "count" + (activeAlerts.length ? " warn" : "")
-                          }
-                        >
-                          {translate("{0} open", activeAlerts.length)}
-                        </span>
-                      </div>
-                      <SegmentedControl
-                        value={alertFilter}
-                        options={[
-                          ["all", translate("All")],
-                          ["open", translate("Open")],
-                        ]}
-                        onChange={setAlertFilter}
-                      />
-                    </div>
-                    {!(alertFilter === "open" ? activeAlerts : state.alerts)
-                      .length ? (
-                      <div className="quiet radar-quiet">
-                        <span className="quiet-ring">
-                          <ShieldCheck size={26} />
-                        </span>
-                        <h3>{translate("All quiet")}</h3>
-                      </div>
-                    ) : (
-                      (alertFilter === "open"
-                        ? activeAlerts
-                        : state.alerts
-                      ).map((a) => (
-                        <div
-                          className={
-                            "alert-row " + (a.closed ? "resolved" : "")
-                          }
-                          key={a.id}
-                        >
-                          <span className="alert-mark" />
-                          <div>
-                            <div>
-                              <strong>{alertLabel(a.code)}</strong>
-                              <Badge tone={a.closed ? "neutral" : "warning"}>
-                                {a.closed
-                                  ? translate("Closed")
-                                  : a.seen
-                                    ? translate("Read")
-                                    : translate("Open")}
-                              </Badge>
-                            </div>
-                            <p>{localizeMessage(a.message)}</p>
-                            <small>
-                              {when(a.first)} → {when(a.last)}
-                            </small>
-                          </div>
-                          <div className="row-buttons">
-                            {!a.seen && (
-                              <Button
-                                onClick={() =>
-                                  act(
-                                    `alerts/${a.id}/read`,
-                                    undefined,
-                                    "POST",
-                                    "Marked read",
-                                  )
-                                }
-                              >
-                                <Check size={13} />
-                                {translate("Read")}
-                              </Button>
-                            )}
-                            {!a.closed && (
-                              <Button
-                                onClick={() =>
-                                  act(
-                                    `alerts/${a.id}/close`,
-                                    undefined,
-                                    "POST",
-                                    "Closed",
-                                  )
-                                }
-                              >
-                                <X size={13} />
-                                {translate("Close")}
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </section>
-                  <section className="panel">
-                    <div className="panel-heading compact">
-                      <h2>{translate("Operations")}</h2>
-                      <span className="count">
-                        {formatNumber(state.tasks.length)}
-                      </span>
-                    </div>
-                    {!state.tasks.length ? (
-                      <Empty title={translate("No operations yet")}>
-                        {translate("Deployments and remote tasks appear here.")}
-                      </Empty>
-                    ) : (
-                      <div className="ops-list">
-                        {state.tasks.map((t) => {
-                          const hostName =
-                            state.hosts.find((h) => h.id === t.host)?.name ||
-                            translate("Removed");
-                          return (
-                            <div className="op-row" key={t.id}>
-                              <span
-                                className={"op-icon " + t.state}
-                                aria-label={translate(
-                                  "Task state {0}",
-                                  taskLabel(t.state),
-                                )}
-                                role="img"
-                              >
-                                {t.state === "succeeded" ? (
-                                  <CheckCircle2 size={16} />
-                                ) : t.state === "failed" ? (
-                                  <XCircle size={16} />
-                                ) : t.state === "running" ? (
-                                  <RefreshCw size={15} className="spinning" />
-                                ) : (
-                                  <Clock size={15} />
-                                )}
-                              </span>
-                              <div className="op-main">
-                                <div className="op-head">
-                                  <strong>{operationLabel(t.kind)}</strong>
-                                  <Chip>{hostName}</Chip>
-                                  <Chip mono>
-                                    {translate("Step {0}", t.step)}
-                                  </Chip>
-                                </div>
-                                {t.error && (
-                                  <p className="op-error">
-                                    {translate(
-                                      "Operation failed. {0}",
-                                      t.error,
-                                    )}
-                                  </p>
-                                )}
-                              </div>
-                              <small className="mono op-time">
-                                {when(t.updated)}
-                              </small>
-                              <div className="row-buttons">
-                                <Button
-                                  variant="subtle"
-                                  onClick={() =>
-                                    void api(`tasks/${t.id}/logs`).then(
-                                      (logs) =>
-                                        setModal(() => (
-                                          <LogsModal
-                                            title={`${operationLabel(t.kind)} · ${hostName}`}
-                                            logs={logs || []}
-                                            onClose={() => setModal(null)}
-                                          />
-                                        )),
-                                    )
-                                  }
-                                >
-                                  <Terminal size={13} />
-                                  {translate("Logs")}
-                                </Button>
-                                {["queued", "running"].includes(t.state) && (
-                                  <Button
-                                    aria-label={translate("Cancel operation")}
-                                    onClick={() => act(`tasks/${t.id}/cancel`)}
-                                  >
-                                    <X size={13} />
-                                  </Button>
-                                )}
-                                {["failed", "cancelled"].includes(t.state) && (
-                                  <Button
-                                    aria-label={translate("Retry operation")}
-                                    onClick={() => act(`tasks/${t.id}/retry`)}
-                                  >
-                                    <RotateCw size={13} />
-                                  </Button>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </section>
-                </div>
+                <ActivityView
+                  state={state}
+                  onMutate={(path, body, method = "POST", message = "Saved") =>
+                    run(() => api(path, method, body), message)
+                  }
+                  onInspectHost={jumpToHost}
+                  onInspectUser={jumpToUser}
+                  onInspectControlPlane={() => jumpToHost("control-plane")}
+                  onOpenModal={(render) => setModal(render)}
+                />
               )}
             </>
           )}

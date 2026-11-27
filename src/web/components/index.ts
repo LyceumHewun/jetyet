@@ -1,3 +1,4 @@
+export { ActivityView } from "./ActivityView";
 export { BrandMark, BrandWordmark, type BrandMarkProps } from "./BrandMark";
 export { DateTimePicker } from "./DateTimePicker";
 export { InlineTelemetry } from "./InlineTelemetry";
@@ -45,6 +46,7 @@ export {
 } from "./Scrollbars";
 export { Select, type SelectOption } from "./Select";
 export { TemplateAuthoringHelp } from "./TemplateAuthoringHelp";
+export { VirtualList } from "./VirtualList";
 export {
   Actions,
   Code,
