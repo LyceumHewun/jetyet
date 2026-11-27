@@ -206,7 +206,12 @@ export function History({
   const current = snapshot?.entityId === entity.id ? snapshot : null,
     samples = current?.samples ?? [],
     events = current?.events ?? [],
-    isHostLike = entity.kind === "host" || entity.kind === "control-plane",
+    isControlPlane = entity.kind === "control-plane",
+    isHostLike = entity.kind === "host" || isControlPlane,
+    interfaces =
+      isControlPlane && Array.isArray(entity.interfaces)
+        ? entity.interfaces.join(", ")
+        : "",
     observations = samples.filter(
       (p) => p.reachable !== null && p.reachable !== undefined,
     ),
@@ -367,9 +372,14 @@ export function History({
               <section className="panel">
                 <div className="panel-heading compact">
                   <h2>{translate("Traffic (MiB{0})", unitSuffix)}</h2>
+                  {interfaces && (
+                    <span className="muted mono">
+                      {translate("Current monitored interfaces · {0}", interfaces)}
+                    </span>
+                  )}
                 </div>
                 <div className="chart-pad">
-                  {entity.kind === "control-plane" &&
+                  {isControlPlane &&
                   samples.length > 0 &&
                   samples.every((p) => p.inbound == null) ? (
                     <Empty title={translate("Traffic counters unavailable")}>

@@ -788,6 +788,7 @@ export const zhHans = {
   Platform: "平台",
   Stopped: "已停止",
   "Traffic counters unavailable": "网卡流量不可用",
+  "Current monitored interfaces · {0}": "当前采集网卡 · {0}",
   "Traffic counters unavailable on this host.": "当前宿主机无法读取网卡流量计数。",
   "Open Alerts": "待处理告警",
   "{0} unread": "{0} 未读",

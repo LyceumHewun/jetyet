@@ -292,7 +292,7 @@ function ExpandableRow({
     <div
       ref={slotRef}
       className="spatial-expand-slot"
-      style={{ pointerEvents: isOpen ? "auto" : "none" }}
+      inert={!isOpen}
     >
       <div ref={innerRef} className="spatial-expand-inner">
         {children}

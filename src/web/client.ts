@@ -172,6 +172,7 @@ export type TelemetryRange = (typeof TELEMETRY_RANGES)[number];
 
 const TELEMETRY_RANGE_KEY = "jetyet-telemetry-range";
 const TELEMETRY_RANGE_EVENT = "jetyet-telemetry-range-change";
+let telemetryRange: TelemetryRange | undefined;
 
 function isTelemetryRange(value: string | null): value is TelemetryRange {
   return (
@@ -180,15 +181,17 @@ function isTelemetryRange(value: string | null): value is TelemetryRange {
 }
 
 export function readTelemetryRange(): TelemetryRange {
+  if (telemetryRange !== undefined) return telemetryRange;
   try {
     const saved = localStorage.getItem(TELEMETRY_RANGE_KEY);
-    if (isTelemetryRange(saved)) return saved;
+    if (isTelemetryRange(saved)) telemetryRange = saved;
   } catch {}
-  return "24";
+  return (telemetryRange ??= "24");
 }
 
 export function writeTelemetryRange(next: string) {
   if (!isTelemetryRange(next)) return;
+  telemetryRange = next;
   try {
     localStorage.setItem(TELEMETRY_RANGE_KEY, next);
   } catch {}
@@ -209,6 +212,7 @@ export function subscribeTelemetryRange(
   };
   const onStorage = (e: StorageEvent) => {
     if (e.key === TELEMETRY_RANGE_KEY && isTelemetryRange(e.newValue)) {
+      telemetryRange = e.newValue;
       onChange(e.newValue);
     }
   };
