@@ -261,7 +261,46 @@ export function createApp(s: Store) {
         );
       else s.resolveAlert("platform", `worker-${name}`);
     }
+    const cpRow = s.db
+      .query<{ value: string }, []>(
+        "SELECT value FROM metadata WHERE key='control-plane'",
+      )
+      .get();
+    let controlPlane: Record<string, any> | null = null;
+    if (cpRow) {
+      try {
+        const parsed = JSON.parse(cpRow.value);
+        const { bootId: _b, cpuTotal: _t, cpuIdle: _i, ...pub } = parsed;
+        controlPlane = pub;
+      } catch {}
+    }
+    const recentCutoff = now - 86400000;
+    const openAlerts =
+      s.db
+        .query<{ c: number }, []>(
+          "SELECT COUNT(*) AS c FROM alerts WHERE closed IS NULL",
+        )
+        .get()?.c ?? 0;
+    const unreadAlerts =
+      s.db
+        .query<{ c: number }, []>(
+          "SELECT COUNT(*) AS c FROM alerts WHERE closed IS NULL AND seen=0",
+        )
+        .get()?.c ?? 0;
+    const activeTasks =
+      s.db
+        .query<{ c: number }, []>(
+          "SELECT COUNT(*) AS c FROM tasks WHERE state IN ('queued','running')",
+        )
+        .get()?.c ?? 0;
+    const failedTasks24h =
+      s.db
+        .query<{ c: number }, [number]>(
+          "SELECT COUNT(*) AS c FROM tasks WHERE state='failed' AND updated>=?",
+        )
+        .get(recentCutoff)?.c ?? 0;
     return c.json({
+      controlPlane,
       hosts: s.list("host").map(view),
       nodes: s.list("node"),
       users: s.list("user").map(view),
@@ -276,11 +315,21 @@ export function createApp(s: Store) {
       })),
       workers: s.db.query("SELECT * FROM heartbeats").all(),
       alerts: s.db
-        .query("SELECT * FROM alerts ORDER BY first DESC LIMIT 300")
+        .query(
+          "SELECT * FROM alerts WHERE closed IS NULL ORDER BY last DESC, first DESC LIMIT 100",
+        )
         .all(),
       tasks: s.db
-        .query("SELECT * FROM tasks ORDER BY created DESC LIMIT 100")
-        .all(),
+        .query(
+          "SELECT * FROM tasks WHERE state IN ('queued','running') OR (state='failed' AND updated>=?) ORDER BY CASE WHEN state IN ('running','queued') THEN 0 ELSE 1 END, updated DESC LIMIT 30",
+        )
+        .all(recentCutoff),
+      activitySummary: {
+        openAlerts,
+        unreadAlerts,
+        activeTasks,
+        failedTasks24h,
+      },
       origin: s.config.origin,
     });
   });

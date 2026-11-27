@@ -74,6 +74,26 @@ export function formatUptime(seconds?: number | null): string {
     : translate("{0}m", Math.max(1, mins));
 }
 
+export function bucketUnitSuffix(
+  bucketMs?: number,
+  resolution?: string,
+): string {
+  if (bucketMs && Number.isFinite(bucketMs)) {
+    if (bucketMs >= 86_400_000) return translate("/day");
+    if (bucketMs >= 3_600_000) {
+      const hours = Math.round(bucketMs / 3_600_000);
+      return hours === 1 ? translate("/hr") : translate("/{0}h", hours);
+    }
+    const mins = Math.max(1, Math.round(bucketMs / 60_000));
+    return mins === 1 ? translate("/min") : translate("/{0}m", mins);
+  }
+  return resolution === "day"
+    ? translate("/day")
+    : resolution === "hour"
+      ? translate("/hr")
+      : translate("/min");
+}
+
 export function directionMeta(dir?: string): { short: string; label: string } {
   if (dir === "out")
     return {
@@ -145,4 +165,61 @@ export function supportsTopLayerExit(): boolean {
     !!window.CSS?.supports?.("overlay", "auto") &&
     canTransitionDisplay()
   );
+}
+
+export const TELEMETRY_RANGES = ["1", "24", "168", "720"] as const;
+export type TelemetryRange = (typeof TELEMETRY_RANGES)[number];
+
+const TELEMETRY_RANGE_KEY = "jetyet-telemetry-range";
+const TELEMETRY_RANGE_EVENT = "jetyet-telemetry-range-change";
+let telemetryRange: TelemetryRange | undefined;
+
+function isTelemetryRange(value: string | null): value is TelemetryRange {
+  return (
+    value !== null && (TELEMETRY_RANGES as readonly string[]).includes(value)
+  );
+}
+
+export function readTelemetryRange(): TelemetryRange {
+  if (telemetryRange !== undefined) return telemetryRange;
+  try {
+    const saved = localStorage.getItem(TELEMETRY_RANGE_KEY);
+    if (isTelemetryRange(saved)) telemetryRange = saved;
+  } catch {}
+  return (telemetryRange ??= "24");
+}
+
+export function writeTelemetryRange(next: string) {
+  if (!isTelemetryRange(next)) return;
+  telemetryRange = next;
+  try {
+    localStorage.setItem(TELEMETRY_RANGE_KEY, next);
+  } catch {}
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent<TelemetryRange>(TELEMETRY_RANGE_EVENT, { detail: next }),
+    );
+  }
+}
+
+export function subscribeTelemetryRange(
+  onChange: (range: TelemetryRange) => void,
+): () => void {
+  if (typeof window === "undefined") return () => {};
+  const onCustom = (e: Event) => {
+    const detail = (e as CustomEvent<string>).detail ?? null;
+    if (isTelemetryRange(detail)) onChange(detail);
+  };
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === TELEMETRY_RANGE_KEY && isTelemetryRange(e.newValue)) {
+      telemetryRange = e.newValue;
+      onChange(e.newValue);
+    }
+  };
+  window.addEventListener(TELEMETRY_RANGE_EVENT, onCustom);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(TELEMETRY_RANGE_EVENT, onCustom);
+    window.removeEventListener("storage", onStorage);
+  };
 }

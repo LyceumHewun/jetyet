@@ -1,3 +1,5 @@
+import { readFileSync, statfsSync } from "node:fs";
+import os from "node:os";
 import {
   addObservation,
   exhausted,
@@ -469,6 +471,334 @@ function queueKick(s: Store, n: Entity, ids: string[]) {
     .get(n.hostId, JSON.stringify({ nodeId: n.id, userIds: ids }));
   if (!pending) enqueue(s, n.hostId, "kick", { nodeId: n.id, userIds: ids });
 }
+const EXCLUDED_IFACE_PREFIXES = [
+  "tun",
+  "tap",
+  "wg",
+  "sit",
+  "ip6tnl",
+  "gif",
+  "docker",
+  "veth",
+  "br-",
+  "tailscale",
+];
+
+function readLocalProcCpu(): { total: number; idle: number } | null {
+  try {
+    const first = readFileSync("/proc/stat", "utf8").split("\n")[0];
+    const parts = first.trim().split(/\s+/).slice(1, 9).map(Number);
+    if (parts.length < 5 || parts.some((n) => !Number.isFinite(n))) return null;
+    return {
+      total: parts.reduce((a, b) => a + b, 0),
+      idle: parts[3] + parts[4],
+    };
+  } catch {
+    const cpus = os.cpus();
+    if (!cpus.length) return null;
+    let total = 0;
+    let idle = 0;
+    for (const c of cpus) {
+      total +=
+        c.times.user + c.times.nice + c.times.sys + c.times.idle + c.times.irq;
+      idle += c.times.idle;
+    }
+    return { total, idle };
+  }
+}
+
+function readLocalMemory(): number | null {
+  try {
+    const mem: Record<string, number> = {};
+    for (const line of readFileSync("/proc/meminfo", "utf8").split("\n")) {
+      const idx = line.indexOf(":");
+      if (idx === -1) continue;
+      const val = parseInt(line.slice(idx + 1).trim(), 10);
+      if (Number.isFinite(val)) mem[line.slice(0, idx)] = val;
+    }
+    if (!mem.MemTotal) return null;
+    const avail = mem.MemAvailable ?? mem.MemFree ?? 0;
+    return Math.max(0, Math.min(100, 100 * (1 - avail / mem.MemTotal)));
+  } catch {
+    const total = os.totalmem();
+    if (!total) return null;
+    return Math.max(0, Math.min(100, 100 * (1 - os.freemem() / total)));
+  }
+}
+
+function readLocalDisk(): number | null {
+  try {
+    const st = statfsSync("/");
+    if (!st.blocks) return null;
+    return Math.max(0, Math.min(100, 100 * (1 - st.bavail / st.blocks)));
+  } catch {
+    return null;
+  }
+}
+
+function readLocalUptime(): number {
+  try {
+    const val = parseFloat(readFileSync("/proc/uptime", "utf8").split(/\s+/)[0]);
+    if (Number.isFinite(val)) return val;
+  } catch {}
+  return os.uptime();
+}
+
+let fallbackBootId: string | null = null;
+
+function readLocalBootId(): string {
+  try {
+    const id = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    if (id) return id;
+  } catch {}
+  if (!fallbackBootId) {
+    fallbackBootId = `${os.hostname()}:${Math.floor((Date.now() - os.uptime() * 1000) / 60000)}`;
+  }
+  return fallbackBootId;
+}
+
+function discoverDefaultInterfaces(): Set<string> {
+  const allIfaces = new Set<string>();
+  for (const family of ["-4", "-6"]) {
+    try {
+      const res = Bun.spawnSync(["ip", "-j", family, "route", "show", "default"], {
+        stdout: "pipe",
+        stderr: "ignore",
+      });
+      if (res.exitCode === 0) {
+        const routes = JSON.parse(res.stdout.toString());
+        if (Array.isArray(routes)) {
+          for (const r of routes) {
+            if (typeof r?.dev === "string" && r.dev) allIfaces.add(r.dev);
+          }
+        }
+      }
+    } catch {}
+  }
+  if (allIfaces.size) return allIfaces;
+
+  // Fallback 1: plain text `ip route show default` (older iproute2 / BusyBox without -j)
+  for (const family of ["-4", "-6"]) {
+    try {
+      const res = Bun.spawnSync(["ip", family, "route", "show", "default"], {
+        stdout: "pipe",
+        stderr: "ignore",
+      });
+      if (res.exitCode === 0) {
+        for (const line of res.stdout.toString().split("\n")) {
+          const m = line.match(/\bdev\s+(\S+)/);
+          if (m?.[1]) allIfaces.add(m[1]);
+        }
+      }
+    } catch {}
+  }
+  if (allIfaces.size) return allIfaces;
+
+  // Fallback 2: Linux procfs routing tables (no external `ip` binary required)
+  try {
+    const lines = readFileSync("/proc/net/route", "utf8").split("\n").slice(1);
+    for (const line of lines) {
+      const cols = line.trim().split(/\s+/);
+      if (cols.length < 4) continue;
+      const flags = parseInt(cols[3], 16);
+      if (cols[1] === "00000000" && Number.isFinite(flags) && (flags & 1) !== 0) {
+        allIfaces.add(cols[0]);
+      }
+    }
+  } catch {}
+  try {
+    const lines = readFileSync("/proc/net/ipv6_route", "utf8").split("\n");
+    for (const line of lines) {
+      const cols = line.trim().split(/\s+/);
+      if (cols.length < 10) continue;
+      const flags = parseInt(cols[8], 16);
+      if (
+        cols[0] === "00000000000000000000000000000000" &&
+        cols[1] === "00" &&
+        Number.isFinite(flags) &&
+        (flags & 1) !== 0 &&
+        cols[9]
+      ) {
+        allIfaces.add(cols[9]);
+      }
+    }
+  } catch {}
+  return allIfaces;
+}
+
+function readInterfaceCounters(
+  name: string,
+): { rx: number; tx: number } | null {
+  try {
+    const rx = parseInt(
+      readFileSync(`/sys/class/net/${name}/statistics/rx_bytes`, "utf8").trim(),
+      10,
+    );
+    const tx = parseInt(
+      readFileSync(`/sys/class/net/${name}/statistics/tx_bytes`, "utf8").trim(),
+      10,
+    );
+    if (Number.isSafeInteger(rx) && Number.isSafeInteger(tx)) {
+      return { rx, tx };
+    }
+  } catch {}
+
+  // Fallback: /proc/net/dev
+  try {
+    for (const line of readFileSync("/proc/net/dev", "utf8").split("\n").slice(2)) {
+      const colon = line.indexOf(":");
+      if (colon === -1) continue;
+      if (line.slice(0, colon).trim() !== name) continue;
+      const fields = line.slice(colon + 1).trim().split(/\s+/);
+      if (fields.length < 9) continue;
+      const rx = parseInt(fields[0], 10);
+      const tx = parseInt(fields[8], 10);
+      if (Number.isSafeInteger(rx) && Number.isSafeInteger(tx)) {
+        return { rx, tx };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+function readLocalNetwork(): {
+  inbound: number;
+  outbound: number;
+  interfaces: string[];
+} | null {
+  try {
+    const allIfaces = discoverDefaultInterfaces();
+    if (!allIfaces.size) return null;
+    const filtered = [...allIfaces].filter(
+      (n) =>
+        n !== "lo" &&
+        !EXCLUDED_IFACE_PREFIXES.some((prefix) => n.startsWith(prefix)),
+    );
+    const interfaces = (filtered.length ? filtered : [...allIfaces]).sort();
+    let inbound = 0;
+    let outbound = 0;
+    for (const name of interfaces) {
+      const c = readInterfaceCounters(name);
+      if (!c) return null;
+      inbound += c.rx;
+      outbound += c.tx;
+    }
+    if (!Number.isSafeInteger(inbound) || !Number.isSafeInteger(outbound))
+      return null;
+    return { inbound, outbound, interfaces };
+  } catch {
+    return null;
+  }
+}
+
+export function collectControlPlane(s: Store) {
+  const at = Date.now();
+  const cpuRaw = readLocalProcCpu();
+  const memory = readLocalMemory();
+  const disk = readLocalDisk();
+  const uptime = readLocalUptime();
+  const boot = readLocalBootId();
+  const net = readLocalNetwork();
+
+  let prevSnap: Record<string, any> | null = null;
+  try {
+    const row = s.db
+      .query<{ value: string }, []>(
+        "SELECT value FROM metadata WHERE key='control-plane'",
+      )
+      .get();
+    if (row) prevSnap = JSON.parse(row.value);
+  } catch {}
+
+  const sameBoot =
+    typeof prevSnap?.bootId === "string" && prevSnap.bootId === boot;
+  const totalDelta =
+    sameBoot && cpuRaw && typeof prevSnap?.cpuTotal === "number"
+      ? cpuRaw.total - prevSnap.cpuTotal
+      : 0;
+  const idleDelta =
+    sameBoot && cpuRaw && typeof prevSnap?.cpuIdle === "number"
+      ? cpuRaw.idle - prevSnap.cpuIdle
+      : 0;
+  const cpu: number | null =
+    sameBoot &&
+    totalDelta > 0 &&
+    idleDelta >= 0 &&
+    idleDelta <= totalDelta
+      ? Math.max(0, Math.min(100, 100 * (1 - idleDelta / totalDelta)))
+      : null;
+
+  s.db
+    .transaction(() => {
+      let din = 0;
+      let dout = 0;
+      let trafficAvailable = false;
+      if (net) {
+        const source = "control-plane";
+        const epoch = net.interfaces.length
+          ? `${boot}:${net.interfaces.join(",")}`
+          : boot;
+        const prev = s.db
+          .query<
+            { epoch: string; inbound: number; outbound: number; at: number },
+            [string]
+          >("SELECT * FROM counters WHERE source=?")
+          .get(source);
+        const valid =
+          !!prev &&
+          prev.epoch === epoch &&
+          net.inbound >= prev.inbound &&
+          net.outbound >= prev.outbound;
+        if (valid) {
+          trafficAvailable = true;
+          din = net.inbound - prev.inbound;
+          dout = net.outbound - prev.outbound;
+        }
+        s.db
+          .query(
+            "INSERT INTO counters VALUES(?,?,?,?,?) ON CONFLICT(source) DO UPDATE SET epoch=excluded.epoch,inbound=excluded.inbound,outbound=excluded.outbound,at=excluded.at",
+          )
+          .run(source, epoch, net.inbound, net.outbound, at);
+      }
+
+      sample(
+        s,
+        "control-plane",
+        at,
+        din,
+        dout,
+        { cpu, memory, disk, reachable: 1 },
+        trafficAvailable,
+      );
+
+      const snapshot = {
+        id: "control-plane",
+        kind: "control-plane",
+        hostname: os.hostname(),
+        lastSeen: at,
+        created: prevSnap?.created ?? at,
+        reachable: true,
+        uptime,
+        cpu,
+        memory,
+        disk,
+        bootId: boot,
+        cpuTotal: cpuRaw?.total ?? null,
+        cpuIdle: cpuRaw?.idle ?? null,
+        networkAvailable: Boolean(net),
+        interfaces: net?.interfaces ?? [],
+        inboundTotal: net?.inbound ?? null,
+        outboundTotal: net?.outbound ?? null,
+      };
+      s.db
+        .query(
+          "INSERT INTO metadata(key,value) VALUES('control-plane',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        )
+        .run(JSON.stringify(snapshot));
+    })
+    .immediate();
+}
+
 async function pool<T>(
   values: T[],
   limit: number,
@@ -513,6 +843,9 @@ if (import.meta.main) {
     if (Date.now() - lastCollect >= 60000 && !collecting) {
       lastCollect = Date.now();
       collecting = true;
+      try {
+        collectControlPlane(s);
+      } catch {}
       void pool(
         s.list("host").filter((h) => h.fingerprint && !h.deleting),
         5,

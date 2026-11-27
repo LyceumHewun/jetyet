@@ -12,6 +12,9 @@ _Avoid_: Role-specific administrator.
 A virtual private server managed as a host for VPN deployment and host-level monitoring.
 _Avoid_: Node when referring to the host itself.
 
+**Control Plane Host**:
+The Linux server running the Jetyet management platform itself, monitored locally for host resources, uptime, public-network traffic, and background worker health without traffic allowances, reset schedules, or VPN node hosting.
+
 **Node**:
 A VPN connection endpoint managed by the platform.
 _Avoid_: VPS when referring to a connection endpoint.
@@ -123,7 +126,7 @@ The proportion of expected reachability observations actually performed during a
 - This initial usage establishes the accounting baseline at onboarding; subsequent traffic is added without counting pre-onboarding host counters again.
 - Administrators may correct a VPS's current-period inbound and outbound totals, recording the previous values, replacement values, and reason.
 - Corrections preserve historical traffic samples and reset schedules and immediately reevaluate allowance exhaustion; they do not fabricate historical traffic detail.
-- Historical availability and traffic charts offer 24-hour, 7-day, 30-day, and custom reporting ranges.
+- Historical availability and traffic charts offer 1-hour, 24-hour, 7-day, 30-day, and custom reporting ranges. Queries downsample into clean time buckets appropriate for the chart while preserving underlying retention and exact availability and coverage totals.
 - Allowance summaries separately show current accounting-period usage and the next scheduled reset, rather than equating chart ranges with accounting periods.
 - Repeated observations of the same ongoing fault update one alert with first-occurrence and last-observed times; recovery closes it with a recovery time, and recurrence creates a new alert.
 - Marking an alert as read does not resolve its underlying fault.
@@ -197,7 +200,7 @@ The proportion of expected reachability observations actually performed during a
 - A template-specific subscription URL always uses the selected template's type as its output format, regardless of the client User-Agent. An explicit format that conflicts with the selected template type returns HTTP 400.
 - A subscription URL can explicitly select its output format. The explicit selection takes precedence over client detection.
 - An automatic subscription URL selects the output format from the client User-Agent. If the client cannot be identified, the request returns HTTP 406 with guidance to use a format-specific URL.
-- The administrator's subscription links dialog lists the automatic URL before the fixed mihomo, sing-box, and Shadowrocket URLs.
+- The administrator's subscription links dialog matches the **Subscription Portal** dialog: it opens with automatic format detection and no template selected, lets the administrator switch among automatic, mihomo, sing-box, and Shadowrocket formats or pick an assigned published template (fixing the format to that template's type), and provides a copy action and **Subscription QR Code** for the selected URL.
 - The **Subscription Portal** shows the automatic URL and a Subscribe button. The button opens a dialog with automatic format detection selected and no template selected. Selecting a published template fixes the format to its template type. The copy action and **Subscription QR Code** use the selected URL.
 - Template-specific URLs appear beside their templates and can be copied or shown as a **Subscription QR Code**.
 - Selecting a different subscription output format does not create a separate user, credential identity, node entitlement, or allowance.
@@ -211,6 +214,7 @@ The proportion of expected reachability observations actually performed during a
 - VPS quota enforcement does not stop all public-network traffic; management traffic and other host services may continue consuming traffic after VPN suspension.
 - VPS monitoring displays **Host Uptime** and historical **Observed Availability** separately.
 - VPS monitoring also collects CPU, memory, and disk utilization every 60 seconds; process analysis and a full operations-monitoring suite are outside scope.
+- The **Control Plane Host** collects local CPU, memory, disk, uptime, and default-route public-network traffic every 60 seconds using the same retention windows as VPS monitoring, and reports background worker health. It has no traffic allowance, reset policy, or quota enforcement, and is excluded from managed VPS counts and aggregate VPS traffic.
 - Failed SSH probes mark a VPS as unreachable from the platform, not necessarily powered off.
 - Node monitoring reports VPN service running state and actual connection probe results separately.
 - A running process alone does not establish that a **Node** is usable; failed connection probes indicate an abnormal condition and raise an alert.

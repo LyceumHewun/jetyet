@@ -157,6 +157,20 @@ export function registerOperationsRoutes({
     ),
   );
 
+  app.post("/api/alerts/read-all", async (c) => {
+    let openOnly = true;
+    try {
+      const body = await c.req.json();
+      if (typeof body?.openOnly === "boolean") openOnly = body.openOnly;
+    } catch {}
+    const res = openOnly
+      ? s.db
+          .query("UPDATE alerts SET seen=1 WHERE seen=0 AND closed IS NULL")
+          .run()
+      : s.db.query("UPDATE alerts SET seen=1 WHERE seen=0").run();
+    return c.json({ ok: true, updated: res.changes });
+  });
+
   app.post("/api/alerts/:id/:action", (c) => {
     const action = c.req.param("action");
     if (action === "read")
@@ -169,33 +183,366 @@ export function registerOperationsRoutes({
     return c.json({ ok: true });
   });
 
+  function entityMeta(id: string | null | undefined) {
+    if (!id) {
+      return {
+        entityName: null,
+        entityKind: null,
+        entityDeleted: false,
+        entityHostId: null,
+      };
+    }
+    if (id === "platform") {
+      return {
+        entityName: null,
+        entityKind: "platform",
+        entityDeleted: false,
+        entityHostId: null,
+      };
+    }
+    if (id === "control-plane") {
+      return {
+        entityName: null,
+        entityKind: "control-plane",
+        entityDeleted: false,
+        entityHostId: null,
+      };
+    }
+    const e = s.get(id);
+    if (!e) {
+      return {
+        entityName: null,
+        entityKind: null,
+        entityDeleted: true,
+        entityHostId: null,
+      };
+    }
+    return {
+      entityName: e.name ?? e.username ?? id,
+      entityKind: e.kind,
+      entityDeleted: e.deleted,
+      entityHostId: e.kind === "node" ? (e.hostId ?? null) : null,
+    };
+  }
+
+  function parsePage(
+    rawPage?: string,
+    rawSize?: string,
+    rawOffset?: string,
+  ) {
+    const p = Number(rawPage || 1);
+    const sz = Number(rawSize || 30);
+    const page = Number.isFinite(p) ? Math.max(1, Math.floor(p)) : 1;
+    const pageSize = Number.isFinite(sz)
+      ? Math.max(10, Math.min(200, Math.floor(sz)))
+      : 30;
+    const rawOff = rawOffset !== undefined ? Number(rawOffset) : NaN;
+    const offset =
+      Number.isFinite(rawOff) && rawOff >= 0
+        ? Math.floor(rawOff)
+        : (page - 1) * pageSize;
+    return { page, pageSize, offset };
+  }
+
+  app.get("/api/activity/alerts", (c) => {
+    const status = c.req.query("status") || "open";
+    const code = (c.req.query("code") || "").trim();
+    const q = (c.req.query("q") || "").trim().toLowerCase();
+    const { page, pageSize, offset } = parsePage(
+      c.req.query("page"),
+      c.req.query("pageSize"),
+      c.req.query("offset"),
+    );
+
+    const where: string[] = [];
+    const params: any[] = [];
+    if (status === "open") where.push("a.closed IS NULL");
+    else if (status === "unread") where.push("a.closed IS NULL AND a.seen = 0");
+    else if (status === "closed") where.push("a.closed IS NOT NULL");
+    if (code) {
+      where.push("a.code = ?");
+      params.push(code);
+    }
+    if (q) {
+      const like = `%${q}%`;
+      where.push(
+        "(LOWER(a.code) LIKE ? OR LOWER(a.message) LIKE ? OR LOWER(a.entity) LIKE ? OR LOWER(COALESCE(json_extract(e.data,'$.name'),'')) LIKE ? OR LOWER(COALESCE(json_extract(e.data,'$.username'),'')) LIKE ? OR LOWER(COALESCE(json_extract(e.data,'$.address'),'')) LIKE ?)",
+      );
+      params.push(like, like, like, like, like, like);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const total =
+      s.db
+        .query<{ c: number }, any[]>(
+          `SELECT COUNT(*) AS c FROM alerts a LEFT JOIN entities e ON e.id = a.entity ${whereSql}`,
+        )
+        .get(...params)?.c ?? 0;
+    const rows = s.db
+      .query<any, any[]>(
+        `SELECT a.* FROM alerts a LEFT JOIN entities e ON e.id = a.entity ${whereSql} ORDER BY CASE WHEN a.closed IS NULL THEN 0 ELSE 1 END, a.last DESC, a.first DESC LIMIT ? OFFSET ?`,
+      )
+      .all(...params, pageSize, offset);
+
+    const countRow = s.db
+      .query<
+        { open: number; unread: number; closed: number; total_count: number },
+        []
+      >(
+        "SELECT SUM(CASE WHEN closed IS NULL THEN 1 ELSE 0 END) AS open, SUM(CASE WHEN closed IS NULL AND seen=0 THEN 1 ELSE 0 END) AS unread, SUM(CASE WHEN closed IS NOT NULL THEN 1 ELSE 0 END) AS closed, COUNT(*) AS total_count FROM alerts",
+      )
+      .get();
+    const codes = s.db
+      .query<{ code: string }, []>(
+        "SELECT DISTINCT code FROM alerts ORDER BY code",
+      )
+      .all()
+      .map((r) => r.code);
+
+    return c.json({
+      items: rows.map((a) => ({ ...a, ...entityMeta(a.entity) })),
+      total,
+      page,
+      pageSize,
+      offset,
+      nextOffset: offset + rows.length,
+      hasMore: offset + rows.length < total,
+      counts: {
+        open: countRow?.open ?? 0,
+        unread: countRow?.unread ?? 0,
+        closed: countRow?.closed ?? 0,
+        all: countRow?.total_count ?? 0,
+      },
+      codes,
+    });
+  });
+
+  app.get("/api/activity/tasks", (c) => {
+    const state = c.req.query("state") || "all";
+    const hideKick = c.req.query("hideKick") !== "0";
+    const q = (c.req.query("q") || "").trim().toLowerCase();
+    const { page, pageSize, offset } = parsePage(
+      c.req.query("page"),
+      c.req.query("pageSize"),
+      c.req.query("offset"),
+    );
+
+    const baseWhere: string[] = [];
+    const baseParams: any[] = [];
+    if (hideKick) baseWhere.push("t.kind != 'kick'");
+    if (q) {
+      const like = `%${q}%`;
+      baseWhere.push(
+        "(LOWER(t.kind) LIKE ? OR LOWER(COALESCE(t.error,'')) LIKE ? OR LOWER(COALESCE(json_extract(h.data,'$.name'),'')) LIKE ? OR LOWER(COALESCE(json_extract(h.data,'$.address'),'')) LIKE ?)",
+      );
+      baseParams.push(like, like, like, like);
+    }
+
+    const where = [...baseWhere];
+    const params = [...baseParams];
+    if (state === "active") where.push("t.state IN ('queued','running')");
+    else if (state === "failed") where.push("t.state = 'failed'");
+    else if (state === "succeeded") where.push("t.state = 'succeeded'");
+    else if (state === "cancelled") where.push("t.state = 'cancelled'");
+
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const total =
+      s.db
+        .query<{ c: number }, any[]>(
+          `SELECT COUNT(*) AS c FROM tasks t LEFT JOIN entities h ON h.id = t.host ${whereSql}`,
+        )
+        .get(...params)?.c ?? 0;
+    const rows = s.db
+      .query<any, any[]>(
+        `SELECT t.* FROM tasks t LEFT JOIN entities h ON h.id = t.host ${whereSql} ORDER BY CASE WHEN t.state IN ('running','queued') THEN 0 ELSE 1 END, t.updated DESC, t.created DESC LIMIT ? OFFSET ?`,
+      )
+      .all(...params, pageSize, offset);
+
+    const nonKickCounts = s.db
+      .query<
+        {
+          total_count: number;
+          active: number;
+          failed: number;
+          succeeded: number;
+          hiddenKicks: number;
+        },
+        []
+      >(
+        `SELECT
+          SUM(CASE WHEN ${hideKick ? "kind != 'kick'" : "1=1"} THEN 1 ELSE 0 END) AS total_count,
+          SUM(CASE WHEN (${hideKick ? "kind != 'kick'" : "1=1"}) AND state IN ('queued','running') THEN 1 ELSE 0 END) AS active,
+          SUM(CASE WHEN (${hideKick ? "kind != 'kick'" : "1=1"}) AND state = 'failed' THEN 1 ELSE 0 END) AS failed,
+          SUM(CASE WHEN (${hideKick ? "kind != 'kick'" : "1=1"}) AND state = 'succeeded' THEN 1 ELSE 0 END) AS succeeded,
+          SUM(CASE WHEN kind = 'kick' THEN 1 ELSE 0 END) AS hiddenKicks
+        FROM tasks`,
+      )
+      .get();
+
+    return c.json({
+      items: rows.map((t) => {
+        const meta = entityMeta(t.host);
+        return {
+          ...t,
+          hostName: meta.entityName,
+          hostDeleted: meta.entityDeleted,
+        };
+      }),
+      total,
+      page,
+      pageSize,
+      offset,
+      nextOffset: offset + rows.length,
+      hasMore: offset + rows.length < total,
+      counts: {
+        all: nonKickCounts?.total_count ?? 0,
+        active: nonKickCounts?.active ?? 0,
+        failed: nonKickCounts?.failed ?? 0,
+        succeeded: nonKickCounts?.succeeded ?? 0,
+        hiddenKicks: nonKickCounts?.hiddenKicks ?? 0,
+      },
+    });
+  });
+
+  app.get("/api/activity/events", (c) => {
+    const category = c.req.query("category") || "all";
+    const q = (c.req.query("q") || "").trim().toLowerCase();
+    const { page, pageSize, offset } = parsePage(
+      c.req.query("page"),
+      c.req.query("pageSize"),
+      c.req.query("offset"),
+    );
+
+    const where: string[] = [];
+    const params: any[] = [];
+    if (category === "credentials") {
+      where.push(
+        "ev.type IN ('credentials.rotated','portal.password.changed','portal.password-link.issued','ssh.trusted')",
+      );
+    } else if (category === "traffic") {
+      where.push("ev.type LIKE 'traffic.%'");
+    } else if (category === "config") {
+      where.push(
+        "ev.type NOT LIKE 'traffic.%' AND ev.type NOT IN ('credentials.rotated','portal.password.changed','portal.password-link.issued','ssh.trusted')",
+      );
+    }
+    if (q) {
+      const like = `%${q}%`;
+      where.push(
+        "(LOWER(ev.type) LIKE ? OR LOWER(ev.data) LIKE ? OR LOWER(COALESCE(json_extract(ent.data,'$.name'),'')) LIKE ? OR LOWER(COALESCE(json_extract(ent.data,'$.username'),'')) LIKE ? OR LOWER(COALESCE(json_extract(ent.data,'$.address'),'')) LIKE ?)",
+      );
+      params.push(like, like, like, like, like);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const total =
+      s.db
+        .query<{ c: number }, any[]>(
+          `SELECT COUNT(*) AS c FROM events ev LEFT JOIN entities ent ON ent.id = ev.entity ${whereSql}`,
+        )
+        .get(...params)?.c ?? 0;
+    const rows = s.db
+      .query<any, any[]>(
+        `SELECT ev.* FROM events ev LEFT JOIN entities ent ON ent.id = ev.entity ${whereSql} ORDER BY ev.at DESC LIMIT ? OFFSET ?`,
+      )
+      .all(...params, pageSize, offset);
+
+    return c.json({
+      items: rows.map((ev) => ({ ...ev, ...entityMeta(ev.entity) })),
+      total,
+      page,
+      pageSize,
+      offset,
+      nextOffset: offset + rows.length,
+      hasMore: offset + rows.length < total,
+    });
+  });
+
+  const BUCKET_LADDER = [
+    60_000,
+    300_000,
+    900_000,
+    3_600_000,
+    7_200_000,
+    21_600_000,
+    86_400_000,
+  ] as const;
+
+  function pickBucket(start: number, end: number, rawMaxPoints?: string) {
+    const now = Date.now(),
+      cutoffHour = now - 30 * 86400000 - 600000,
+      cutoffDay = now - 365 * 86400000 - 3600000;
+    const minBucket =
+      start < cutoffDay ? 86_400_000 : start < cutoffHour ? 3_600_000 : 60_000;
+    const parsedMax = rawMaxPoints ? Number(rawMaxPoints) : 180;
+    const maxPoints = Number.isFinite(parsedMax)
+      ? Math.max(24, Math.min(360, Math.floor(parsedMax)))
+      : 180;
+    const span = end - start;
+    const bucket =
+      BUCKET_LADDER.find((b) => b >= minBucket && span / b <= maxPoints) ??
+      86_400_000;
+    const resolution =
+      bucket >= 86_400_000 ? "day" : bucket >= 3_600_000 ? "hour" : "minute";
+    return { bucket, resolution };
+  }
+
   app.get("/api/history/:id", (c) => {
     const id = c.req.param("id");
-    if (!s.get(id)) throw Error("Record not found");
+    const isControlPlane = id === "control-plane";
+    const target = isControlPlane ? null : s.get(id);
+    if (!isControlPlane && !target) throw Error("Record not found");
     const start = Number(c.req.query("start") || Date.now() - 86400000),
       end = Number(c.req.query("end") || Date.now());
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
       throw Error("Invalid time range");
-    const now = Date.now(),
-      cutoffHour = now - 30 * 86400000 - 600000,
-      cutoffDay = now - 365 * 86400000 - 3600000;
-    const resolution =
-      start < cutoffDay ? "day" : start < cutoffHour ? "hour" : "minute";
-    const bucket =
-      resolution === "day" ? 86400000 : resolution === "hour" ? 3600000 : 60000;
-    const samples = s.db
-      .query(
-        `SELECT CAST(at/? AS INTEGER)*? AS at,SUM(inbound) AS inbound,SUM(outbound) AS outbound,SUM(cpu*metric_count)/NULLIF(SUM(metric_count),0) AS cpu,SUM(memory*metric_count)/NULLIF(SUM(metric_count),0) AS memory,SUM(disk*metric_count)/NULLIF(SUM(metric_count),0) AS disk,CAST(SUM(successes) AS REAL)/NULLIF(SUM(observations),0) AS reachable,MAX(cpu_max) AS cpu_max,MAX(memory_max) AS memory_max,MAX(disk_max) AS disk_max,SUM(observations) AS observations,SUM(successes) AS successes FROM samples WHERE entity=? AND at>=? AND at<=? GROUP BY CAST(at/? AS INTEGER) ORDER BY at`,
-      )
-      .all(bucket, bucket, id, start, end, bucket);
+    const { bucket, resolution } = pickBucket(
+      start,
+      end,
+      c.req.query("maxPoints"),
+    );
+    const includeEvents = c.req.query("includeEvents") !== "0";
+    const hasHostMetrics = isControlPlane || target?.kind === "host";
+    const samples = hasHostMetrics
+      ? s.db
+          .query(
+            `SELECT CAST(at/? AS INTEGER)*? AS at,SUM(inbound) FILTER (WHERE traffic_available = 1) AS inbound,SUM(outbound) FILTER (WHERE traffic_available = 1) AS outbound,ROUND(SUM(cpu*metric_count)/NULLIF(SUM(metric_count),0),1) AS cpu,ROUND(SUM(memory*metric_count)/NULLIF(SUM(metric_count),0),1) AS memory,ROUND(SUM(disk*metric_count)/NULLIF(SUM(metric_count),0),1) AS disk,ROUND(CAST(SUM(successes) AS REAL)/NULLIF(SUM(observations),0),4) AS reachable,ROUND(MAX(cpu_max),1) AS cpu_max,ROUND(MAX(memory_max),1) AS memory_max,ROUND(MAX(disk_max),1) AS disk_max,SUM(observations) AS observations,SUM(successes) AS successes FROM samples WHERE entity=? AND at>=? AND at<=? GROUP BY CAST(at/? AS INTEGER) ORDER BY at`,
+          )
+          .all(bucket, bucket, id, start, end, bucket)
+      : s.db
+          .query(
+            `SELECT CAST(at/? AS INTEGER)*? AS at,SUM(inbound) AS inbound,SUM(outbound) AS outbound FROM samples WHERE entity=? AND at>=? AND at<=? GROUP BY CAST(at/? AS INTEGER) ORDER BY at`,
+          )
+          .all(bucket, bucket, id, start, end, bucket);
     return c.json({
       samples,
       resolution,
-      events: s.db
-        .query(
-          "SELECT * FROM events WHERE entity=? AND at>=? AND at<=? ORDER BY at DESC LIMIT 500",
-        )
-        .all(id, start, end),
+      bucketMs: bucket,
+      events: includeEvents
+        ? s.db
+            .query(
+              "SELECT * FROM events WHERE entity=? AND at>=? AND at<=? ORDER BY at DESC LIMIT 500",
+            )
+            .all(id, start, end)
+        : [],
     });
+  });
+
+  app.get("/api/overview/traffic", (c) => {
+    const scope = c.req.query("scope") === "users" ? "users" : "hosts";
+    const start = Number(c.req.query("start") || Date.now() - 86400000),
+      end = Number(c.req.query("end") || Date.now());
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
+      throw Error("Invalid time range");
+    const { bucket, resolution } = pickBucket(
+      start,
+      end,
+      c.req.query("maxPoints") || "96",
+    );
+    const kind = scope === "users" ? "user" : "host";
+    const samples = s.db
+      .query(
+        `SELECT CAST(sm.at/? AS INTEGER)*? AS at,SUM(sm.inbound) AS inbound,SUM(sm.outbound) AS outbound FROM samples sm INNER JOIN entities e ON e.id = sm.entity WHERE e.kind=? AND sm.at>=? AND sm.at<=? GROUP BY CAST(sm.at/? AS INTEGER) ORDER BY at`,
+      )
+      .all(bucket, bucket, kind, start, end, bucket);
+    return c.json({ samples, resolution, bucketMs: bucket });
   });
 }

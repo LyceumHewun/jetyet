@@ -87,6 +87,7 @@ export function QrCodeSvg({
  */
 export function QrCodeModal({
   title,
+  subtitle,
   tag,
   url,
   options,
@@ -96,6 +97,7 @@ export function QrCodeModal({
   onClose,
 }: {
   title: string;
+  subtitle?: string;
   tag?: string;
   url: string;
   options?: QrCodeOption[];
@@ -263,9 +265,12 @@ export function QrCodeModal({
     <Modal
       title={title}
       tag={activeTag ?? translate("Subscription QR Code")}
-      subtitle={translate(
-        "Scan this QR code with a compatible client to import the subscription URL.",
-      )}
+      subtitle={
+        subtitle ??
+        translate(
+          "Scan this QR code with a compatible client to import the subscription URL.",
+        )
+      }
       onClose={onClose}
       className={hasControls ? "qr-dialog qr-dialog-split" : "qr-dialog"}
     >

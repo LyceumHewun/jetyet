@@ -14,35 +14,45 @@ import {
   Archive,
   ArrowUpRight,
   Check,
-  CheckCircle2,
   ChevronDown,
   ChevronUp,
-  Clock,
   FileCode2,
   KeyRound,
+  LayoutDashboard,
   Link2,
   LoaderCircle,
   LogOut,
   Moon,
   Plus,
   Radio,
-  RefreshCw,
-  RotateCw,
   Server,
   ShieldAlert,
   ShieldCheck,
   Sun,
-  Terminal,
   Users,
   X,
-  XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { flushSync } from "react-dom";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createRoot } from "react-dom/client";
-import { api, when } from "./client";
+import {
+  api,
+  readTelemetryRange,
+  subscribeTelemetryRange,
+  when,
+  writeTelemetryRange,
+} from "./client";
 import {
   Actions,
+  ActivityView,
   Badge,
   BrandMark,
   BrandWordmark,
@@ -55,17 +65,19 @@ import {
   InlineTelemetry,
   initDocumentScrollbars,
   LanguageControl,
-  LogsModal,
   MiniBar,
+  Overview,
   PasswordLinkModal,
+  QrCodeModal,
   QuotaBar,
   SearchInput,
   ScrollArea,
   SegmentedControl,
   Sparkline,
   Stage,
-  SubscriptionLinksModal,
   Table,
+  type QrCodeOption,
+  type QrCodeTemplateOption,
 } from "./components";
 import {
   DEFAULT_ECH_PUBLIC_NAME,
@@ -84,12 +96,9 @@ import { History } from "./history";
 import { SubscriptionPortal } from "./portal";
 import "./styles.css";
 import {
-  alertLabel,
   formatLabel,
-  operationLabel,
   probeLabel,
   SUBSCRIPTION_FORMATS,
-  taskLabel,
 } from "./labels";
 import type {
   PortalData,
@@ -114,31 +123,186 @@ function replaceRoute(to: AppRoute) {
   }
 }
 
-let spatialTransition: ViewTransition | undefined;
+function useAnimatedExpansion(activeId: string | null) {
+  const [renderedId, setRenderedId] = useState<string | null>(activeId);
+  const activeIdRef = useRef<string | null>(activeId);
+  activeIdRef.current = activeId;
 
-function transitionSpatialCards(update: () => void) {
-  if (
-    !document.startViewTransition ||
-    !CSS.supports("view-transition-name", "match-element") ||
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  ) {
-    update();
-    return;
-  }
+  useEffect(() => {
+    if (activeId) setRenderedId(activeId);
+  }, [activeId]);
 
-  const root = document.documentElement;
-  root.classList.add("spatial-transition");
-  const transition = document.startViewTransition(() => flushSync(update));
-  spatialTransition = transition;
-  const finish = () => {
-    if (spatialTransition !== transition) return;
-    spatialTransition = undefined;
-    root.classList.remove("spatial-transition");
+  const onExited = useCallback(() => {
+    if (!activeIdRef.current) setRenderedId(null);
+  }, []);
+
+  return {
+    renderedId: activeId ?? renderedId,
+    isOpen: Boolean(activeId),
+    onExited,
   };
-  void transition.finished.then(finish, finish);
+}
+
+function ExpandableRow({
+  isOpen,
+  onExited,
+  children,
+}: {
+  isOpen: boolean;
+  onExited: () => void;
+  children: ReactNode;
+}) {
+  const slotRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  const wasOpenRef = useRef<boolean | null>(null);
+  const timerRef = useRef<number | null>(null);
+  const onExitedRef = useRef(onExited);
+  onExitedRef.current = onExited;
+
+  useLayoutEffect(() => {
+    const slot = slotRef.current;
+    const inner = innerRef.current;
+    if (!slot || !inner) return;
+
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+
+    const reduced =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const prevOpen = wasOpenRef.current;
+    wasOpenRef.current = isOpen;
+
+    const gap =
+      parseFloat(
+        slot.parentElement ? getComputedStyle(slot.parentElement).rowGap : "",
+      ) || 16;
+
+    if (reduced) {
+      slot.style.transition = "none";
+      if (isOpen) {
+        slot.style.height = "auto";
+        slot.style.opacity = "1";
+        slot.style.marginBottom = "0px";
+        slot.style.overflow = "visible";
+      } else {
+        slot.style.height = "0px";
+        slot.style.opacity = "0";
+        slot.style.marginBottom = `${-gap}px`;
+        slot.style.overflow = "hidden";
+        onExitedRef.current();
+      }
+      return;
+    }
+
+    if (isOpen) {
+      if (prevOpen === true) return;
+      const startHeight =
+        prevOpen === null ? 0 : slot.getBoundingClientRect().height;
+      const startOpacity =
+        prevOpen === null ? 0 : parseFloat(getComputedStyle(slot).opacity) || 0;
+      const startMarginBottom =
+        prevOpen === null
+          ? -gap
+          : parseFloat(getComputedStyle(slot).marginBottom) || 0;
+      const targetHeight = inner.scrollHeight;
+
+      slot.style.transition = "none";
+      slot.style.overflow = "hidden";
+      slot.style.height = `${startHeight}px`;
+      slot.style.opacity = `${startOpacity}`;
+      slot.style.marginBottom = `${startMarginBottom}px`;
+      void slot.offsetHeight;
+
+      slot.style.transition =
+        "height 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease, margin-bottom 240ms cubic-bezier(0.22, 1, 0.36, 1)";
+      slot.style.height = `${targetHeight}px`;
+      slot.style.opacity = "1";
+      slot.style.marginBottom = "0px";
+
+      const finishOpen = () => {
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        slot.removeEventListener("transitionend", onEnd);
+        if (wasOpenRef.current) {
+          slot.style.transition = "none";
+          slot.style.height = "auto";
+          slot.style.overflow = "visible";
+        }
+      };
+      const onEnd = (e: TransitionEvent) => {
+        if (e.target === slot && e.propertyName === "height") finishOpen();
+      };
+      slot.addEventListener("transitionend", onEnd);
+      timerRef.current = window.setTimeout(finishOpen, 280);
+      return () => {
+        slot.removeEventListener("transitionend", onEnd);
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+      };
+    } else {
+      const startHeight = slot.getBoundingClientRect().height;
+      const startOpacity = parseFloat(getComputedStyle(slot).opacity) || 1;
+      const startMarginBottom =
+        parseFloat(getComputedStyle(slot).marginBottom) || 0;
+
+      slot.style.transition = "none";
+      slot.style.overflow = "hidden";
+      slot.style.height = `${startHeight}px`;
+      slot.style.opacity = `${startOpacity}`;
+      slot.style.marginBottom = `${startMarginBottom}px`;
+      void slot.offsetHeight;
+
+      slot.style.transition =
+        "height 200ms cubic-bezier(0.4, 0, 0.2, 1), opacity 150ms ease, margin-bottom 200ms cubic-bezier(0.4, 0, 0.2, 1)";
+      slot.style.height = "0px";
+      slot.style.opacity = "0";
+      slot.style.marginBottom = `${-gap}px`;
+
+      const finishClose = () => {
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        slot.removeEventListener("transitionend", onEnd);
+        if (!wasOpenRef.current) onExitedRef.current();
+      };
+      const onEnd = (e: TransitionEvent) => {
+        if (e.target === slot && e.propertyName === "height") finishClose();
+      };
+      slot.addEventListener("transitionend", onEnd);
+      timerRef.current = window.setTimeout(finishClose, 240);
+      return () => {
+        slot.removeEventListener("transitionend", onEnd);
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+      };
+    }
+  }, [isOpen]);
+
+  return (
+    <div
+      ref={slotRef}
+      className="spatial-expand-slot"
+      inert={!isOpen}
+    >
+      <div ref={innerRef} className="spatial-expand-inner">
+        {children}
+      </div>
+    </div>
+  );
 }
 
 const initial: State = {
+  controlPlane: null,
   hosts: [],
   nodes: [],
   users: [],
@@ -150,6 +314,7 @@ const initial: State = {
 };
 
 const tabs = [
+  ["Overview", LayoutDashboard],
   ["Infra", Server],
   ["Users", Users],
   ["Templates", FileCode2],
@@ -158,7 +323,7 @@ const tabs = [
 
 type ConsoleView = {
   tab: (typeof tabs)[number][0];
-  expandedHost?: string | null;
+  expandedHost: string | null;
   expandedUser: string | null;
 };
 
@@ -168,17 +333,37 @@ function readConsoleView(): ConsoleView {
   try {
     const saved = JSON.parse(localStorage.getItem(consoleViewKey) ?? "null");
     return {
-      tab: tabs.find(([tab]) => tab === saved?.tab)?.[0] ?? "Infra",
+      tab: tabs.find(([tab]) => tab === saved?.tab)?.[0] ?? "Overview",
       expandedHost:
-        saved?.expandedHost === null || typeof saved?.expandedHost === "string"
-          ? saved.expandedHost
-          : undefined,
+        typeof saved?.expandedHost === "string" ? saved.expandedHost : null,
       expandedUser:
         typeof saved?.expandedUser === "string" ? saved.expandedUser : null,
     };
   } catch {
-    return { tab: "Infra", expandedUser: null };
+    return { tab: "Overview", expandedHost: null, expandedUser: null };
   }
+}
+
+function useGridColumns(): 1 | 2 | 3 {
+  const read = (): 1 | 2 | 3 => {
+    if (typeof window === "undefined") return 3;
+    if (window.matchMedia("(max-width: 640px)").matches) return 1;
+    if (window.matchMedia("(max-width: 1080px)").matches) return 2;
+    return 3;
+  };
+  const [cols, setCols] = useState<1 | 2 | 3>(read);
+  useEffect(() => {
+    const mqSm = window.matchMedia("(max-width: 640px)");
+    const mqMd = window.matchMedia("(max-width: 1080px)");
+    const update = () => setCols(read());
+    mqSm.addEventListener("change", update);
+    mqMd.addEventListener("change", update);
+    return () => {
+      mqSm.removeEventListener("change", update);
+      mqMd.removeEventListener("change", update);
+    };
+  }, []);
+  return cols;
 }
 
 const credentialRotation = {
@@ -327,6 +512,7 @@ function App() {
   const [modal, setModal] = useAppView(locale);
   const [verifyingHostId, setVerifyingHostId] = useState<string | null>(null);
   const verifyingHost = useRef(false);
+  const gridCols = useGridColumns();
   const [consoleView, setConsoleView] = useState(readConsoleView);
   const { tab, expandedHost, expandedUser } = consoleView;
   const setTab = (tab: ConsoleView["tab"]) =>
@@ -343,14 +529,20 @@ function App() {
     [toast, setToast] = useState(""),
     [error, setError] = useState<UiError>(""),
     [search, setSearch] = useState(""),
-    [inlineRange, setInlineRange] = useState("24"),
-    [alertFilter, setAlertFilter] = useState<"all" | "open">("all"),
+    [inlineRange, setInlineRangeState] = useState<string>(readTelemetryRange),
     [templateFormatFilter, setTemplateFormatFilter] = useState<
       "all" | TemplateFormat
     >("all"),
     [theme, setTheme] = useState<"light" | "dark">(() =>
       document.documentElement.dataset.theme === "dark" ? "dark" : "light",
     );
+
+  const setInlineRange = (next: string) => {
+    setInlineRangeState(next);
+    writeTelemetryRange(next);
+  };
+
+  useEffect(() => subscribeTelemetryRange(setInlineRangeState), []);
 
   useEffect(() => {
     try {
@@ -387,11 +579,11 @@ function App() {
       const next: State = await api("state");
       setState(next);
       setConsoleView((view) => {
-        const expandedHost =
-          view.expandedHost === null ||
-          next.hosts.some((host) => host.id === view.expandedHost)
-            ? view.expandedHost
-            : next.hosts[0]?.id;
+        const expandedHost = next.hosts.some(
+          (host) => host.id === view.expandedHost,
+        )
+          ? view.expandedHost
+          : null;
         const expandedUser = next.users.some(
           (user) => user.id === view.expandedUser,
         )
@@ -462,6 +654,63 @@ function App() {
     const id = setTimeout(() => setToast(""), 4000);
     return () => clearTimeout(id);
   }, [toast]);
+
+  const visible = (list: Row[]) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((r) =>
+      [
+        r.name,
+        r.username,
+        r.address,
+        r.note,
+        r.kind,
+        r.message,
+        r.code,
+        r.format,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(q),
+    );
+  };
+
+  const visibleHosts = visible(state.hosts);
+  const activeHostIdx = visibleHosts.findIndex((i) => i.id === expandedHost);
+  const {
+    renderedId: renderedHostId,
+    isOpen: isHostOpen,
+    onExited: onHostExited,
+  } = useAnimatedExpansion(activeHostIdx >= 0 ? expandedHost : null);
+  const renderedHostIdx = visibleHosts.findIndex(
+    (i) => i.id === renderedHostId,
+  );
+  const hostInsertAfter =
+    renderedHostIdx >= 0
+      ? Math.min(
+          visibleHosts.length - 1,
+          Math.floor(renderedHostIdx / gridCols) * gridCols + gridCols - 1,
+        )
+      : -1;
+
+  const visibleUsers = visible(state.users);
+  const activeUserIdx = visibleUsers.findIndex((u) => u.id === expandedUser);
+  const {
+    renderedId: renderedUserId,
+    isOpen: isUserOpen,
+    onExited: onUserExited,
+  } = useAnimatedExpansion(activeUserIdx >= 0 ? expandedUser : null);
+  const renderedUserIdx = visibleUsers.findIndex(
+    (u) => u.id === renderedUserId,
+  );
+  const userInsertAfter =
+    renderedUserIdx >= 0
+      ? Math.min(
+          visibleUsers.length - 1,
+          Math.floor(renderedUserIdx / gridCols) * gridCols + gridCols - 1,
+        )
+      : -1;
 
   const run = async (fn: () => Promise<any>, message = "Saved") => {
     try {
@@ -546,48 +795,59 @@ function App() {
   const links = async (u: Row) => {
     try {
       const data = await api(`users/${u.id}/links`);
-      const items = [
+      const options: QrCodeOption[] = [
         {
-          id: "default",
-          kind: "auto" as const,
-          label: translate("Default subscription"),
+          value: "adaptive",
+          label: translate("Adaptive"),
           url: data.default,
-          isDefault: true,
+          tag: translate("Adaptive"),
         },
         ...SUBSCRIPTION_FORMATS.flatMap((fmt) =>
           data.formats?.[fmt]
             ? [
                 {
-                  id: `format:${fmt}`,
-                  kind: "format" as const,
-                  format: fmt,
+                  value: fmt,
                   label: formatLabel(fmt),
                   url: data.formats[fmt],
+                  tag: formatLabel(fmt),
                 },
               ]
             : [],
         ),
-        ...(data.templates || []).map((t: Row) => {
+      ];
+      const templates: QrCodeTemplateOption[] = (data.templates || []).map(
+        (t: Row) => {
           const tpl = state.templates.find((x) => x.id === t.id);
           const format = (tpl?.format ?? t.format) as
             | TemplateFormat
             | undefined;
+          const isDefault = Boolean(
+            format && u.defaultTemplates?.[format] === t.id,
+          );
           return {
-            id: t.id,
-            kind: "template" as const,
-            format,
-            label: tpl?.name || t.id,
+            value: t.id,
+            label:
+              `${tpl?.name || t.id}` +
+              (format ? ` · ${formatLabel(format)}` : "") +
+              (isDefault ? ` · ${translate("Default")}` : ""),
+            format: format || "",
+            group: "assigned",
             url: t.url,
-            isFormatDefault: Boolean(
-              format && u.defaultTemplates?.[format] === t.id,
-            ),
+            tag: format ? formatLabel(format) : undefined,
           };
-        }),
-      ];
+        },
+      );
       setModal(() => (
-        <SubscriptionLinksModal
-          userName={u.name}
-          items={items}
+        <QrCodeModal
+          title={translate("Subscription Links")}
+          subtitle={translate(
+            "Keep these links private. Share them only with {0}.",
+            u.name,
+          )}
+          tag={translate("Adaptive")}
+          url={data.default}
+          options={options}
+          templates={templates}
           onClose={() => setModal(null)}
         />
       ));
@@ -772,27 +1032,6 @@ function App() {
     );
   }
 
-  const visible = (list: Row[]) => {
-    const q = search.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter((r) =>
-      [
-        r.name,
-        r.username,
-        r.address,
-        r.note,
-        r.kind,
-        r.message,
-        r.code,
-        r.format,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(q),
-    );
-  };
-
   const activeAlerts = state.alerts.filter((a) => !a.closed),
     nodeHealthy = state.nodes.filter(
       (n) =>
@@ -827,15 +1066,18 @@ function App() {
       ) as number),
     0,
   );
-  const runningTasks = state.tasks.filter((t) =>
-    ["queued", "running"].includes(t.state),
-  ).length;
+  const runningTasks =
+    state.activitySummary?.activeTasks ??
+    state.tasks.filter((t) => ["queued", "running"].includes(t.state)).length;
+  const openAlertCount =
+    state.activitySummary?.openAlerts ?? activeAlerts.length;
 
   const tabCount: Record<string, number> = {
+    Overview: 0,
     Infra: state.hosts.length,
     Users: state.users.length,
     Templates: state.templates.length,
-    Activity: activeAlerts.length + runningTasks,
+    Activity: openAlertCount + runningTasks,
   };
 
   const openArchive = (kind: "hosts" | "nodes" | "users") =>
@@ -847,14 +1089,53 @@ function App() {
       />
     ));
 
-  const visibleHosts = visible(state.hosts);
-  const orderedHosts = [...visibleHosts].sort((a, b) =>
-    a.id === expandedHost ? -1 : b.id === expandedHost ? 1 : 0,
-  );
-  const visibleUsers = visible(state.users);
-  const orderedUsers = [...visibleUsers].sort((a, b) =>
-    a.id === expandedUser ? -1 : b.id === expandedUser ? 1 : 0,
-  );
+  const controlPlaneEntity: Row = state.controlPlane
+    ? {
+        ...state.controlPlane,
+        id: "control-plane",
+        kind: "control-plane",
+        name: translate("Control Plane"),
+      }
+    : {
+        id: "control-plane",
+        kind: "control-plane",
+        name: translate("Control Plane"),
+        reachable: false,
+        uptime: null,
+        cpu: null,
+        memory: null,
+        disk: null,
+        interfaces: [],
+      };
+
+  const inlineRangeOptions: [string, string][] = [
+    ["1", translate("1h")],
+    ["24", translate("24h")],
+    ["168", translate("7d")],
+    ["720", translate("30d")],
+  ];
+
+  const jumpToHost = (hostId: string) => {
+    setStage(null);
+    setSearch("");
+    setConsoleView((view) => ({
+      ...view,
+      tab: "Infra",
+      expandedHost: hostId,
+    }));
+  };
+
+  const jumpToUser = (userId: string) => {
+    setStage(null);
+    setSearch("");
+    setConsoleView((view) => ({
+      ...view,
+      tab: "Users",
+      expandedUser: userId,
+    }));
+  };
+
+  const openControlPlaneTelemetry = () => history(controlPlaneEntity);
 
   return (
     <div className="shell">
@@ -867,7 +1148,7 @@ function App() {
               onClick={(e) => {
                 e.preventDefault();
                 setStage(null);
-                setTab("Infra");
+                setTab("Overview");
               }}
             >
               <BrandMark size={19} />
@@ -963,6 +1244,25 @@ function App() {
             stage
           ) : (
             <>
+              {tab === "Overview" && (
+                <Overview
+                  state={state}
+                  hostsReachable={hostsReachable}
+                  nodeHealthy={nodeHealthy}
+                  totalOnline={totalOnline}
+                  activeAlerts={activeAlerts}
+                  runningTasks={runningTasks}
+                  onJumpTab={(nextTab) => {
+                    setStage(null);
+                    setTab(nextTab);
+                    setSearch("");
+                  }}
+                  onInspectHost={jumpToHost}
+                  onInspectUser={jumpToUser}
+                  onInspectControlPlane={openControlPlaneTelemetry}
+                />
+              )}
+
               {tab === "Infra" && (
                 <>
                   <div className="action-strip">
@@ -1028,7 +1328,10 @@ function App() {
                     </section>
                   ) : (
                     <div className="spatial-grid">
-                      {orderedHosts.map((h) => {
+                      {visibleHosts.map((h, idx) => {
+                        const isActive = expandedHost === h.id;
+                        const toggleExpand = () =>
+                          setExpandedHost(isActive ? null : h.id);
                         const node = state.nodes.find((n) => n.hostId === h.id);
                         const clients = node
                           ? (Object.values(node.online || {}).reduce(
@@ -1036,405 +1339,484 @@ function App() {
                               0,
                             ) as number)
                           : 0;
-                        const isExpanded = expandedHost === h.id;
                         const nTone = node ? nodeTone(node, h) : "neutral";
-                        const hostActions: [string, () => void][] = [
-                          [translate("Edit VPS"), () => save("hosts", h)],
-                          [translate("Full telemetry"), () => history(h)],
-                          [translate("Reset usage"), () => reset(h)],
-                          [
-                            translate("Correct usage"),
-                            () =>
-                              setModal(() => (
-                                <Correction
-                                  host={h}
-                                  onClose={() => setModal(null)}
-                                  onSave={async (v) => {
-                                    await run(() =>
-                                      api(`hosts/${h.id}/correct`, "POST", v),
-                                    );
-                                    setModal(null);
-                                  }}
-                                />
-                              )),
-                          ],
-                          [translate("Delete VPS"), () => remove("hosts", h)],
-                          [
-                            translate("Force remove"),
-                            () =>
-                              setModal(() => (
-                                <ForceRemove
-                                  host={h}
-                                  onClose={() => setModal(null)}
-                                  onSave={async () => {
-                                    await run(() =>
-                                      api(
-                                        `hosts/${h.id}/force-remove`,
-                                        "POST",
-                                        {
-                                          confirmation:
-                                            "REMOTE HOST DESTROYED OR HANDLED INDEPENDENTLY",
-                                        },
-                                      ),
-                                    );
-                                    setModal(null);
-                                  }}
-                                />
-                              )),
-                          ],
-                        ];
-                        const nodeActions: [string, () => void][] = node
-                          ? [
-                              [
-                                translate("Edit node"),
-                                () => save("nodes", node),
-                              ],
-                              [
-                                translate("Deploy"),
-                                () => operation(node, "deploy"),
-                              ],
-                              [
-                                translate("Show deploy command"),
-                                () => operation(node, "command"),
-                              ],
-                              [
-                                translate("Detect installation"),
-                                () => operation(node, "detect"),
-                              ],
-                              [
-                                translate("Upgrade"),
-                                () => operation(node, "upgrade"),
-                              ],
-                              [
-                                translate("Inspect drift"),
-                                () => inspectDrift(node),
-                              ],
-                              [
-                                translate("Reapply config"),
-                                () => operation(node, "reapply"),
-                              ],
-                              [translate("Node history"), () => history(node)],
-                              [
-                                translate("Delete node"),
-                                () => remove("nodes", node),
-                              ],
-                            ]
-                          : [];
 
-                        if (isExpanded) {
+                        const renderExpanded = (target: Row) => {
+                          const tNode = state.nodes.find(
+                            (n) => n.hostId === target.id,
+                          );
+                          const tClients = tNode
+                            ? (Object.values(tNode.online || {}).reduce(
+                                (a: any, b: any) => a + b,
+                                0,
+                              ) as number)
+                            : 0;
+                          const tTone = tNode
+                            ? nodeTone(tNode, target)
+                            : "neutral";
+                          const hostActions: [string, () => void][] = [
+                            [
+                              translate("Edit VPS"),
+                              () => save("hosts", target),
+                            ],
+                            [
+                              translate("Full telemetry"),
+                              () => history(target),
+                            ],
+                            [translate("Reset usage"), () => reset(target)],
+                            [
+                              translate("Correct usage"),
+                              () =>
+                                setModal(() => (
+                                  <Correction
+                                    host={target}
+                                    onClose={() => setModal(null)}
+                                    onSave={async (v) => {
+                                      await run(() =>
+                                        api(
+                                          `hosts/${target.id}/correct`,
+                                          "POST",
+                                          v,
+                                        ),
+                                      );
+                                      setModal(null);
+                                    }}
+                                  />
+                                )),
+                            ],
+                            [
+                              translate("Delete VPS"),
+                              () => remove("hosts", target),
+                            ],
+                            [
+                              translate("Force remove"),
+                              () =>
+                                setModal(() => (
+                                  <ForceRemove
+                                    host={target}
+                                    onClose={() => setModal(null)}
+                                    onSave={async () => {
+                                      await run(() =>
+                                        api(
+                                          `hosts/${target.id}/force-remove`,
+                                          "POST",
+                                          {
+                                            confirmation:
+                                              "REMOTE HOST DESTROYED OR HANDLED INDEPENDENTLY",
+                                          },
+                                        ),
+                                      );
+                                      setModal(null);
+                                    }}
+                                  />
+                                )),
+                            ],
+                          ];
+                          const nodeActions: [string, () => void][] = tNode
+                            ? [
+                                [
+                                  translate("Edit node"),
+                                  () => save("nodes", tNode),
+                                ],
+                                [
+                                  translate("Deploy"),
+                                  () => operation(tNode, "deploy"),
+                                ],
+                                [
+                                  translate("Show deploy command"),
+                                  () => operation(tNode, "command"),
+                                ],
+                                [
+                                  translate("Detect installation"),
+                                  () => operation(tNode, "detect"),
+                                ],
+                                [
+                                  translate("Upgrade"),
+                                  () => operation(tNode, "upgrade"),
+                                ],
+                                [
+                                  translate("Inspect drift"),
+                                  () => inspectDrift(tNode),
+                                ],
+                                [
+                                  translate("Reapply config"),
+                                  () => operation(tNode, "reapply"),
+                                ],
+                                [
+                                  translate("Node history"),
+                                  () => history(tNode),
+                                ],
+                                [
+                                  translate("Delete node"),
+                                  () => remove("nodes", tNode),
+                                ],
+                              ]
+                            : [];
+
                           return (
-                            <article
-                              key={h.id}
-                              className="spatial-card spatial-expanded"
+                            <ExpandableRow
+                              key={`expanded-slot-host-${Math.floor(renderedHostIdx / gridCols)}`}
+                              isOpen={isHostOpen}
+                              onExited={onHostExited}
                             >
-                              <div className="expanded-head">
-                                <div className="expanded-head-left">
-                                  <span
-                                    className={
-                                      "status-dot " +
-                                      (!h.enabled
-                                        ? "neutral"
-                                        : h.reachable
-                                          ? "good"
-                                          : "warning")
-                                    }
-                                  />
-                                  <h2>{h.name}</h2>
-                                  <span className="mono muted">
-                                    {h.address}:{h.port}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className={
-                                      "trust-pill " +
-                                      (h.fingerprint ? "trusted" : "verify")
-                                    }
-                                    disabled={verifyingHostId !== null}
-                                    aria-busy={verifyingHostId === h.id}
-                                    onClick={() => void trust(h)}
-                                  >
-                                    {verifyingHostId === h.id ? (
-                                      <>
-                                        <LoaderCircle
-                                          size={13}
-                                          className="spinning"
-                                          aria-hidden="true"
+                              <article className="spatial-card spatial-expanded">
+                                <div
+                                  key={target.id}
+                                  className="spatial-expanded-content"
+                                >
+                                    <div className="expanded-head">
+                                      <div className="expanded-head-left">
+                                        <span
+                                          className={
+                                            "status-dot " +
+                                            (!target.enabled
+                                              ? "neutral"
+                                              : target.reachable
+                                                ? "good"
+                                                : "warning")
+                                          }
                                         />
-                                        {translate("Verifying SSH…")}
-                                      </>
-                                    ) : h.fingerprint ? (
-                                      <>
-                                        <ShieldCheck size={13} />
-                                        {translate("SSH Trusted")}
-                                      </>
-                                    ) : (
-                                      <>
-                                        <ShieldAlert size={13} />
-                                        {translate("Verify SSH")}
-                                      </>
-                                    )}
-                                  </button>
-                                  {h.deleting && (
-                                    <Badge tone="warning">
-                                      {translate("Pending deletion")}
-                                    </Badge>
-                                  )}
-                                  {h.usageStale && (
-                                    <Badge tone="warning">
-                                      {translate("Stale data")}
-                                    </Badge>
-                                  )}
-                                  {node && (
-                                    <Badge tone={nTone}>
-                                      {node.name} {node.version || ""} ·{" "}
-                                      {translate("{0} online", clients)}
-                                    </Badge>
-                                  )}
-                                </div>
-                                <div className="expanded-head-right">
-                                  <SegmentedControl
-                                    value={inlineRange}
-                                    options={[
-                                      ["24", translate("24h")],
-                                      ["168", translate("7d")],
-                                      ["720", translate("30d")],
-                                    ]}
-                                    onChange={setInlineRange}
-                                  />
-                                  <Button onClick={() => save("hosts", h)}>
-                                    {translate("Edit")}
-                                  </Button>
-                                  <Actions items={hostActions} />
-                                  <Button
-                                    variant="icon"
-                                    onClick={() =>
-                                      transitionSpatialCards(() =>
-                                        setExpandedHost(null),
-                                      )
-                                    }
-                                    aria-label={translate("Collapse")}
-                                    title={translate("Collapse")}
-                                  >
-                                    <ChevronUp size={15} />
-                                  </Button>
-                                </div>
-                              </div>
-                              <div className="expanded-zones">
-                                <InlineTelemetry
-                                  entity={h}
-                                  range={inlineRange}
-                                />
-                                <div className="expanded-actions-col">
-                                  <div className="expanded-actions-head">
-                                    <span className="kpi-label">
-                                      {node
-                                        ? translate("HYSTERIA 2 NODE")
-                                        : translate("QUICK ACTIONS")}
-                                    </span>
-                                    {node && <Actions items={nodeActions} />}
-                                  </div>
-                                  {node ? (
-                                    <>
-                                      <div className="node-mini-meta">
-                                        <strong>{node.name}</strong>
-                                        <small className="mono">
-                                          {node.address}:{node.port}
-                                        </small>
-                                        <div className="chip-group node-specs">
-                                          <Chip>
-                                            {node.probed &&
-                                            Date.now() - node.probed > 600000
-                                              ? translate("Probe stale")
-                                              : probeLabel(node.probe)}
-                                          </Chip>
-                                          {node.hopping && (
-                                            <Chip mono>UDP {node.hopping}</Chip>
+                                        <h2>{target.name}</h2>
+                                        <span className="mono muted">
+                                          {target.address}:{target.port}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          className={
+                                            "trust-pill " +
+                                            (target.fingerprint
+                                              ? "trusted"
+                                              : "verify")
+                                          }
+                                          disabled={verifyingHostId !== null}
+                                          aria-busy={
+                                            verifyingHostId === target.id
+                                          }
+                                          onClick={() => void trust(target)}
+                                        >
+                                          {verifyingHostId === target.id ? (
+                                            <>
+                                              <LoaderCircle
+                                                size={13}
+                                                className="spinning"
+                                                aria-hidden="true"
+                                              />
+                                              {translate("Verifying SSH…")}
+                                            </>
+                                          ) : target.fingerprint ? (
+                                            <>
+                                              <ShieldCheck size={13} />
+                                              {translate("SSH Trusted")}
+                                            </>
+                                          ) : (
+                                            <>
+                                              <ShieldAlert size={13} />
+                                              {translate("Verify SSH")}
+                                            </>
                                           )}
-                                          {(node.version ||
-                                            (node.status &&
-                                              node.status !== "draft")) &&
-                                            node.congestion && (
-                                              <Chip>
-                                                {node.congestion === "bbr"
-                                                  ? "BBR"
-                                                  : "Brutal"}
-                                              </Chip>
-                                            )}
-                                          {(node.version ||
-                                            (node.status &&
-                                              node.status !== "draft")) &&
-                                            node.tuning && (
-                                              <Chip>
-                                                {translate("Adaptive tuning")}
-                                              </Chip>
-                                            )}
-                                          {(node.version ||
-                                            (node.status &&
-                                              node.status !== "draft")) &&
-                                            (node.tlsSecurity === "pinned" ? (
-                                              <>
-                                                <Chip mono>
-                                                  pinSHA256 ·{" "}
-                                                  {node.sni || DEFAULT_TLS_SNI}
+                                        </button>
+                                        {target.deleting && (
+                                          <Badge tone="warning">
+                                            {translate("Pending deletion")}
+                                          </Badge>
+                                        )}
+                                        {target.usageStale && (
+                                          <Badge tone="warning">
+                                            {translate("Stale data")}
+                                          </Badge>
+                                        )}
+                                        {tNode && (
+                                          <Badge tone={tTone}>
+                                            {tNode.name} {tNode.version || ""} ·{" "}
+                                            {translate("{0} online", tClients)}
+                                          </Badge>
+                                        )}
+                                      </div>
+                                      <div className="expanded-head-right">
+                                        <SegmentedControl
+                                          value={inlineRange}
+                                          options={inlineRangeOptions}
+                                          onChange={setInlineRange}
+                                        />
+                                        <Button
+                                          onClick={() => save("hosts", target)}
+                                        >
+                                          {translate("Edit")}
+                                        </Button>
+                                        <Actions items={hostActions} />
+                                        <Button
+                                          variant="icon"
+                                          onClick={() => setExpandedHost(null)}
+                                          aria-label={translate("Collapse")}
+                                          title={translate("Collapse")}
+                                        >
+                                          <ChevronUp size={15} />
+                                        </Button>
+                                      </div>
+                                    </div>
+                                    <div className="expanded-zones">
+                                      <InlineTelemetry
+                                        entity={target}
+                                        range={inlineRange}
+                                      />
+                                      <div className="expanded-actions-col">
+                                        <div className="expanded-actions-head">
+                                          <span className="kpi-label">
+                                            {tNode
+                                              ? translate("HYSTERIA 2 NODE")
+                                              : translate("QUICK ACTIONS")}
+                                          </span>
+                                          {tNode && (
+                                            <Actions items={nodeActions} />
+                                          )}
+                                        </div>
+                                        {tNode && (
+                                          <ScrollArea
+                                            axis="y"
+                                            className="expanded-chips-scroll"
+                                          >
+                                            <div className="node-mini-meta">
+                                              <strong>{tNode.name}</strong>
+                                              <small className="mono">
+                                                {tNode.address}:{tNode.port}
+                                              </small>
+                                              <div className="chip-group node-specs">
+                                                <Chip>
+                                                  {tNode.probed &&
+                                                  Date.now() - tNode.probed >
+                                                    600000
+                                                    ? translate("Probe stale")
+                                                    : probeLabel(tNode.probe)}
                                                 </Chip>
-                                                {node.ech && (
-                                                  <Chip className="accent-chip">
-                                                    ECH
+                                                {tNode.hopping && (
+                                                  <Chip mono>
+                                                    UDP {tNode.hopping}
                                                   </Chip>
                                                 )}
-                                              </>
-                                            ) : (
-                                              <Badge tone="warning">
-                                                {translate("Legacy TLS")}
-                                              </Badge>
-                                            ))}
+                                                {(tNode.version ||
+                                                  (tNode.status &&
+                                                    tNode.status !==
+                                                      "draft")) &&
+                                                  tNode.congestion && (
+                                                    <Chip>
+                                                      {tNode.congestion ===
+                                                      "bbr"
+                                                        ? "BBR"
+                                                        : "Brutal"}
+                                                    </Chip>
+                                                  )}
+                                                {(tNode.version ||
+                                                  (tNode.status &&
+                                                    tNode.status !==
+                                                      "draft")) &&
+                                                  tNode.tuning && (
+                                                    <Chip>
+                                                      {translate(
+                                                        "Adaptive tuning",
+                                                      )}
+                                                    </Chip>
+                                                  )}
+                                                {(tNode.version ||
+                                                  (tNode.status &&
+                                                    tNode.status !==
+                                                      "draft")) &&
+                                                  (tNode.tlsSecurity ===
+                                                  "pinned" ? (
+                                                    <>
+                                                      <Chip mono>
+                                                        pinSHA256 ·{" "}
+                                                        {tNode.sni ||
+                                                          DEFAULT_TLS_SNI}
+                                                      </Chip>
+                                                      {tNode.ech && (
+                                                        <Chip className="accent-chip">
+                                                          ECH
+                                                        </Chip>
+                                                      )}
+                                                    </>
+                                                  ) : (
+                                                    <Badge tone="warning">
+                                                      {translate("Legacy TLS")}
+                                                    </Badge>
+                                                  ))}
+                                              </div>
+                                            </div>
+                                          </ScrollArea>
+                                        )}
+                                        <div className="expanded-quick-actions">
+                                          {tNode ? (
+                                            <>
+                                              <Button
+                                                className="quick-row-btn"
+                                                onClick={() =>
+                                                  operation(
+                                                    tNode,
+                                                    tNode.version
+                                                      ? "upgrade"
+                                                      : "deploy",
+                                                  )
+                                                }
+                                              >
+                                                <span>
+                                                  {tNode.version
+                                                    ? translate("Upgrade")
+                                                    : translate("Deploy")}
+                                                </span>
+                                                <span className="mono muted">
+                                                  {tNode.version || "v2"}
+                                                </span>
+                                              </Button>
+                                              <Button
+                                                className="quick-row-btn"
+                                                onClick={() =>
+                                                  inspectDrift(tNode)
+                                                }
+                                              >
+                                                <span>
+                                                  {translate("Config drift")}
+                                                </span>
+                                                <Badge
+                                                  tone={
+                                                    tNode.drift
+                                                      ? "warning"
+                                                      : "good"
+                                                  }
+                                                >
+                                                  {tNode.drift
+                                                    ? translate("Drift")
+                                                    : translate("Clean")}
+                                                </Badge>
+                                              </Button>
+                                            </>
+                                          ) : (
+                                            <Button
+                                              variant="primary"
+                                              onClick={() => save("nodes")}
+                                            >
+                                              <Plus size={14} />
+                                              {translate("Attach Node")}
+                                            </Button>
+                                          )}
+                                          <Button
+                                            className="quick-row-btn"
+                                            onClick={() => reset(target)}
+                                          >
+                                            <span>
+                                              {translate("Reset usage")}
+                                            </span>
+                                            <span className="mono muted">
+                                              {when(target.usage.next)}
+                                            </span>
+                                          </Button>
+                                          <Button
+                                            className="quick-row-btn"
+                                            onClick={() => history(target)}
+                                          >
+                                            <span>
+                                              {translate("Full telemetry")}
+                                            </span>
+                                            <ArrowUpRight
+                                              size={14}
+                                              className="muted"
+                                            />
+                                          </Button>
                                         </div>
                                       </div>
-                                      <Button
-                                        className="quick-row-btn"
-                                        onClick={() =>
-                                          operation(
-                                            node,
-                                            node.version ? "upgrade" : "deploy",
-                                          )
-                                        }
-                                      >
-                                        <span>
-                                          {node.version
-                                            ? translate("Upgrade")
-                                            : translate("Deploy")}
-                                        </span>
-                                        <span className="mono muted">
-                                          {node.version || "v2"}
-                                        </span>
-                                      </Button>
-                                      <Button
-                                        className="quick-row-btn"
-                                        onClick={() => inspectDrift(node)}
-                                      >
-                                        <span>{translate("Config drift")}</span>
-                                        <Badge
-                                          tone={node.drift ? "warning" : "good"}
-                                        >
-                                          {node.drift
-                                            ? translate("Drift")
-                                            : translate("Clean")}
-                                        </Badge>
-                                      </Button>
-                                    </>
-                                  ) : (
-                                    <Button
-                                      variant="primary"
-                                      onClick={() => save("nodes")}
-                                    >
-                                      <Plus size={14} />
-                                      {translate("Attach Node")}
-                                    </Button>
-                                  )}
-                                  <Button
-                                    className="quick-row-btn"
-                                    onClick={() => reset(h)}
-                                  >
-                                    <span>{translate("Reset usage")}</span>
-                                    <span className="mono muted">
-                                      {when(h.usage.next)}
-                                    </span>
-                                  </Button>
-                                  <Button
-                                    className="quick-row-btn"
-                                    onClick={() => history(h)}
-                                  >
-                                    <span>{translate("Full telemetry")}</span>
-                                    <ArrowUpRight size={14} className="muted" />
-                                  </Button>
-                                </div>
-                              </div>
-                            </article>
+                                    </div>
+                                  </div>
+                                </article>
+                            </ExpandableRow>
                           );
-                        }
+                        };
 
                         return (
-                          <article
-                            key={h.id}
-                            className="spatial-card spatial-compact"
-                            onClick={() =>
-                              transitionSpatialCards(() =>
-                                setExpandedHost(h.id),
-                              )
-                            }
-                            role="button"
-                            tabIndex={0}
-                            onKeyDown={(e) => {
-                              if (
-                                e.target === e.currentTarget &&
-                                (e.key === "Enter" || e.key === " ")
-                              ) {
-                                e.preventDefault();
-                                transitionSpatialCards(() =>
-                                  setExpandedHost(h.id),
-                                );
+                          <Fragment key={h.id}>
+                            <article
+                              className={
+                                "spatial-card spatial-compact" +
+                                (isActive ? " is-active" : "")
                               }
-                            }}
-                          >
-                            <div className="compact-head">
-                              <span
-                                className={
-                                  "status-dot " +
-                                  (!h.enabled
-                                    ? "neutral"
-                                    : h.reachable
-                                      ? "good"
-                                      : "warning")
+                              onClick={toggleExpand}
+                              role="button"
+                              tabIndex={0}
+                              aria-expanded={isActive}
+                              onKeyDown={(e) => {
+                                if (
+                                  e.target === e.currentTarget &&
+                                  (e.key === "Enter" || e.key === " ")
+                                ) {
+                                  e.preventDefault();
+                                  toggleExpand();
                                 }
-                              />
-                              <div className="entity-title">
-                                <strong className="compact-name">
-                                  {h.name}
-                                </strong>
-                                <small className="mono">{h.address}</small>
-                              </div>
-                              <Sparkline
-                                points={hostSparkPoints(h)}
-                                tone={
-                                  (h.cpu || 0) >= 85
-                                    ? "danger"
-                                    : h.reachable
-                                      ? "accent"
-                                      : "warning"
-                                }
-                              />
-                            </div>
-                            <div className="entity-meters">
-                              <MiniBar label="CPU" percent={h.cpu} />
-                              <MiniBar label="RAM" percent={h.memory} />
-                            </div>
-                            <QuotaBar row={h} />
-                            <div className="compact-foot">
-                              {node ? (
-                                <div className="chip-group">
-                                  <Badge tone={node.drift ? "warning" : nTone}>
-                                    {node.name}
-                                    {node.drift
-                                      ? ` · ${translate("Drift")}`
-                                      : ` · ${translate("{0} online", clients)}`}
-                                  </Badge>
-                                  {(node.version ||
-                                    (node.status &&
-                                      node.status !== "draft")) &&
-                                    node.tlsSecurity !== "pinned" && (
-                                      <Badge tone="warning">
-                                        {translate("Legacy TLS")}
-                                      </Badge>
-                                    )}
+                              }}
+                            >
+                              <div className="compact-head">
+                                <span
+                                  className={
+                                    "status-dot " +
+                                    (!h.enabled
+                                      ? "neutral"
+                                      : h.reachable
+                                        ? "good"
+                                        : "warning")
+                                  }
+                                />
+                                <div className="entity-title">
+                                  <strong className="compact-name">
+                                    {h.name}
+                                  </strong>
+                                  <small className="mono">{h.address}</small>
                                 </div>
-                              ) : (
-                                <Chip>{translate("No node")}</Chip>
-                              )}
-                              <span className="expand-cue">
-                                <ChevronDown size={14} />
-                              </span>
-                            </div>
-                          </article>
+                                <Sparkline
+                                  points={hostSparkPoints(h)}
+                                  tone={
+                                    (h.cpu || 0) >= 85
+                                      ? "danger"
+                                      : h.reachable
+                                        ? "accent"
+                                        : "warning"
+                                  }
+                                />
+                              </div>
+                              <div className="entity-meters">
+                                <MiniBar label="CPU" percent={h.cpu} />
+                                <MiniBar label="RAM" percent={h.memory} />
+                              </div>
+                              <QuotaBar row={h} />
+                              <div className="compact-foot">
+                                {node ? (
+                                  <div className="chip-group">
+                                    <Badge tone={node.drift ? "warning" : nTone}>
+                                      {node.name}
+                                      {node.drift
+                                        ? ` · ${translate("Drift")}`
+                                        : ` · ${translate("{0} online", clients)}`}
+                                    </Badge>
+                                    {(node.version ||
+                                      (node.status &&
+                                        node.status !== "draft")) &&
+                                      node.tlsSecurity !== "pinned" && (
+                                        <Badge tone="warning">
+                                          {translate("Legacy TLS")}
+                                        </Badge>
+                                      )}
+                                  </div>
+                                ) : (
+                                  <Chip>{translate("No node")}</Chip>
+                                )}
+                                <span className="expand-cue">
+                                  {isActive ? (
+                                    <ChevronUp size={14} />
+                                  ) : (
+                                    <ChevronDown size={14} />
+                                  )}
+                                </span>
+                              </div>
+                            </article>
+                            {idx === hostInsertAfter &&
+                              renderedHostIdx >= 0 &&
+                              renderExpanded(visibleHosts[renderedHostIdx])}
+                          </Fragment>
                         );
                       })}
                     </div>
@@ -1485,59 +1867,16 @@ function App() {
                     </section>
                   ) : (
                     <div className="spatial-grid">
-                      {orderedUsers.map((u) => {
+                      {visibleUsers.map((u, idx) => {
                         const expired =
                           u.expires && Date.parse(u.expires) < Date.now();
                         const onlineCount = state.nodes.reduce(
                           (sum, n) => sum + (n.online?.[u.id] || 0),
                           0,
                         );
-                        const isExpanded = expandedUser === u.id;
-                        const userActions: [string, () => void][] = [
-                          [translate("Edit"), () => save("users", u)],
-                          [
-                            translate("Subscription links"),
-                            () => void links(u),
-                          ],
-                          [
-                            translate("Portal password link"),
-                            () => void passwordLink(u),
-                          ],
-                          [translate("Full telemetry"), () => history(u)],
-                          [translate("Reset usage"), () => reset(u)],
-                          ...(["subscription", "vpn", "both"] as const).map(
-                            (target) =>
-                              [
-                                translate(credentialRotation[target].label),
-                                () =>
-                                  setModal(() => (
-                                    <Confirm
-                                      title={translate(
-                                        credentialRotation[target].title,
-                                      )}
-                                      action={translate("Rotate")}
-                                      onClose={() => setModal(null)}
-                                      onConfirm={async () => {
-                                        await run(() =>
-                                          api(`users/${u.id}/rotate`, "POST", {
-                                            target,
-                                          }),
-                                        );
-                                        setModal(null);
-                                      }}
-                                    >
-                                      <p>
-                                        {translate(
-                                          credentialRotation[target]
-                                            .description,
-                                        )}
-                                      </p>
-                                    </Confirm>
-                                  )),
-                              ] as [string, () => void],
-                          ),
-                          [translate("Delete"), () => remove("users", u)],
-                        ];
+                        const isActive = expandedUser === u.id;
+                        const toggleExpand = () =>
+                          setExpandedUser(isActive ? null : u.id);
                         const statusTone =
                           !u.enabled || u.exhausted || expired
                             ? "warning"
@@ -1550,34 +1889,119 @@ function App() {
                               ? translate("Exhausted")
                               : translate("Active");
 
-                        if (isExpanded) {
+                        const renderExpandedUser = (target: Row) => {
+                          const tExpired =
+                            target.expires &&
+                            Date.parse(target.expires) < Date.now();
+                          const tOnline = state.nodes.reduce(
+                            (sum, n) => sum + (n.online?.[target.id] || 0),
+                            0,
+                          );
+                          const tTone =
+                            !target.enabled || target.exhausted || tExpired
+                              ? "warning"
+                              : "good";
+                          const tStatus = !target.enabled
+                            ? translate("Disabled")
+                            : tExpired
+                              ? translate("Expired")
+                              : target.exhausted
+                                ? translate("Exhausted")
+                                : translate("Active");
+                          const userActions: [string, () => void][] = [
+                            [translate("Edit"), () => save("users", target)],
+                            [
+                              translate("Subscription links"),
+                              () => void links(target),
+                            ],
+                            [
+                              translate("Portal password link"),
+                              () => void passwordLink(target),
+                            ],
+                            [
+                              translate("Full telemetry"),
+                              () => history(target),
+                            ],
+                            [translate("Reset usage"), () => reset(target)],
+                            ...(["subscription", "vpn", "both"] as const).map(
+                              (rotTarget) =>
+                                [
+                                  translate(
+                                    credentialRotation[rotTarget].label,
+                                  ),
+                                  () =>
+                                    setModal(() => (
+                                      <Confirm
+                                        title={translate(
+                                          credentialRotation[rotTarget].title,
+                                        )}
+                                        action={translate("Rotate")}
+                                        onClose={() => setModal(null)}
+                                        onConfirm={async () => {
+                                          await run(() =>
+                                            api(
+                                              `users/${target.id}/rotate`,
+                                              "POST",
+                                              {
+                                                target: rotTarget,
+                                              },
+                                            ),
+                                          );
+                                          setModal(null);
+                                        }}
+                                      >
+                                        <p>
+                                          {translate(
+                                            credentialRotation[rotTarget]
+                                              .description,
+                                          )}
+                                        </p>
+                                      </Confirm>
+                                    )),
+                                ] as [string, () => void],
+                            ),
+                            [
+                              translate("Delete"),
+                              () => remove("users", target),
+                            ],
+                          ];
+
                           return (
-                            <article
-                              key={u.id}
-                              className="spatial-card spatial-expanded"
+                            <ExpandableRow
+                              key={`expanded-slot-user-${Math.floor(renderedUserIdx / gridCols)}`}
+                              isOpen={isUserOpen}
+                              onExited={onUserExited}
                             >
-                              <div className="expanded-head">
+                              <article className="spatial-card spatial-expanded">
+                                <div
+                                  key={target.id}
+                                  className="spatial-expanded-content"
+                                >
+                                  <div className="expanded-head">
                                 <div className="expanded-head-left">
                                   <span className="avatar">
-                                    {u.name[0]?.toUpperCase()}
+                                    {target.name[0]?.toUpperCase()}
                                   </span>
-                                  <h2>{u.name}</h2>
-                                  {u.username && (
-                                    <Chip mono>@{u.username}</Chip>
+                                  <h2>{target.name}</h2>
+                                  {target.username && (
+                                    <Chip mono>@{target.username}</Chip>
                                   )}
-                                  {u.note && (
-                                    <span className="muted">{u.note}</span>
+                                  {target.note && (
+                                    <span className="muted">{target.note}</span>
                                   )}
-                                  <Badge tone={statusTone}>{statusLabel}</Badge>
+                                  <Badge tone={tTone}>{tStatus}</Badge>
                                   <Chip mono>
-                                    {translate("{0} online", onlineCount)}
+                                    {translate("{0} online", tOnline)}
                                   </Chip>
-                                  {u.expires && (
+                                  {target.expires && (
                                     <Chip mono>
-                                      {translate("Exp {0}", when(u.expires))}
+                                      {translate(
+                                        "Exp {0}",
+                                        when(target.expires),
+                                      )}
                                     </Chip>
                                   )}
-                                  {u.usageStale && (
+                                  {target.usageStale && (
                                     <Badge tone="warning">
                                       {translate("Stale")}
                                     </Badge>
@@ -1586,35 +2010,31 @@ function App() {
                                 <div className="expanded-head-right">
                                   <SegmentedControl
                                     value={inlineRange}
-                                    options={[
-                                      ["24", translate("24h")],
-                                      ["168", translate("7d")],
-                                      ["720", translate("30d")],
-                                    ]}
+                                    options={inlineRangeOptions}
                                     onChange={setInlineRange}
                                   />
                                   <Button
                                     variant="primary"
-                                    onClick={() => void links(u)}
+                                    onClick={() => void links(target)}
                                   >
                                     <Link2 size={14} />
                                     {translate("Links")}
                                   </Button>
-                                  <Button onClick={() => void passwordLink(u)}>
+                                  <Button
+                                    onClick={() => void passwordLink(target)}
+                                  >
                                     <KeyRound size={14} />
                                     {translate("Password link")}
                                   </Button>
-                                  <Button onClick={() => save("users", u)}>
+                                  <Button
+                                    onClick={() => save("users", target)}
+                                  >
                                     {translate("Edit")}
                                   </Button>
                                   <Actions items={userActions} />
                                   <Button
                                     variant="icon"
-                                    onClick={() =>
-                                      transitionSpatialCards(() =>
-                                        setExpandedUser(null),
-                                      )
-                                    }
+                                    onClick={() => setExpandedUser(null)}
                                     aria-label={translate("Collapse")}
                                     title={translate("Collapse")}
                                   >
@@ -1624,144 +2044,170 @@ function App() {
                               </div>
                               <div className="expanded-zones">
                                 <InlineTelemetry
-                                  entity={u}
+                                  entity={target}
                                   range={inlineRange}
                                 />
                                 <div className="expanded-actions-col">
                                   <span className="kpi-label">
                                     {translate(
                                       "AUTHORIZED NODES ({0})",
-                                      u.nodeIds.length,
+                                      target.nodeIds.length,
                                     )}
                                   </span>
-                                  <div className="chip-group">
-                                    {u.nodeIds.map((nid: string) => {
-                                      const n = state.nodes.find(
-                                        (x) => x.id === nid,
-                                      );
-                                      if (!n) return null;
-                                      const on = n.online?.[u.id] || 0;
-                                      return (
-                                        <Chip key={nid} mono={on > 0}>
-                                          {n.name}
-                                          {on > 0 ? ` · ${on}` : ""}
-                                        </Chip>
-                                      );
-                                    })}
-                                  </div>
-                                  {u.templateIds?.length > 0 && (
-                                    <div className="chip-group">
-                                      {u.templateIds.map((tid: string) => {
-                                        const t = state.templates.find(
-                                          (x) => x.id === tid,
-                                        );
-                                        if (!t) return null;
-                                        const isDefault =
-                                          u.defaultTemplates?.[t.format] ===
-                                          tid;
-                                        return (
-                                          <Chip
-                                            key={tid}
-                                            className={
-                                              isDefault ? "accent-chip" : ""
-                                            }
-                                          >
-                                            {t.name} · {formatLabel(t.format)}
-                                            {isDefault
-                                              ? ` · ${translate("Default")}`
-                                              : ""}
-                                          </Chip>
-                                        );
-                                      })}
+                                  <ScrollArea
+                                    axis="y"
+                                    className="expanded-chips-scroll"
+                                  >
+                                    <div className="expanded-chips-inner">
+                                      <div className="chip-group">
+                                        {target.nodeIds.map((nid: string) => {
+                                          const n = state.nodes.find(
+                                            (x) => x.id === nid,
+                                          );
+                                          if (!n) return null;
+                                          const on = n.online?.[target.id] || 0;
+                                          return (
+                                            <Chip key={nid} mono={on > 0}>
+                                              {n.name}
+                                              {on > 0 ? ` · ${on}` : ""}
+                                            </Chip>
+                                          );
+                                        })}
+                                      </div>
+                                      {target.templateIds?.length > 0 && (
+                                        <div className="chip-group">
+                                          {target.templateIds.map(
+                                            (tid: string) => {
+                                              const t = state.templates.find(
+                                                (x) => x.id === tid,
+                                              );
+                                              if (!t) return null;
+                                              const isDefault =
+                                                target.defaultTemplates?.[
+                                                  t.format
+                                                ] === tid;
+                                              return (
+                                                <Chip
+                                                  key={tid}
+                                                  className={
+                                                    isDefault
+                                                      ? "accent-chip"
+                                                      : ""
+                                                  }
+                                                >
+                                                  {t.name} ·{" "}
+                                                  {formatLabel(t.format)}
+                                                  {isDefault
+                                                    ? ` · ${translate("Default")}`
+                                                    : ""}
+                                                </Chip>
+                                              );
+                                            },
+                                          )}
+                                        </div>
+                                      )}
                                     </div>
-                                  )}
-                                  <Button
-                                    className="quick-row-btn"
-                                    onClick={() => reset(u)}
-                                  >
-                                    <span>{translate("Reset usage")}</span>
-                                    <span className="mono muted">
-                                      {when(u.usage.next)}
-                                    </span>
-                                  </Button>
-                                  <Button
-                                    className="quick-row-btn"
-                                    onClick={() => history(u)}
-                                  >
-                                    <span>{translate("Full telemetry")}</span>
-                                    <ArrowUpRight size={14} className="muted" />
-                                  </Button>
+                                  </ScrollArea>
+                                  <div className="expanded-quick-actions">
+                                    <Button
+                                      className="quick-row-btn"
+                                      onClick={() => reset(target)}
+                                    >
+                                      <span>{translate("Reset usage")}</span>
+                                      <span className="mono muted">
+                                        {when(target.usage.next)}
+                                      </span>
+                                    </Button>
+                                    <Button
+                                      className="quick-row-btn"
+                                      onClick={() => history(target)}
+                                    >
+                                      <span>{translate("Full telemetry")}</span>
+                                      <ArrowUpRight
+                                        size={14}
+                                        className="muted"
+                                      />
+                                    </Button>
+                                  </div>
                                 </div>
                               </div>
-                            </article>
-                          );
-                        }
-
-                        return (
-                          <article
-                            key={u.id}
-                            className="spatial-card spatial-compact"
-                            onClick={() =>
-                              transitionSpatialCards(() =>
-                                setExpandedUser(u.id),
-                              )
-                            }
-                            role="button"
-                            tabIndex={0}
-                            onKeyDown={(e) => {
-                              if (
-                                e.target === e.currentTarget &&
-                                (e.key === "Enter" || e.key === " ")
-                              ) {
-                                e.preventDefault();
-                                transitionSpatialCards(() =>
-                                  setExpandedUser(u.id),
-                                );
-                              }
-                            }}
-                          >
-                            <div className="compact-head">
-                              <span className="avatar">
-                                {u.name[0]?.toUpperCase()}
-                              </span>
-                              <div className="entity-title">
-                                <strong className="compact-name">
-                                  {u.name}
-                                </strong>
-                                <small>
-                                  {u.username
-                                    ? `@${u.username}${u.note ? ` · ${u.note}` : ""}`
-                                    : u.note || "—"}
-                                </small>
-                              </div>
-                              <Badge tone={statusTone}>{statusLabel}</Badge>
-                              <Button
-                                variant="icon"
-                                aria-label={translate("Subscription links")}
-                                title={translate("Subscription links")}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void links(u);
-                                }}
-                              >
-                                <Link2 size={14} />
-                              </Button>
-                            </div>
-                            <QuotaBar row={u} />
-                            <div className="compact-foot">
-                              <div className="chip-group">
-                                <Chip mono>
-                                  {translate("{0} nodes", u.nodeIds.length)}
-                                </Chip>
-                                <Chip mono>
-                                  {translate("{0} online", onlineCount)}
-                                </Chip>
-                              </div>
-                              <span className="expand-cue">
-                                <ChevronDown size={14} />
-                              </span>
                             </div>
                           </article>
+                        </ExpandableRow>
+                    );
+                  };
+
+                        return (
+                          <Fragment key={u.id}>
+                            <article
+                              className={
+                                "spatial-card spatial-compact" +
+                                (isActive ? " is-active" : "")
+                              }
+                              onClick={toggleExpand}
+                              role="button"
+                              tabIndex={0}
+                              aria-expanded={isActive}
+                              onKeyDown={(e) => {
+                                if (
+                                  e.target === e.currentTarget &&
+                                  (e.key === "Enter" || e.key === " ")
+                                ) {
+                                  e.preventDefault();
+                                  toggleExpand();
+                                }
+                              }}
+                            >
+                              <div className="compact-head">
+                                <span className="avatar">
+                                  {u.name[0]?.toUpperCase()}
+                                </span>
+                                <div className="entity-title">
+                                  <strong className="compact-name">
+                                    {u.name}
+                                  </strong>
+                                  <small>
+                                    {u.username
+                                      ? `@${u.username}${u.note ? ` · ${u.note}` : ""}`
+                                      : u.note || "—"}
+                                  </small>
+                                </div>
+                                <Badge tone={statusTone}>{statusLabel}</Badge>
+                                <Button
+                                  variant="icon"
+                                  aria-label={translate("Subscription links")}
+                                  title={translate("Subscription links")}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void links(u);
+                                  }}
+                                >
+                                  <Link2 size={14} />
+                                </Button>
+                              </div>
+                              <QuotaBar row={u} />
+                              <div className="compact-foot">
+                                <div className="chip-group">
+                                  <Chip mono>
+                                    {translate("{0} nodes", u.nodeIds.length)}
+                                  </Chip>
+                                  <Chip mono>
+                                    {translate("{0} online", onlineCount)}
+                                  </Chip>
+                                </div>
+                                <span className="expand-cue">
+                                  {isActive ? (
+                                    <ChevronUp size={14} />
+                                  ) : (
+                                    <ChevronDown size={14} />
+                                  )}
+                                </span>
+                              </div>
+                            </article>
+                            {idx === userInsertAfter &&
+                              renderedUserIdx >= 0 &&
+                              renderExpandedUser(visibleUsers[renderedUserIdx])}
+                          </Fragment>
                         );
                       })}
                     </div>
@@ -1880,200 +2326,16 @@ function App() {
               )}
 
               {tab === "Activity" && (
-                <div className="activity-split">
-                  <section className="panel">
-                    <div className="panel-heading compact">
-                      <div className="chip-group">
-                        <h2>{translate("Alerts")}</h2>
-                        <span
-                          className={
-                            "count" + (activeAlerts.length ? " warn" : "")
-                          }
-                        >
-                          {translate("{0} open", activeAlerts.length)}
-                        </span>
-                      </div>
-                      <SegmentedControl
-                        value={alertFilter}
-                        options={[
-                          ["all", translate("All")],
-                          ["open", translate("Open")],
-                        ]}
-                        onChange={setAlertFilter}
-                      />
-                    </div>
-                    {!(alertFilter === "open" ? activeAlerts : state.alerts)
-                      .length ? (
-                      <div className="quiet radar-quiet">
-                        <span className="quiet-ring">
-                          <ShieldCheck size={26} />
-                        </span>
-                        <h3>{translate("All quiet")}</h3>
-                      </div>
-                    ) : (
-                      (alertFilter === "open"
-                        ? activeAlerts
-                        : state.alerts
-                      ).map((a) => (
-                        <div
-                          className={
-                            "alert-row " + (a.closed ? "resolved" : "")
-                          }
-                          key={a.id}
-                        >
-                          <span className="alert-mark" />
-                          <div>
-                            <div>
-                              <strong>{alertLabel(a.code)}</strong>
-                              <Badge tone={a.closed ? "neutral" : "warning"}>
-                                {a.closed
-                                  ? translate("Closed")
-                                  : a.seen
-                                    ? translate("Read")
-                                    : translate("Open")}
-                              </Badge>
-                            </div>
-                            <p>{localizeMessage(a.message)}</p>
-                            <small>
-                              {when(a.first)} → {when(a.last)}
-                            </small>
-                          </div>
-                          <div className="row-buttons">
-                            {!a.seen && (
-                              <Button
-                                onClick={() =>
-                                  act(
-                                    `alerts/${a.id}/read`,
-                                    undefined,
-                                    "POST",
-                                    "Marked read",
-                                  )
-                                }
-                              >
-                                <Check size={13} />
-                                {translate("Read")}
-                              </Button>
-                            )}
-                            {!a.closed && (
-                              <Button
-                                onClick={() =>
-                                  act(
-                                    `alerts/${a.id}/close`,
-                                    undefined,
-                                    "POST",
-                                    "Closed",
-                                  )
-                                }
-                              >
-                                <X size={13} />
-                                {translate("Close")}
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </section>
-                  <section className="panel">
-                    <div className="panel-heading compact">
-                      <h2>{translate("Operations")}</h2>
-                      <span className="count">
-                        {formatNumber(state.tasks.length)}
-                      </span>
-                    </div>
-                    {!state.tasks.length ? (
-                      <Empty title={translate("No operations yet")}>
-                        {translate("Deployments and remote tasks appear here.")}
-                      </Empty>
-                    ) : (
-                      <div className="ops-list">
-                        {state.tasks.map((t) => {
-                          const hostName =
-                            state.hosts.find((h) => h.id === t.host)?.name ||
-                            translate("Removed");
-                          return (
-                            <div className="op-row" key={t.id}>
-                              <span
-                                className={"op-icon " + t.state}
-                                aria-label={translate(
-                                  "Task state {0}",
-                                  taskLabel(t.state),
-                                )}
-                                role="img"
-                              >
-                                {t.state === "succeeded" ? (
-                                  <CheckCircle2 size={16} />
-                                ) : t.state === "failed" ? (
-                                  <XCircle size={16} />
-                                ) : t.state === "running" ? (
-                                  <RefreshCw size={15} className="spinning" />
-                                ) : (
-                                  <Clock size={15} />
-                                )}
-                              </span>
-                              <div className="op-main">
-                                <div className="op-head">
-                                  <strong>{operationLabel(t.kind)}</strong>
-                                  <Chip>{hostName}</Chip>
-                                  <Chip mono>
-                                    {translate("Step {0}", t.step)}
-                                  </Chip>
-                                </div>
-                                {t.error && (
-                                  <p className="op-error">
-                                    {translate(
-                                      "Operation failed. {0}",
-                                      t.error,
-                                    )}
-                                  </p>
-                                )}
-                              </div>
-                              <small className="mono op-time">
-                                {when(t.updated)}
-                              </small>
-                              <div className="row-buttons">
-                                <Button
-                                  variant="subtle"
-                                  onClick={() =>
-                                    void api(`tasks/${t.id}/logs`).then(
-                                      (logs) =>
-                                        setModal(() => (
-                                          <LogsModal
-                                            title={`${operationLabel(t.kind)} · ${hostName}`}
-                                            logs={logs || []}
-                                            onClose={() => setModal(null)}
-                                          />
-                                        )),
-                                    )
-                                  }
-                                >
-                                  <Terminal size={13} />
-                                  {translate("Logs")}
-                                </Button>
-                                {["queued", "running"].includes(t.state) && (
-                                  <Button
-                                    aria-label={translate("Cancel operation")}
-                                    onClick={() => act(`tasks/${t.id}/cancel`)}
-                                  >
-                                    <X size={13} />
-                                  </Button>
-                                )}
-                                {["failed", "cancelled"].includes(t.state) && (
-                                  <Button
-                                    aria-label={translate("Retry operation")}
-                                    onClick={() => act(`tasks/${t.id}/retry`)}
-                                  >
-                                    <RotateCw size={13} />
-                                  </Button>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </section>
-                </div>
+                <ActivityView
+                  state={state}
+                  onMutate={(path, body, method = "POST", message = "Saved") =>
+                    run(() => api(path, method, body), message)
+                  }
+                  onInspectHost={jumpToHost}
+                  onInspectUser={jumpToUser}
+                  onInspectControlPlane={openControlPlaneTelemetry}
+                  onOpenModal={(render) => setModal(render)}
+                />
               )}
             </>
           )}
