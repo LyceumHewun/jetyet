@@ -96,12 +96,9 @@ export function refreshPeriods(s: Store) {
   const pending = (now: number) =>
     s.db
       .query<{ id: string }, [number]>(
-        `SELECT u.id FROM usage u JOIN entities e ON e.id=u.id
-        WHERE u.next<=? AND e.deleted=0 AND e.kind IN ('host','user')
-        UNION ALL
-        SELECT e.id FROM entities e
+        `SELECT e.id FROM entities e LEFT JOIN usage u ON u.id=e.id
         WHERE e.deleted=0 AND e.kind IN ('host','user')
-          AND NOT EXISTS (SELECT 1 FROM usage u WHERE u.id=e.id)`,
+          AND (u.id IS NULL OR u.next<=?)`,
       )
       .all(now);
   // Current periods can be served while another process holds the write lock.

@@ -26,7 +26,7 @@ export function registerOperationsRoutes({
       { hosts: "host", nodes: "node", users: "user" } as Record<string, string>
     )[c.req.param("kind")];
     if (!kind) throw Error("Invalid archive");
-    return c.json(s.list(kind, true).map(view));
+    return c.json(s.list(kind, true).map((e) => view(e)));
   });
   app.delete("/api/:kind/:id", async (c) => {
     const kind = c.req.param("kind"),
@@ -413,7 +413,6 @@ export function registerOperationsRoutes({
     );
 
     const where: string[] = [];
-    const params: any[] = [];
     if (category === "credentials") {
       where.push(
         "ev.type IN ('credentials.rotated','portal.password.changed','portal.password-link.issued','ssh.trusted')",
@@ -437,7 +436,6 @@ export function registerOperationsRoutes({
             OR LOWER(COALESCE(json_extract(data,'$.address'),'')) LIKE ?
         ))`,
       );
-      params.push(like, like, like, like, like);
       const results = s.db
         .query<Record<string, any>, (string | number)[]>(
           `WITH matches AS MATERIALIZED (
@@ -451,7 +449,7 @@ export function registerOperationsRoutes({
         LEFT JOIN events ev ON ev.rowid=page.eventRow
         ORDER BY page.at DESC, page.eventRow`,
         )
-        .all(...params, pageSize, offset);
+        .all(like, like, like, like, like, pageSize, offset);
       total = results[0]?.matchTotal ?? 0;
       rows = results
         .filter((row) => row.id !== null)

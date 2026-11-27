@@ -15,11 +15,9 @@ export function storage(config: Config) {
     CREATE UNIQUE INDEX IF NOT EXISTS one_node_per_host ON entities(json_extract(data,'$.hostId')) WHERE kind='node' AND deleted=0;
     CREATE UNIQUE INDEX IF NOT EXISTS subscription_usernames ON entities(json_extract(data,'$.username')) WHERE kind='user' AND deleted=0;
     CREATE TABLE IF NOT EXISTS usage (id TEXT PRIMARY KEY REFERENCES entities(id), inbound INTEGER NOT NULL DEFAULT 0, outbound INTEGER NOT NULL DEFAULT 0, start INTEGER NOT NULL, next INTEGER NOT NULL);
-    CREATE INDEX IF NOT EXISTS usage_next ON usage(next);
     CREATE TABLE IF NOT EXISTS counters (source TEXT PRIMARY KEY, epoch TEXT NOT NULL, inbound INTEGER NOT NULL, outbound INTEGER NOT NULL, at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS samples (id INTEGER PRIMARY KEY, entity TEXT NOT NULL, at INTEGER NOT NULL, inbound INTEGER NOT NULL, outbound INTEGER NOT NULL, resolution TEXT NOT NULL DEFAULT 'minute', cpu REAL, memory REAL, disk REAL, reachable REAL, cpu_max REAL, memory_max REAL, disk_max REAL, observations INTEGER NOT NULL DEFAULT 0, successes INTEGER NOT NULL DEFAULT 0, metric_count INTEGER NOT NULL DEFAULT 0, traffic_available INTEGER NOT NULL DEFAULT 1, UNIQUE(entity,at,resolution));
     CREATE INDEX IF NOT EXISTS samples_lookup ON samples(entity,resolution,at);
-    CREATE INDEX IF NOT EXISTS samples_entity_at ON samples(entity,at);
     CREATE INDEX IF NOT EXISTS samples_resolution_at ON samples(resolution,at);
     CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, entity TEXT, type TEXT NOT NULL, data TEXT NOT NULL, at INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS events_at ON events(at DESC);

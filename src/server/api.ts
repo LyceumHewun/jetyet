@@ -77,32 +77,41 @@ export function createApp(s: Store) {
   app.post("/auth/hysteria/:node/:secret", async (c) => {
     const verifiedNode = () => {
       const n = s.get(c.req.param("node"));
-      return n &&
-        n.kind === "node" &&
-        !n.deleted &&
-        same(c.req.param("secret"), s.secrets(n.id).authSecret)
-        ? n
+      if (!n || n.kind !== "node" || n.deleted) return null;
+      const secrets = s.secrets(n.id);
+      return same(c.req.param("secret"), secrets.authSecret)
+        ? { node: n, probeToken: secrets.probeToken }
         : null;
     };
-    if (!verifiedNode()) return c.json({ ok: false }, 403);
-    let input: { auth: string };
+    const signal = c.req.raw.signal;
+    let body: string | undefined;
     try {
-      input = z
-        .object({ auth: z.string().max(2048) })
-        .parse(await c.req.json());
+      body = await c.req.text();
     } catch {
-      return c.json({ ok: false }, 400);
+      // Report a malformed body only after validating the node secret.
     }
+    let input: { auth: string } | undefined;
     const deadline = performance.now() + DATABASE_BUSY_TIMEOUT_MS;
     for (;;) {
+      if (signal.aborted) return new Response(null, { status: 499 });
       // Avoid blocking other requests while a worker holds the SQLite write lock.
       s.db.exec("PRAGMA busy_timeout=0");
       try {
-        const n = verifiedNode();
-        if (!n) return c.json({ ok: false }, 403);
+        const verified = verifiedNode();
+        if (!verified) return c.json({ ok: false }, 403);
+        const { node: n, probeToken } = verified;
+        if (!input) {
+          try {
+            input = z
+              .object({ auth: z.string().max(2048) })
+              .parse(JSON.parse(body ?? ""));
+          } catch {
+            return c.json({ ok: false }, 400);
+          }
+        }
         refreshPeriods(s);
         if (!nodeAllowed(s, n)) return c.json({ ok: false });
-        if (same(input.auth, s.secrets(n.id).probeToken))
+        if (same(input.auth, probeToken))
           return c.json({ ok: true, id: `probe:${n.id}` });
         const row = s.db
           .query<{ entity: string }, [string, string]>(
@@ -138,7 +147,7 @@ export function createApp(s: Store) {
       } finally {
         s.db.exec(`PRAGMA busy_timeout=${DATABASE_BUSY_TIMEOUT_MS}`);
       }
-      await Bun.sleep(20);
+      await Bun.sleep(20 + Math.random() * 10);
     }
   });
   const checked = (text: string, format: TemplateFormat) =>

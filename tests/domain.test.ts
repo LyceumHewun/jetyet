@@ -379,13 +379,21 @@ describe("authorization and templates", () => {
     const { node, user } = fixture();
     const app = createApp(s);
     const writer = new Database(s.config.database);
-    const request = () =>
+    const request = (signal?: AbortSignal) =>
       app.request(`/auth/hysteria/${node.id}/${s.secrets(node.id).authSecret}`, {
         method: "POST",
         body: JSON.stringify({ auth: s.secrets(user.id).vpnToken }),
+        signal,
       });
     try {
       writer.exec("BEGIN IMMEDIATE");
+      const controller = new AbortController();
+      const cancelled = request(controller.signal);
+      await Bun.sleep(30);
+      controller.abort();
+      expect((await cancelled).status).toBe(499);
+      expect(s.db.query("SELECT * FROM first_auth").all()).toHaveLength(0);
+
       const first = request();
       await Bun.sleep(30);
       expect(s.db.query("SELECT * FROM first_auth").all()).toHaveLength(0);
