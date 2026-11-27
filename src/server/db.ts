@@ -14,7 +14,7 @@ export function storage(config: Config) {
     CREATE UNIQUE INDEX IF NOT EXISTS subscription_usernames ON entities(json_extract(data,'$.username')) WHERE kind='user' AND deleted=0;
     CREATE TABLE IF NOT EXISTS usage (id TEXT PRIMARY KEY REFERENCES entities(id), inbound INTEGER NOT NULL DEFAULT 0, outbound INTEGER NOT NULL DEFAULT 0, start INTEGER NOT NULL, next INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS counters (source TEXT PRIMARY KEY, epoch TEXT NOT NULL, inbound INTEGER NOT NULL, outbound INTEGER NOT NULL, at INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS samples (id INTEGER PRIMARY KEY, entity TEXT NOT NULL, at INTEGER NOT NULL, inbound INTEGER NOT NULL, outbound INTEGER NOT NULL, resolution TEXT NOT NULL DEFAULT 'minute', cpu REAL, memory REAL, disk REAL, reachable REAL, cpu_max REAL, memory_max REAL, disk_max REAL, observations INTEGER NOT NULL DEFAULT 0, successes INTEGER NOT NULL DEFAULT 0, metric_count INTEGER NOT NULL DEFAULT 0, UNIQUE(entity,at,resolution));
+    CREATE TABLE IF NOT EXISTS samples (id INTEGER PRIMARY KEY, entity TEXT NOT NULL, at INTEGER NOT NULL, inbound INTEGER NOT NULL, outbound INTEGER NOT NULL, resolution TEXT NOT NULL DEFAULT 'minute', cpu REAL, memory REAL, disk REAL, reachable REAL, cpu_max REAL, memory_max REAL, disk_max REAL, observations INTEGER NOT NULL DEFAULT 0, successes INTEGER NOT NULL DEFAULT 0, metric_count INTEGER NOT NULL DEFAULT 0, traffic_available INTEGER NOT NULL DEFAULT 1, UNIQUE(entity,at,resolution));
     CREATE INDEX IF NOT EXISTS samples_lookup ON samples(entity,resolution,at);
     CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, entity TEXT, type TEXT NOT NULL, data TEXT NOT NULL, at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS alerts (id TEXT PRIMARY KEY, entity TEXT NOT NULL, code TEXT NOT NULL, message TEXT NOT NULL, first INTEGER NOT NULL, last INTEGER NOT NULL, closed INTEGER, seen INTEGER NOT NULL DEFAULT 0);
@@ -49,6 +49,17 @@ export function storage(config: Config) {
     .get();
   if (!check || crypt.open(check.value) !== "jetyet-vault")
     throw Error("Invalid encryption master key");
+  db.transaction(() => {
+    const columns = db
+      .query<{ name: string }, []>("PRAGMA table_info(samples)")
+      .all();
+    if (!columns.some(({ name }) => name === "traffic_available")) {
+      db.exec(
+        "ALTER TABLE samples ADD COLUMN traffic_available INTEGER NOT NULL DEFAULT 1",
+      );
+    }
+  }).immediate();
+
   function syncTokenIndex(id: string, secret: Record<string, string>) {
     db.query("DELETE FROM token_index WHERE entity=?").run(id);
     if (secret.vpnToken)

@@ -75,6 +75,7 @@ export function InlineTelemetry({
       : 0;
   const hasResources =
     isHostLike && samples.some((p) => p.cpu !== null && p.cpu !== undefined);
+  const showResources = metric === "resources" && hasResources;
   const unitSuffix = bucketUnitSuffix(bucketMs, resolution);
   const uptimeText = formatUptime(entity.uptime);
 
@@ -86,6 +87,7 @@ export function InlineTelemetry({
   const quotaPct = entity.quota?.limit
     ? Math.min(100, (totalTraffic / Math.max(entity.quota.limit, 1)) * 100)
     : 0;
+  const hasTraffic = samples.some((p) => p.inbound != null);
   const rangeIn = samples.reduce((sum, p) => sum + (p.inbound || 0), 0);
   const rangeOut = samples.reduce((sum, p) => sum + (p.outbound || 0), 0);
   const rangeTotal = rangeIn + rangeOut;
@@ -161,17 +163,19 @@ export function InlineTelemetry({
                       <span className="io-legend">
                         <i className="dot-accent" />
                         {translate("↑ Out") + " "}
-                        <b className="mono">{fmt(rangeOut)}</b>
+                        <b className="mono">{hasTraffic ? fmt(rangeOut) : "—"}</b>
                       </span>
                       <span className="io-legend">
                         <i className="dot-good" />
                         {translate("↓ In") + " "}
-                        <b className="mono">{fmt(rangeIn)}</b>
+                        <b className="mono">{hasTraffic ? fmt(rangeIn) : "—"}</b>
                       </span>
                     </div>
-                    <div className="io-split-track">
-                      <i style={{ width: `${rangeOutShare}%` }} />
-                    </div>
+                    {hasTraffic && (
+                      <div className="io-split-track">
+                        <i style={{ width: `${rangeOutShare}%` }} />
+                      </div>
+                    )}
                   </div>
                 )
               ) : (
@@ -256,10 +260,10 @@ export function InlineTelemetry({
           <div className="chart-placeholder muted">
             {translate("Loading telemetry…")}
           </div>
-        ) : metric !== "resources" &&
+        ) : !showResources &&
           isControlPlane &&
-          entity.networkAvailable === false &&
-          rangeTotal === 0 ? (
+          samples.length > 0 &&
+          !hasTraffic ? (
           <div className="chart-placeholder muted">
             {translate("Traffic counters unavailable on this host.")}
           </div>
@@ -270,7 +274,7 @@ export function InlineTelemetry({
         ) : (
           <div className="chart">
             <ResponsiveContainer width="100%" height={206}>
-              {metric === "resources" && hasResources ? (
+              {showResources ? (
                 <AreaChart
                   margin={{ top: 6, right: 28, left: -8, bottom: 0 }}
                   data={samples.map((p) => ({ ...p, time: when(p.at) }))}
@@ -356,8 +360,8 @@ export function InlineTelemetry({
                   data={samples.map((p) => ({
                     ...p,
                     time: when(p.at),
-                    inMiB: (p.inbound || 0) / 1024 ** 2,
-                    outMiB: (p.outbound || 0) / 1024 ** 2,
+                    inMiB: p.inbound == null ? null : p.inbound / 1024 ** 2,
+                    outMiB: p.outbound == null ? null : p.outbound / 1024 ** 2,
                   }))}
                 >
                   <CartesianGrid

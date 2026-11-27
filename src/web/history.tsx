@@ -351,8 +351,8 @@ export function History({
                 </div>
                 <div className="chart-pad">
                   {entity.kind === "control-plane" &&
-                  entity.networkAvailable === false &&
-                  samples.every((p) => !p.inbound && !p.outbound) ? (
+                  samples.length > 0 &&
+                  samples.every((p) => p.inbound == null) ? (
                     <Empty title={translate("Traffic counters unavailable")}>
                       {translate("Traffic counters unavailable on this host.")}
                     </Empty>
@@ -369,8 +369,8 @@ export function History({
                           data={samples.map((p) => ({
                             ...p,
                             time: when(p.at),
-                            inMiB: p.inbound / 1024 ** 2,
-                            outMiB: p.outbound / 1024 ** 2,
+                            inMiB: p.inbound == null ? null : p.inbound / 1024 ** 2,
+                            outMiB: p.outbound == null ? null : p.outbound / 1024 ** 2,
                           }))}
                         >
                           <CartesianGrid

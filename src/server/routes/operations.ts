@@ -217,7 +217,7 @@ export function registerOperationsRoutes({
     const samples = hasHostMetrics
       ? s.db
           .query(
-            `SELECT CAST(at/? AS INTEGER)*? AS at,SUM(inbound) AS inbound,SUM(outbound) AS outbound,ROUND(SUM(cpu*metric_count)/NULLIF(SUM(metric_count),0),1) AS cpu,ROUND(SUM(memory*metric_count)/NULLIF(SUM(metric_count),0),1) AS memory,ROUND(SUM(disk*metric_count)/NULLIF(SUM(metric_count),0),1) AS disk,ROUND(CAST(SUM(successes) AS REAL)/NULLIF(SUM(observations),0),4) AS reachable,ROUND(MAX(cpu_max),1) AS cpu_max,ROUND(MAX(memory_max),1) AS memory_max,ROUND(MAX(disk_max),1) AS disk_max,SUM(observations) AS observations,SUM(successes) AS successes FROM samples WHERE entity=? AND at>=? AND at<=? GROUP BY CAST(at/? AS INTEGER) ORDER BY at`,
+            `SELECT CAST(at/? AS INTEGER)*? AS at,SUM(inbound) FILTER (WHERE traffic_available = 1) AS inbound,SUM(outbound) FILTER (WHERE traffic_available = 1) AS outbound,ROUND(SUM(cpu*metric_count)/NULLIF(SUM(metric_count),0),1) AS cpu,ROUND(SUM(memory*metric_count)/NULLIF(SUM(metric_count),0),1) AS memory,ROUND(SUM(disk*metric_count)/NULLIF(SUM(metric_count),0),1) AS disk,ROUND(CAST(SUM(successes) AS REAL)/NULLIF(SUM(observations),0),4) AS reachable,ROUND(MAX(cpu_max),1) AS cpu_max,ROUND(MAX(memory_max),1) AS memory_max,ROUND(MAX(disk_max),1) AS disk_max,SUM(observations) AS observations,SUM(successes) AS successes FROM samples WHERE entity=? AND at>=? AND at<=? GROUP BY CAST(at/? AS INTEGER) ORDER BY at`,
           )
           .all(bucket, bucket, id, start, end, bucket)
       : s.db

@@ -732,6 +732,7 @@ export function collectControlPlane(s: Store) {
     .transaction(() => {
       let din = 0;
       let dout = 0;
+      let trafficAvailable = false;
       if (net) {
         const source = "control-plane";
         const epoch = net.interfaces.length
@@ -749,6 +750,7 @@ export function collectControlPlane(s: Store) {
           net.inbound >= prev.inbound &&
           net.outbound >= prev.outbound;
         if (valid) {
+          trafficAvailable = true;
           din = net.inbound - prev.inbound;
           dout = net.outbound - prev.outbound;
         }
@@ -759,12 +761,15 @@ export function collectControlPlane(s: Store) {
           .run(source, epoch, net.inbound, net.outbound, at);
       }
 
-      sample(s, "control-plane", at, din, dout, {
-        cpu,
-        memory,
-        disk,
-        reachable: 1,
-      });
+      sample(
+        s,
+        "control-plane",
+        at,
+        din,
+        dout,
+        { cpu, memory, disk, reachable: 1 },
+        trafficAvailable,
+      );
 
       const snapshot = {
         id: "control-plane",

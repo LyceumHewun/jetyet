@@ -228,10 +228,11 @@ export function sample(
   inbound: number,
   outbound: number,
   metrics: Record<string, number | null> = {},
+  trafficAvailable = true,
 ) {
   s.db
     .query(
-      `INSERT INTO samples(entity,at,inbound,outbound,cpu,memory,disk,reachable,cpu_max,memory_max,disk_max,observations,successes,metric_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(entity,at,resolution) DO UPDATE SET inbound=samples.inbound+excluded.inbound,outbound=samples.outbound+excluded.outbound,cpu=CASE WHEN samples.metric_count+excluded.metric_count>0 THEN (COALESCE(samples.cpu,0)*samples.metric_count+COALESCE(excluded.cpu,0)*excluded.metric_count)/(samples.metric_count+excluded.metric_count) ELSE NULL END,memory=CASE WHEN samples.metric_count+excluded.metric_count>0 THEN (COALESCE(samples.memory,0)*samples.metric_count+COALESCE(excluded.memory,0)*excluded.metric_count)/(samples.metric_count+excluded.metric_count) ELSE NULL END,disk=CASE WHEN samples.metric_count+excluded.metric_count>0 THEN (COALESCE(samples.disk,0)*samples.metric_count+COALESCE(excluded.disk,0)*excluded.metric_count)/(samples.metric_count+excluded.metric_count) ELSE NULL END,reachable=CAST(samples.successes+excluded.successes AS REAL)/NULLIF(samples.observations+excluded.observations,0),observations=samples.observations+excluded.observations,successes=samples.successes+excluded.successes,metric_count=samples.metric_count+excluded.metric_count,cpu_max=CASE WHEN samples.cpu_max IS NULL AND excluded.cpu_max IS NULL THEN NULL ELSE MAX(COALESCE(samples.cpu_max,0),COALESCE(excluded.cpu_max,0)) END,memory_max=CASE WHEN samples.memory_max IS NULL AND excluded.memory_max IS NULL THEN NULL ELSE MAX(COALESCE(samples.memory_max,0),COALESCE(excluded.memory_max,0)) END,disk_max=CASE WHEN samples.disk_max IS NULL AND excluded.disk_max IS NULL THEN NULL ELSE MAX(COALESCE(samples.disk_max,0),COALESCE(excluded.disk_max,0)) END`,
+      `INSERT INTO samples(entity,at,inbound,outbound,cpu,memory,disk,reachable,cpu_max,memory_max,disk_max,observations,successes,metric_count,traffic_available) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(entity,at,resolution) DO UPDATE SET inbound=samples.inbound+excluded.inbound,outbound=samples.outbound+excluded.outbound,traffic_available=MAX(samples.traffic_available,excluded.traffic_available),cpu=CASE WHEN samples.metric_count+excluded.metric_count>0 THEN (COALESCE(samples.cpu,0)*samples.metric_count+COALESCE(excluded.cpu,0)*excluded.metric_count)/(samples.metric_count+excluded.metric_count) ELSE NULL END,memory=CASE WHEN samples.metric_count+excluded.metric_count>0 THEN (COALESCE(samples.memory,0)*samples.metric_count+COALESCE(excluded.memory,0)*excluded.metric_count)/(samples.metric_count+excluded.metric_count) ELSE NULL END,disk=CASE WHEN samples.metric_count+excluded.metric_count>0 THEN (COALESCE(samples.disk,0)*samples.metric_count+COALESCE(excluded.disk,0)*excluded.metric_count)/(samples.metric_count+excluded.metric_count) ELSE NULL END,reachable=CAST(samples.successes+excluded.successes AS REAL)/NULLIF(samples.observations+excluded.observations,0),observations=samples.observations+excluded.observations,successes=samples.successes+excluded.successes,metric_count=samples.metric_count+excluded.metric_count,cpu_max=CASE WHEN samples.cpu_max IS NULL AND excluded.cpu_max IS NULL THEN NULL ELSE MAX(COALESCE(samples.cpu_max,0),COALESCE(excluded.cpu_max,0)) END,memory_max=CASE WHEN samples.memory_max IS NULL AND excluded.memory_max IS NULL THEN NULL ELSE MAX(COALESCE(samples.memory_max,0),COALESCE(excluded.memory_max,0)) END,disk_max=CASE WHEN samples.disk_max IS NULL AND excluded.disk_max IS NULL THEN NULL ELSE MAX(COALESCE(samples.disk_max,0),COALESCE(excluded.disk_max,0)) END`,
     )
     .run(
       entity,
@@ -248,6 +249,7 @@ export function sample(
       metrics.reachable === undefined || metrics.reachable === null ? 0 : 1,
       metrics.reachable === 1 ? 1 : 0,
       metrics.cpu === undefined || metrics.cpu === null ? 0 : 1,
+      Number(trafficAvailable),
     );
 }
 export function retention(s: Store) {
@@ -261,8 +263,8 @@ export function retention(s: Store) {
         const cutoff = Math.floor((now - age) / bucket) * bucket;
         s.db
           .query(
-            `INSERT INTO samples(entity,at,inbound,outbound,resolution,cpu,memory,disk,reachable,cpu_max,memory_max,disk_max,observations,successes,metric_count)
-        SELECT entity,CAST(at/? AS INTEGER)*?,SUM(inbound),SUM(outbound),?,SUM(cpu*metric_count)/NULLIF(SUM(metric_count),0),SUM(memory*metric_count)/NULLIF(SUM(metric_count),0),SUM(disk*metric_count)/NULLIF(SUM(metric_count),0),CAST(SUM(successes) AS REAL)/NULLIF(SUM(observations),0),MAX(cpu_max),MAX(memory_max),MAX(disk_max),SUM(observations),SUM(successes),SUM(metric_count) FROM samples WHERE resolution=? AND at<? GROUP BY entity,CAST(at/? AS INTEGER)
+            `INSERT INTO samples(entity,at,inbound,outbound,resolution,cpu,memory,disk,reachable,cpu_max,memory_max,disk_max,observations,successes,metric_count,traffic_available)
+        SELECT entity,CAST(at/? AS INTEGER)*?,SUM(inbound),SUM(outbound),?,SUM(cpu*metric_count)/NULLIF(SUM(metric_count),0),SUM(memory*metric_count)/NULLIF(SUM(metric_count),0),SUM(disk*metric_count)/NULLIF(SUM(metric_count),0),CAST(SUM(successes) AS REAL)/NULLIF(SUM(observations),0),MAX(cpu_max),MAX(memory_max),MAX(disk_max),SUM(observations),SUM(successes),SUM(metric_count),MAX(traffic_available) FROM samples WHERE resolution=? AND at<? GROUP BY entity,CAST(at/? AS INTEGER)
         ON CONFLICT(entity,at,resolution) DO NOTHING`,
           )
           .run(bucket, bucket, to, from, cutoff, bucket);
