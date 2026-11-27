@@ -107,6 +107,7 @@ export function ActivityView({
   const filterWrapRef = useRef<HTMLDivElement>(null);
 
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState(false);
   const [exhausted, setExhausted] = useState(false);
@@ -128,10 +129,9 @@ export function ActivityView({
   });
 
   const nextOffsetRef = useRef(0);
-  const loadingMoreRef = useRef(false);
   const itemsLenRef = useRef(0);
   itemsLenRef.current = items.length;
-  const genRef = useRef(0);
+  const refreshControllerRef = useRef<AbortController | null>(null);
   const moreControllerRef = useRef<AbortController | null>(null);
   const [scrollResetNonce, setScrollResetNonce] = useState(0);
 
@@ -231,26 +231,17 @@ export function ActivityView({
     }
     setExhausted(false);
     setLoadMoreError(false);
-    const gen = ++genRef.current;
-    moreControllerRef.current?.abort();
-    moreControllerRef.current = null;
-    loadingMoreRef.current = false;
-    setLoadingMore(false);
-
-    let cancelled = false;
-    let activeController: AbortController | null = null;
-
     const load = (isInitial: boolean) => {
-      activeController?.abort();
+      refreshControllerRef.current?.abort();
+      const controller = new AbortController();
+      refreshControllerRef.current = controller;
+      setRefreshing(true);
       moreControllerRef.current?.abort();
       moreControllerRef.current = null;
-      loadingMoreRef.current = false;
       setLoadingMore(false);
-      const controller = new AbortController();
-      activeController = controller;
       if (isInitial) setLoading(true);
 
-      const loadedCount = filterChanged ? 0 : itemsLenRef.current;
+      const loadedCount = isInitial && filterChanged ? 0 : itemsLenRef.current;
       // Reconcile the entire loaded window in clean server-aligned chunks (max 5 chunks = 900 rows);
       // beyond 900 rows reset cleanly to the top batch to avoid stale tails or offset drift.
       const resetWindow = loadedCount > 900;
@@ -294,12 +285,7 @@ export function ActivityView({
 
       void fetchWindow()
         .then(({ merged, offset, lastRes }) => {
-          if (
-            !cancelled &&
-            genRef.current === gen &&
-            activeController === controller &&
-            lastRes
-          ) {
+          if (refreshControllerRef.current === controller && lastRes) {
             const nextTotal = lastRes.total ?? 0;
             setItems(merged);
             setTotal(nextTotal);
@@ -317,14 +303,11 @@ export function ActivityView({
             } else if (subTab === "tasks" && lastRes.counts) {
               setTaskCounts(lastRes.counts);
             }
-            setLoading(false);
           }
         })
         .catch((err) => {
           if (
-            !cancelled &&
-            genRef.current === gen &&
-            activeController === controller &&
+            refreshControllerRef.current === controller &&
             err?.name !== "AbortError"
           ) {
             if (isInitial) {
@@ -332,28 +315,34 @@ export function ActivityView({
               setTotal(0);
               nextOffsetRef.current = 0;
             }
-            setLoading(false);
           }
+        })
+        .finally(() => {
+          if (refreshControllerRef.current !== controller) return;
+          refreshControllerRef.current = null;
+          setRefreshing(false);
+          setLoading(false);
         });
     };
 
     load(true);
     const timer = setInterval(() => load(false), 30000);
     return () => {
-      cancelled = true;
       clearInterval(timer);
-      activeController?.abort();
+      refreshControllerRef.current?.abort();
+      refreshControllerRef.current = null;
+      moreControllerRef.current?.abort();
+      moreControllerRef.current = null;
     };
   }, [filterKey, buildEndpoint, subTab, refreshTick]);
 
   const hasMore = !exhausted && items.length < total;
 
   const loadMore = useCallback(() => {
-    if (loadingMoreRef.current || !hasMore) return;
-    loadingMoreRef.current = true;
+    if (refreshControllerRef.current || moreControllerRef.current || !hasMore)
+      return;
     setLoadingMore(true);
     setLoadMoreError(false);
-    const gen = genRef.current;
     const offsetToLoad = nextOffsetRef.current;
     const controller = new AbortController();
     moreControllerRef.current = controller;
@@ -365,7 +354,7 @@ export function ActivityView({
       controller.signal,
     )
       .then((res) => {
-        if (genRef.current !== gen) return;
+        if (moreControllerRef.current !== controller) return;
         const incoming: Row[] = res.items || [];
         const nextTotal = res.total ?? 0;
         const nextOff =
@@ -387,13 +376,16 @@ export function ActivityView({
         else if (subTab === "tasks" && res.counts) setTaskCounts(res.counts);
       })
       .catch((err) => {
-        if (genRef.current === gen && err?.name !== "AbortError") {
+        if (
+          moreControllerRef.current === controller &&
+          err?.name !== "AbortError"
+        ) {
           setLoadMoreError(true);
         }
       })
       .finally(() => {
-        if (genRef.current === gen) {
-          loadingMoreRef.current = false;
+        if (moreControllerRef.current === controller) {
+          moreControllerRef.current = null;
           setLoadingMore(false);
         }
       });
@@ -987,7 +979,7 @@ export function ActivityView({
             getKey={getRowKey}
             estimateHeight={64}
             overscan={8}
-            hasMore={hasMore && !loadMoreError}
+            hasMore={hasMore && !refreshing && !loadMoreError}
             loadingMore={loadingMore}
             onLoadMore={loadMore}
             resetKey={`${filterKey}#${scrollResetNonce}`}
