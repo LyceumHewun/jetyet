@@ -780,10 +780,14 @@ load_manifest() {
     while IFS=' ' read -r kind key val; do
       case "$kind" in
         DEP)
-          [[ -n "$key" && -n "$val" ]] && MANIFEST_DEP_SHA["$key"]="$val"
+          if [[ -n "$key" && -n "$val" ]]; then
+            MANIFEST_DEP_SHA["$key"]="$val"
+          fi
           ;;
         CREATED_USER)
-          [[ "$key" == "1" ]] && MANIFEST_CREATED_USER=1
+          if [[ "$key" == "1" ]]; then
+            MANIFEST_CREATED_USER=1
+          fi
           ;;
       esac
     done < <(run_root cat "$MANIFEST_FILE")
