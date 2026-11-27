@@ -18,7 +18,17 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { amount, api, bucketUnitSuffix, fmt, formatUptime, when } from "../client";
+import {
+  amount,
+  api,
+  bucketUnitSuffix,
+  fmt,
+  formatUptime,
+  readTelemetryRange,
+  subscribeTelemetryRange,
+  when,
+  writeTelemetryRange,
+} from "../client";
 import { formatNumber, t as translate } from "../i18n";
 import { alertLabel } from "../labels";
 import type { Row, State } from "../types";
@@ -49,7 +59,12 @@ export function Overview({
   onInspectControlPlane: () => void;
 }) {
   const [scope, setScope] = useState<"hosts" | "users">("hosts");
-  const [range, setRange] = useState("24");
+  const [range, setRangeState] = useState<string>(readTelemetryRange);
+  const setRange = (next: string) => {
+    setRangeState(next);
+    writeTelemetryRange(next);
+  };
+  useEffect(() => subscribeTelemetryRange(setRangeState), []);
   const [topTab, setTopTab] = useState<"hosts" | "users">("hosts");
   const [samples, setSamples] = useState<Row[]>([]);
   const [resolution, setResolution] = useState("hour");

@@ -43,7 +43,13 @@ import {
   type ReactNode,
 } from "react";
 import { createRoot } from "react-dom/client";
-import { api, when } from "./client";
+import {
+  api,
+  readTelemetryRange,
+  subscribeTelemetryRange,
+  when,
+  writeTelemetryRange,
+} from "./client";
 import {
   Actions,
   ActivityView,
@@ -523,13 +529,20 @@ function App() {
     [toast, setToast] = useState(""),
     [error, setError] = useState<UiError>(""),
     [search, setSearch] = useState(""),
-    [inlineRange, setInlineRange] = useState("24"),
+    [inlineRange, setInlineRangeState] = useState<string>(readTelemetryRange),
     [templateFormatFilter, setTemplateFormatFilter] = useState<
       "all" | TemplateFormat
     >("all"),
     [theme, setTheme] = useState<"light" | "dark">(() =>
       document.documentElement.dataset.theme === "dark" ? "dark" : "light",
     );
+
+  const setInlineRange = (next: string) => {
+    setInlineRangeState(next);
+    writeTelemetryRange(next);
+  };
+
+  useEffect(() => subscribeTelemetryRange(setInlineRangeState), []);
 
   useEffect(() => {
     try {

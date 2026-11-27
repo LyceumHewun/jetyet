@@ -166,3 +166,56 @@ export function supportsTopLayerExit(): boolean {
     canTransitionDisplay()
   );
 }
+
+export const TELEMETRY_RANGES = ["1", "24", "168", "720"] as const;
+export type TelemetryRange = (typeof TELEMETRY_RANGES)[number];
+
+const TELEMETRY_RANGE_KEY = "jetyet-telemetry-range";
+const TELEMETRY_RANGE_EVENT = "jetyet-telemetry-range-change";
+
+function isTelemetryRange(value: string | null): value is TelemetryRange {
+  return (
+    value !== null && (TELEMETRY_RANGES as readonly string[]).includes(value)
+  );
+}
+
+export function readTelemetryRange(): TelemetryRange {
+  try {
+    const saved = localStorage.getItem(TELEMETRY_RANGE_KEY);
+    if (isTelemetryRange(saved)) return saved;
+  } catch {}
+  return "24";
+}
+
+export function writeTelemetryRange(next: string) {
+  if (!isTelemetryRange(next)) return;
+  try {
+    localStorage.setItem(TELEMETRY_RANGE_KEY, next);
+  } catch {}
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent<TelemetryRange>(TELEMETRY_RANGE_EVENT, { detail: next }),
+    );
+  }
+}
+
+export function subscribeTelemetryRange(
+  onChange: (range: TelemetryRange) => void,
+): () => void {
+  if (typeof window === "undefined") return () => {};
+  const onCustom = (e: Event) => {
+    const detail = (e as CustomEvent<string>).detail ?? null;
+    if (isTelemetryRange(detail)) onChange(detail);
+  };
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === TELEMETRY_RANGE_KEY && isTelemetryRange(e.newValue)) {
+      onChange(e.newValue);
+    }
+  };
+  window.addEventListener(TELEMETRY_RANGE_EVENT, onCustom);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(TELEMETRY_RANGE_EVENT, onCustom);
+    window.removeEventListener("storage", onStorage);
+  };
+}

@@ -15,7 +15,15 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, bucketUnitSuffix, formatUptime, when } from "./client";
+import {
+  api,
+  bucketUnitSuffix,
+  formatUptime,
+  readTelemetryRange,
+  subscribeTelemetryRange,
+  when,
+  writeTelemetryRange,
+} from "./client";
 import {
   DateTimePicker,
   Empty,
@@ -119,11 +127,22 @@ export function History({
   entity: Row;
   onClose: () => void;
 }) {
-  const [range, setRange] = useState("24"),
+  const [range, setRangeState] = useState<string>(readTelemetryRange),
     [custom, setCustom] = useState({ start: "", end: "" }),
     [snapshot, setSnapshot] = useState<HistorySnapshot | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState<UiError>("");
+  const setRange = (next: string) => {
+    setRangeState(next);
+    if (next !== "custom") writeTelemetryRange(next);
+  };
+  useEffect(
+    () =>
+      subscribeTelemetryRange((next) =>
+        setRangeState((cur) => (cur === "custom" ? cur : next)),
+      ),
+    [],
+  );
   useEffect(() => {
     setSnapshot(null);
     if (range === "custom" && (!custom.start || !custom.end)) {
