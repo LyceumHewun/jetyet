@@ -1,3 +1,5 @@
+import { readFileSync, statfsSync } from "node:fs";
+import os from "node:os";
 import {
   addObservation,
   exhausted,
@@ -469,6 +471,231 @@ function queueKick(s: Store, n: Entity, ids: string[]) {
     .get(n.hostId, JSON.stringify({ nodeId: n.id, userIds: ids }));
   if (!pending) enqueue(s, n.hostId, "kick", { nodeId: n.id, userIds: ids });
 }
+const EXCLUDED_IFACE_PREFIXES = [
+  "tun",
+  "tap",
+  "wg",
+  "sit",
+  "ip6tnl",
+  "gif",
+  "docker",
+  "veth",
+  "br-",
+  "tailscale",
+];
+
+function readLocalProcCpu(): { total: number; idle: number } | null {
+  try {
+    const first = readFileSync("/proc/stat", "utf8").split("\n")[0];
+    const parts = first.trim().split(/\s+/).slice(1, 9).map(Number);
+    if (parts.length < 5 || parts.some((n) => !Number.isFinite(n))) return null;
+    return {
+      total: parts.reduce((a, b) => a + b, 0),
+      idle: parts[3] + parts[4],
+    };
+  } catch {
+    const cpus = os.cpus();
+    if (!cpus.length) return null;
+    let total = 0;
+    let idle = 0;
+    for (const c of cpus) {
+      total +=
+        c.times.user + c.times.nice + c.times.sys + c.times.idle + c.times.irq;
+      idle += c.times.idle;
+    }
+    return { total, idle };
+  }
+}
+
+function readLocalMemory(): number | null {
+  try {
+    const mem: Record<string, number> = {};
+    for (const line of readFileSync("/proc/meminfo", "utf8").split("\n")) {
+      const idx = line.indexOf(":");
+      if (idx === -1) continue;
+      const val = parseInt(line.slice(idx + 1).trim(), 10);
+      if (Number.isFinite(val)) mem[line.slice(0, idx)] = val;
+    }
+    if (!mem.MemTotal) return null;
+    const avail = mem.MemAvailable ?? mem.MemFree ?? 0;
+    return Math.max(0, Math.min(100, 100 * (1 - avail / mem.MemTotal)));
+  } catch {
+    const total = os.totalmem();
+    if (!total) return null;
+    return Math.max(0, Math.min(100, 100 * (1 - os.freemem() / total)));
+  }
+}
+
+function readLocalDisk(): number | null {
+  try {
+    const st = statfsSync("/");
+    if (!st.blocks) return null;
+    return Math.max(0, Math.min(100, 100 * (1 - st.bavail / st.blocks)));
+  } catch {
+    return null;
+  }
+}
+
+function readLocalUptime(): number {
+  try {
+    const val = parseFloat(readFileSync("/proc/uptime", "utf8").split(/\s+/)[0]);
+    if (Number.isFinite(val)) return val;
+  } catch {}
+  return os.uptime();
+}
+
+function readLocalBootId(): string {
+  try {
+    return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  } catch {
+    return `${os.hostname()}:${Math.floor((Date.now() - os.uptime() * 1000) / 60000)}`;
+  }
+}
+
+function readLocalNetwork(): {
+  inbound: number;
+  outbound: number;
+  interfaces: string[];
+} | null {
+  try {
+    const allIfaces = new Set<string>();
+    for (const family of ["-4", "-6"]) {
+      const res = Bun.spawnSync(["ip", "-j", family, "route", "show", "default"], {
+        stdout: "pipe",
+        stderr: "ignore",
+      });
+      if (res.exitCode === 0) {
+        const routes = JSON.parse(res.stdout.toString());
+        if (Array.isArray(routes)) {
+          for (const r of routes) {
+            if (typeof r?.dev === "string" && r.dev) allIfaces.add(r.dev);
+          }
+        }
+      }
+    }
+    if (!allIfaces.size) return null;
+    const filtered = [...allIfaces].filter(
+      (n) =>
+        n !== "lo" &&
+        !EXCLUDED_IFACE_PREFIXES.some((prefix) => n.startsWith(prefix)),
+    );
+    const interfaces = (filtered.length ? filtered : [...allIfaces]).sort();
+    let inbound = 0;
+    let outbound = 0;
+    for (const name of interfaces) {
+      inbound += parseInt(
+        readFileSync(`/sys/class/net/${name}/statistics/rx_bytes`, "utf8").trim(),
+        10,
+      );
+      outbound += parseInt(
+        readFileSync(`/sys/class/net/${name}/statistics/tx_bytes`, "utf8").trim(),
+        10,
+      );
+    }
+    if (!Number.isSafeInteger(inbound) || !Number.isSafeInteger(outbound))
+      return null;
+    return { inbound, outbound, interfaces };
+  } catch {
+    return null;
+  }
+}
+
+export function collectControlPlane(s: Store) {
+  const at = Date.now();
+  const cpuRaw = readLocalProcCpu();
+  const memory = readLocalMemory();
+  const disk = readLocalDisk();
+  const uptime = readLocalUptime();
+  const boot = readLocalBootId();
+  const net = readLocalNetwork();
+
+  let prevSnap: Record<string, any> | null = null;
+  try {
+    const row = s.db
+      .query<{ value: string }, []>(
+        "SELECT value FROM metadata WHERE key='control-plane'",
+      )
+      .get();
+    if (row) prevSnap = JSON.parse(row.value);
+  } catch {}
+
+  const totalDelta =
+    cpuRaw && typeof prevSnap?.cpuTotal === "number"
+      ? cpuRaw.total - prevSnap.cpuTotal
+      : 0;
+  const idleDelta =
+    cpuRaw && typeof prevSnap?.cpuIdle === "number"
+      ? cpuRaw.idle - prevSnap.cpuIdle
+      : 0;
+  const cpu =
+    totalDelta > 0
+      ? Math.max(0, Math.min(100, 100 * (1 - idleDelta / totalDelta)))
+      : 0;
+
+  s.db
+    .transaction(() => {
+      let din = 0;
+      let dout = 0;
+      if (net) {
+        const source = "control-plane";
+        const epoch = net.interfaces.length
+          ? `${boot}:${net.interfaces.join(",")}`
+          : boot;
+        const prev = s.db
+          .query<
+            { epoch: string; inbound: number; outbound: number; at: number },
+            [string]
+          >("SELECT * FROM counters WHERE source=?")
+          .get(source);
+        const valid =
+          !!prev &&
+          prev.epoch === epoch &&
+          net.inbound >= prev.inbound &&
+          net.outbound >= prev.outbound;
+        if (valid) {
+          din = net.inbound - prev.inbound;
+          dout = net.outbound - prev.outbound;
+        }
+        s.db
+          .query(
+            "INSERT INTO counters VALUES(?,?,?,?,?) ON CONFLICT(source) DO UPDATE SET epoch=excluded.epoch,inbound=excluded.inbound,outbound=excluded.outbound,at=excluded.at",
+          )
+          .run(source, epoch, net.inbound, net.outbound, at);
+      }
+
+      sample(s, "control-plane", at, din, dout, {
+        cpu,
+        memory,
+        disk,
+        reachable: 1,
+      });
+
+      const snapshot = {
+        id: "control-plane",
+        kind: "control-plane",
+        hostname: os.hostname(),
+        lastSeen: at,
+        created: prevSnap?.created ?? at,
+        reachable: true,
+        uptime,
+        cpu,
+        memory,
+        disk,
+        cpuTotal: cpuRaw?.total ?? null,
+        cpuIdle: cpuRaw?.idle ?? null,
+        interfaces: net?.interfaces ?? [],
+        inboundTotal: net?.inbound ?? null,
+        outboundTotal: net?.outbound ?? null,
+      };
+      s.db
+        .query(
+          "INSERT INTO metadata(key,value) VALUES('control-plane',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        )
+        .run(JSON.stringify(snapshot));
+    })
+    .immediate();
+}
+
 async function pool<T>(
   values: T[],
   limit: number,
@@ -513,6 +740,9 @@ if (import.meta.main) {
     if (Date.now() - lastCollect >= 60000 && !collecting) {
       lastCollect = Date.now();
       collecting = true;
+      try {
+        collectControlPlane(s);
+      } catch {}
       void pool(
         s.list("host").filter((h) => h.fingerprint && !h.deleting),
         5,

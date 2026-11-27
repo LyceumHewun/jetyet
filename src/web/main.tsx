@@ -18,8 +18,10 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
+  Cpu,
   FileCode2,
   KeyRound,
+  LayoutDashboard,
   Link2,
   LoaderCircle,
   LogOut,
@@ -37,10 +39,17 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { api, when } from "./client";
+import { api, formatUptime, when } from "./client";
 import {
   Actions,
   Badge,
@@ -57,15 +66,18 @@ import {
   LanguageControl,
   LogsModal,
   MiniBar,
+  Overview,
   PasswordLinkModal,
+  QrCodeModal,
   QuotaBar,
   SearchInput,
   ScrollArea,
   SegmentedControl,
   Sparkline,
   Stage,
-  SubscriptionLinksModal,
   Table,
+  type QrCodeOption,
+  type QrCodeTemplateOption,
 } from "./components";
 import {
   DEFAULT_ECH_PUBLIC_NAME,
@@ -139,6 +151,7 @@ function transitionSpatialCards(update: () => void) {
 }
 
 const initial: State = {
+  controlPlane: null,
   hosts: [],
   nodes: [],
   users: [],
@@ -150,6 +163,7 @@ const initial: State = {
 };
 
 const tabs = [
+  ["Overview", LayoutDashboard],
   ["Infra", Server],
   ["Users", Users],
   ["Templates", FileCode2],
@@ -158,7 +172,7 @@ const tabs = [
 
 type ConsoleView = {
   tab: (typeof tabs)[number][0];
-  expandedHost?: string | null;
+  expandedHost: string | null;
   expandedUser: string | null;
 };
 
@@ -168,17 +182,37 @@ function readConsoleView(): ConsoleView {
   try {
     const saved = JSON.parse(localStorage.getItem(consoleViewKey) ?? "null");
     return {
-      tab: tabs.find(([tab]) => tab === saved?.tab)?.[0] ?? "Infra",
+      tab: tabs.find(([tab]) => tab === saved?.tab)?.[0] ?? "Overview",
       expandedHost:
-        saved?.expandedHost === null || typeof saved?.expandedHost === "string"
-          ? saved.expandedHost
-          : undefined,
+        typeof saved?.expandedHost === "string" ? saved.expandedHost : null,
       expandedUser:
         typeof saved?.expandedUser === "string" ? saved.expandedUser : null,
     };
   } catch {
-    return { tab: "Infra", expandedUser: null };
+    return { tab: "Overview", expandedHost: null, expandedUser: null };
   }
+}
+
+function useGridColumns(): 1 | 2 | 3 {
+  const read = (): 1 | 2 | 3 => {
+    if (typeof window === "undefined") return 3;
+    if (window.matchMedia("(max-width: 640px)").matches) return 1;
+    if (window.matchMedia("(max-width: 1080px)").matches) return 2;
+    return 3;
+  };
+  const [cols, setCols] = useState<1 | 2 | 3>(read);
+  useEffect(() => {
+    const mqSm = window.matchMedia("(max-width: 640px)");
+    const mqMd = window.matchMedia("(max-width: 1080px)");
+    const update = () => setCols(read());
+    mqSm.addEventListener("change", update);
+    mqMd.addEventListener("change", update);
+    return () => {
+      mqSm.removeEventListener("change", update);
+      mqMd.removeEventListener("change", update);
+    };
+  }, []);
+  return cols;
 }
 
 const credentialRotation = {
@@ -327,6 +361,7 @@ function App() {
   const [modal, setModal] = useAppView(locale);
   const [verifyingHostId, setVerifyingHostId] = useState<string | null>(null);
   const verifyingHost = useRef(false);
+  const gridCols = useGridColumns();
   const [consoleView, setConsoleView] = useState(readConsoleView);
   const { tab, expandedHost, expandedUser } = consoleView;
   const setTab = (tab: ConsoleView["tab"]) =>
@@ -388,10 +423,10 @@ function App() {
       setState(next);
       setConsoleView((view) => {
         const expandedHost =
-          view.expandedHost === null ||
+          view.expandedHost === "control-plane" ||
           next.hosts.some((host) => host.id === view.expandedHost)
             ? view.expandedHost
-            : next.hosts[0]?.id;
+            : null;
         const expandedUser = next.users.some(
           (user) => user.id === view.expandedUser,
         )
@@ -546,48 +581,59 @@ function App() {
   const links = async (u: Row) => {
     try {
       const data = await api(`users/${u.id}/links`);
-      const items = [
+      const options: QrCodeOption[] = [
         {
-          id: "default",
-          kind: "auto" as const,
-          label: translate("Default subscription"),
+          value: "adaptive",
+          label: translate("Adaptive"),
           url: data.default,
-          isDefault: true,
+          tag: translate("Adaptive"),
         },
         ...SUBSCRIPTION_FORMATS.flatMap((fmt) =>
           data.formats?.[fmt]
             ? [
                 {
-                  id: `format:${fmt}`,
-                  kind: "format" as const,
-                  format: fmt,
+                  value: fmt,
                   label: formatLabel(fmt),
                   url: data.formats[fmt],
+                  tag: formatLabel(fmt),
                 },
               ]
             : [],
         ),
-        ...(data.templates || []).map((t: Row) => {
+      ];
+      const templates: QrCodeTemplateOption[] = (data.templates || []).map(
+        (t: Row) => {
           const tpl = state.templates.find((x) => x.id === t.id);
           const format = (tpl?.format ?? t.format) as
             | TemplateFormat
             | undefined;
+          const isDefault = Boolean(
+            format && u.defaultTemplates?.[format] === t.id,
+          );
           return {
-            id: t.id,
-            kind: "template" as const,
-            format,
-            label: tpl?.name || t.id,
+            value: t.id,
+            label:
+              `${tpl?.name || t.id}` +
+              (format ? ` · ${formatLabel(format)}` : "") +
+              (isDefault ? ` · ${translate("Default")}` : ""),
+            format: format || "",
+            group: "assigned",
             url: t.url,
-            isFormatDefault: Boolean(
-              format && u.defaultTemplates?.[format] === t.id,
-            ),
+            tag: format ? formatLabel(format) : undefined,
           };
-        }),
-      ];
+        },
+      );
       setModal(() => (
-        <SubscriptionLinksModal
-          userName={u.name}
-          items={items}
+        <QrCodeModal
+          title={translate("Subscription Links")}
+          subtitle={translate(
+            "Keep these links private. Share them only with {0}.",
+            u.name,
+          )}
+          tag={translate("Adaptive")}
+          url={data.default}
+          options={options}
+          templates={templates}
           onClose={() => setModal(null)}
         />
       ));
@@ -832,6 +878,7 @@ function App() {
   ).length;
 
   const tabCount: Record<string, number> = {
+    Overview: 0,
     Infra: state.hosts.length,
     Users: state.users.length,
     Templates: state.templates.length,
@@ -847,14 +894,98 @@ function App() {
       />
     ));
 
+  const controlPlaneEntity: Row = state.controlPlane
+    ? {
+        ...state.controlPlane,
+        id: "control-plane",
+        kind: "control-plane",
+        name: translate("Control Plane"),
+      }
+    : {
+        id: "control-plane",
+        kind: "control-plane",
+        name: translate("Control Plane"),
+        reachable: false,
+        uptime: null,
+        cpu: null,
+        memory: null,
+        disk: null,
+        interfaces: [],
+      };
+  const controlPlaneFresh =
+    !!controlPlaneEntity.lastSeen &&
+    Date.now() - controlPlaneEntity.lastSeen <= 180000;
+  const workerAlive = (name: string) => {
+    const hb = state.workers.find((w) => w.name === name);
+    return !!hb && Date.now() - hb.at <= 30000;
+  };
+
+  const searchLower = search.trim().toLowerCase();
+  const showControlPlane =
+    !searchLower ||
+    [
+      controlPlaneEntity.name,
+      controlPlaneEntity.hostname,
+      "control plane",
+      "control-plane",
+      "local",
+      "本机",
+      "面板",
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(searchLower);
+
   const visibleHosts = visible(state.hosts);
-  const orderedHosts = [...visibleHosts].sort((a, b) =>
-    a.id === expandedHost ? -1 : b.id === expandedHost ? 1 : 0,
-  );
+  const infraItems = showControlPlane
+    ? [controlPlaneEntity, ...visibleHosts]
+    : visibleHosts;
+  const expandedInfraIdx = infraItems.findIndex((i) => i.id === expandedHost);
+  const infraInsertAfter =
+    expandedInfraIdx >= 0
+      ? Math.min(
+          infraItems.length - 1,
+          Math.floor(expandedInfraIdx / gridCols) * gridCols + gridCols - 1,
+        )
+      : -1;
+
   const visibleUsers = visible(state.users);
-  const orderedUsers = [...visibleUsers].sort((a, b) =>
-    a.id === expandedUser ? -1 : b.id === expandedUser ? 1 : 0,
-  );
+  const expandedUserIdx = visibleUsers.findIndex((u) => u.id === expandedUser);
+  const userInsertAfter =
+    expandedUserIdx >= 0
+      ? Math.min(
+          visibleUsers.length - 1,
+          Math.floor(expandedUserIdx / gridCols) * gridCols + gridCols - 1,
+        )
+      : -1;
+
+  const inlineRangeOptions: [string, string][] = [
+    ["1", translate("1h")],
+    ["24", translate("24h")],
+    ["168", translate("7d")],
+    ["720", translate("30d")],
+  ];
+
+  const jumpToHost = (hostId: string) => {
+    setStage(null);
+    setSearch("");
+    setConsoleView((view) => ({
+      ...view,
+      tab: "Infra",
+      expandedHost: hostId,
+    }));
+  };
+
+  const jumpToUser = (userId: string) => {
+    setStage(null);
+    setSearch("");
+    setConsoleView((view) => ({
+      ...view,
+      tab: "Users",
+      expandedUser: userId,
+    }));
+  };
 
   return (
     <div className="shell">
@@ -867,7 +998,7 @@ function App() {
               onClick={(e) => {
                 e.preventDefault();
                 setStage(null);
-                setTab("Infra");
+                setTab("Overview");
               }}
             >
               <BrandMark size={19} />
@@ -963,6 +1094,25 @@ function App() {
             stage
           ) : (
             <>
+              {tab === "Overview" && (
+                <Overview
+                  state={state}
+                  hostsReachable={hostsReachable}
+                  nodeHealthy={nodeHealthy}
+                  totalOnline={totalOnline}
+                  activeAlerts={activeAlerts}
+                  runningTasks={runningTasks}
+                  onJumpTab={(nextTab) => {
+                    setStage(null);
+                    setTab(nextTab);
+                    setSearch("");
+                  }}
+                  onInspectHost={jumpToHost}
+                  onInspectUser={jumpToUser}
+                  onInspectControlPlane={() => jumpToHost("control-plane")}
+                />
+              )}
+
               {tab === "Infra" && (
                 <>
                   <div className="action-strip">
@@ -1009,122 +1159,259 @@ function App() {
                       </Button>
                     </div>
                   </div>
-                  {!state.hosts.length ? (
-                    <section className="panel">
-                      <Empty
-                        title={translate("No hosts connected")}
-                        action={
-                          <Button
-                            variant="primary"
-                            onClick={() => save("hosts")}
-                          >
-                            <Plus size={15} />
-                            {translate("Add VPS")}
-                          </Button>
-                        }
-                      >
-                        {translate("Add a VPS to start managing your network.")}
-                      </Empty>
-                    </section>
-                  ) : (
+                  {infraItems.length > 0 && (
                     <div className="spatial-grid">
-                      {orderedHosts.map((h) => {
-                        const node = state.nodes.find((n) => n.hostId === h.id);
+                      {infraItems.map((h, idx) => {
+                        const isControlPlane = h.kind === "control-plane";
+                        const isActive = expandedHost === h.id;
+                        const toggleExpand = () =>
+                          transitionSpatialCards(() =>
+                            setExpandedHost(isActive ? null : h.id),
+                          );
+                        const node = isControlPlane
+                          ? undefined
+                          : state.nodes.find((n) => n.hostId === h.id);
                         const clients = node
                           ? (Object.values(node.online || {}).reduce(
                               (a: any, b: any) => a + b,
                               0,
                             ) as number)
                           : 0;
-                        const isExpanded = expandedHost === h.id;
-                        const nTone = node ? nodeTone(node, h) : "neutral";
-                        const hostActions: [string, () => void][] = [
-                          [translate("Edit VPS"), () => save("hosts", h)],
-                          [translate("Full telemetry"), () => history(h)],
-                          [translate("Reset usage"), () => reset(h)],
-                          [
-                            translate("Correct usage"),
-                            () =>
-                              setModal(() => (
-                                <Correction
-                                  host={h}
-                                  onClose={() => setModal(null)}
-                                  onSave={async (v) => {
-                                    await run(() =>
-                                      api(`hosts/${h.id}/correct`, "POST", v),
-                                    );
-                                    setModal(null);
-                                  }}
-                                />
-                              )),
-                          ],
-                          [translate("Delete VPS"), () => remove("hosts", h)],
-                          [
-                            translate("Force remove"),
-                            () =>
-                              setModal(() => (
-                                <ForceRemove
-                                  host={h}
-                                  onClose={() => setModal(null)}
-                                  onSave={async () => {
-                                    await run(() =>
-                                      api(
-                                        `hosts/${h.id}/force-remove`,
-                                        "POST",
-                                        {
-                                          confirmation:
-                                            "REMOTE HOST DESTROYED OR HANDLED INDEPENDENTLY",
-                                        },
-                                      ),
-                                    );
-                                    setModal(null);
-                                  }}
-                                />
-                              )),
-                          ],
-                        ];
-                        const nodeActions: [string, () => void][] = node
-                          ? [
-                              [
-                                translate("Edit node"),
-                                () => save("nodes", node),
-                              ],
-                              [
-                                translate("Deploy"),
-                                () => operation(node, "deploy"),
-                              ],
-                              [
-                                translate("Show deploy command"),
-                                () => operation(node, "command"),
-                              ],
-                              [
-                                translate("Detect installation"),
-                                () => operation(node, "detect"),
-                              ],
-                              [
-                                translate("Upgrade"),
-                                () => operation(node, "upgrade"),
-                              ],
-                              [
-                                translate("Inspect drift"),
-                                () => inspectDrift(node),
-                              ],
-                              [
-                                translate("Reapply config"),
-                                () => operation(node, "reapply"),
-                              ],
-                              [translate("Node history"), () => history(node)],
-                              [
-                                translate("Delete node"),
-                                () => remove("nodes", node),
-                              ],
-                            ]
-                          : [];
+                        const nTone =
+                          !isControlPlane && node ? nodeTone(node, h) : "neutral";
 
-                        if (isExpanded) {
+                        const renderExpanded = (target: Row) => {
+                          if (target.kind === "control-plane") {
+                            return (
+                              <article
+                                key="expanded-control-plane"
+                                className="spatial-card spatial-expanded control-plane-expanded"
+                              >
+                                <div className="expanded-head">
+                                  <div className="expanded-head-left">
+                                    <span
+                                      className={
+                                        "status-dot " +
+                                        (controlPlaneFresh ? "good" : "warning")
+                                      }
+                                    />
+                                    <h2>{translate("Control Plane")}</h2>
+                                    <Badge tone="neutral">
+                                      {translate("Local host")}
+                                    </Badge>
+                                    {target.hostname && (
+                                      <span className="mono muted">
+                                        {target.hostname}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="expanded-head-right">
+                                    <SegmentedControl
+                                      value={inlineRange}
+                                      options={inlineRangeOptions}
+                                      onChange={setInlineRange}
+                                    />
+                                    <Button
+                                      variant="icon"
+                                      onClick={() =>
+                                        transitionSpatialCards(() =>
+                                          setExpandedHost(null),
+                                        )
+                                      }
+                                      aria-label={translate("Collapse")}
+                                      title={translate("Collapse")}
+                                    >
+                                      <ChevronUp size={15} />
+                                    </Button>
+                                  </div>
+                                </div>
+                                <div className="expanded-zones">
+                                  <InlineTelemetry
+                                    entity={target}
+                                    range={inlineRange}
+                                  />
+                                  <div className="expanded-actions-col">
+                                    <div className="expanded-actions-head">
+                                      <span className="kpi-label">
+                                        {translate("CONTROL PLANE")}
+                                      </span>
+                                      <Cpu size={14} className="muted" aria-hidden="true" />
+                                    </div>
+                                    <ScrollArea
+                                      axis="y"
+                                      className="expanded-chips-scroll"
+                                    >
+                                      <div className="expanded-chips-inner">
+                                        <div className="node-mini-meta">
+                                          <strong>
+                                            {target.hostname ||
+                                              translate("Local host")}
+                                          </strong>
+                                          <small className="muted">
+                                            {translate(
+                                              "Self-host telemetry · excluded from VPS counts & quota",
+                                            )}
+                                          </small>
+                                        </div>
+                                        <div className="chip-group">
+                                          {(["monitor", "operations"] as const).map(
+                                            (name) => {
+                                              const ok = workerAlive(name);
+                                              return (
+                                                <Badge
+                                                  key={name}
+                                                  tone={ok ? "good" : "warning"}
+                                                >
+                                                  {name} ·{" "}
+                                                  {ok
+                                                    ? translate("Healthy")
+                                                    : translate("Stale")}
+                                                </Badge>
+                                              );
+                                            },
+                                          )}
+                                        </div>
+                                        {Array.isArray(target.interfaces) &&
+                                          target.interfaces.length > 0 && (
+                                            <div className="chip-group">
+                                              {target.interfaces.map(
+                                                (iface: string) => (
+                                                  <Chip key={iface} mono>
+                                                    {iface}
+                                                  </Chip>
+                                                ),
+                                              )}
+                                            </div>
+                                          )}
+                                      </div>
+                                    </ScrollArea>
+                                    <div className="expanded-quick-actions">
+                                      <Button
+                                        className="quick-row-btn"
+                                        onClick={() => history(target)}
+                                      >
+                                        <span>{translate("Full telemetry")}</span>
+                                        <ArrowUpRight
+                                          size={14}
+                                          className="muted"
+                                        />
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </article>
+                            );
+                          }
+
+                          const tNode = state.nodes.find(
+                            (n) => n.hostId === target.id,
+                          );
+                          const tClients = tNode
+                            ? (Object.values(tNode.online || {}).reduce(
+                                (a: any, b: any) => a + b,
+                                0,
+                              ) as number)
+                            : 0;
+                          const tTone = tNode ? nodeTone(tNode, target) : "neutral";
+                          const hostActions: [string, () => void][] = [
+                            [translate("Edit VPS"), () => save("hosts", target)],
+                            [
+                              translate("Full telemetry"),
+                              () => history(target),
+                            ],
+                            [translate("Reset usage"), () => reset(target)],
+                            [
+                              translate("Correct usage"),
+                              () =>
+                                setModal(() => (
+                                  <Correction
+                                    host={target}
+                                    onClose={() => setModal(null)}
+                                    onSave={async (v) => {
+                                      await run(() =>
+                                        api(
+                                          `hosts/${target.id}/correct`,
+                                          "POST",
+                                          v,
+                                        ),
+                                      );
+                                      setModal(null);
+                                    }}
+                                  />
+                                )),
+                            ],
+                            [
+                              translate("Delete VPS"),
+                              () => remove("hosts", target),
+                            ],
+                            [
+                              translate("Force remove"),
+                              () =>
+                                setModal(() => (
+                                  <ForceRemove
+                                    host={target}
+                                    onClose={() => setModal(null)}
+                                    onSave={async () => {
+                                      await run(() =>
+                                        api(
+                                          `hosts/${target.id}/force-remove`,
+                                          "POST",
+                                          {
+                                            confirmation:
+                                              "REMOTE HOST DESTROYED OR HANDLED INDEPENDENTLY",
+                                          },
+                                        ),
+                                      );
+                                      setModal(null);
+                                    }}
+                                  />
+                                )),
+                            ],
+                          ];
+                          const nodeActions: [string, () => void][] = tNode
+                            ? [
+                                [
+                                  translate("Edit node"),
+                                  () => save("nodes", tNode),
+                                ],
+                                [
+                                  translate("Deploy"),
+                                  () => operation(tNode, "deploy"),
+                                ],
+                                [
+                                  translate("Show deploy command"),
+                                  () => operation(tNode, "command"),
+                                ],
+                                [
+                                  translate("Detect installation"),
+                                  () => operation(tNode, "detect"),
+                                ],
+                                [
+                                  translate("Upgrade"),
+                                  () => operation(tNode, "upgrade"),
+                                ],
+                                [
+                                  translate("Inspect drift"),
+                                  () => inspectDrift(tNode),
+                                ],
+                                [
+                                  translate("Reapply config"),
+                                  () => operation(tNode, "reapply"),
+                                ],
+                                [
+                                  translate("Node history"),
+                                  () => history(tNode),
+                                ],
+                                [
+                                  translate("Delete node"),
+                                  () => remove("nodes", tNode),
+                                ],
+                              ]
+                            : [];
+
                           return (
                             <article
-                              key={h.id}
+                              key={`expanded-${target.id}`}
                               className="spatial-card spatial-expanded"
                             >
                               <div className="expanded-head">
@@ -1132,28 +1419,30 @@ function App() {
                                   <span
                                     className={
                                       "status-dot " +
-                                      (!h.enabled
+                                      (!target.enabled
                                         ? "neutral"
-                                        : h.reachable
+                                        : target.reachable
                                           ? "good"
                                           : "warning")
                                     }
                                   />
-                                  <h2>{h.name}</h2>
+                                  <h2>{target.name}</h2>
                                   <span className="mono muted">
-                                    {h.address}:{h.port}
+                                    {target.address}:{target.port}
                                   </span>
                                   <button
                                     type="button"
                                     className={
                                       "trust-pill " +
-                                      (h.fingerprint ? "trusted" : "verify")
+                                      (target.fingerprint
+                                        ? "trusted"
+                                        : "verify")
                                     }
                                     disabled={verifyingHostId !== null}
-                                    aria-busy={verifyingHostId === h.id}
-                                    onClick={() => void trust(h)}
+                                    aria-busy={verifyingHostId === target.id}
+                                    onClick={() => void trust(target)}
                                   >
-                                    {verifyingHostId === h.id ? (
+                                    {verifyingHostId === target.id ? (
                                       <>
                                         <LoaderCircle
                                           size={13}
@@ -1162,7 +1451,7 @@ function App() {
                                         />
                                         {translate("Verifying SSH…")}
                                       </>
-                                    ) : h.fingerprint ? (
+                                    ) : target.fingerprint ? (
                                       <>
                                         <ShieldCheck size={13} />
                                         {translate("SSH Trusted")}
@@ -1174,34 +1463,30 @@ function App() {
                                       </>
                                     )}
                                   </button>
-                                  {h.deleting && (
+                                  {target.deleting && (
                                     <Badge tone="warning">
                                       {translate("Pending deletion")}
                                     </Badge>
                                   )}
-                                  {h.usageStale && (
+                                  {target.usageStale && (
                                     <Badge tone="warning">
                                       {translate("Stale data")}
                                     </Badge>
                                   )}
-                                  {node && (
-                                    <Badge tone={nTone}>
-                                      {node.name} {node.version || ""} ·{" "}
-                                      {translate("{0} online", clients)}
+                                  {tNode && (
+                                    <Badge tone={tTone}>
+                                      {tNode.name} {tNode.version || ""} ·{" "}
+                                      {translate("{0} online", tClients)}
                                     </Badge>
                                   )}
                                 </div>
                                 <div className="expanded-head-right">
                                   <SegmentedControl
                                     value={inlineRange}
-                                    options={[
-                                      ["24", translate("24h")],
-                                      ["168", translate("7d")],
-                                      ["720", translate("30d")],
-                                    ]}
+                                    options={inlineRangeOptions}
                                     onChange={setInlineRange}
                                   />
-                                  <Button onClick={() => save("hosts", h)}>
+                                  <Button onClick={() => save("hosts", target)}>
                                     {translate("Edit")}
                                   </Button>
                                   <Actions items={hostActions} />
@@ -1221,63 +1506,66 @@ function App() {
                               </div>
                               <div className="expanded-zones">
                                 <InlineTelemetry
-                                  entity={h}
+                                  entity={target}
                                   range={inlineRange}
                                 />
                                 <div className="expanded-actions-col">
                                   <div className="expanded-actions-head">
                                     <span className="kpi-label">
-                                      {node
+                                      {tNode
                                         ? translate("HYSTERIA 2 NODE")
                                         : translate("QUICK ACTIONS")}
                                     </span>
-                                    {node && <Actions items={nodeActions} />}
+                                    {tNode && <Actions items={nodeActions} />}
                                   </div>
-                                  {node ? (
-                                    <>
+                                  {tNode && (
+                                    <ScrollArea
+                                      axis="y"
+                                      className="expanded-chips-scroll"
+                                    >
                                       <div className="node-mini-meta">
-                                        <strong>{node.name}</strong>
+                                        <strong>{tNode.name}</strong>
                                         <small className="mono">
-                                          {node.address}:{node.port}
+                                          {tNode.address}:{tNode.port}
                                         </small>
                                         <div className="chip-group node-specs">
                                           <Chip>
-                                            {node.probed &&
-                                            Date.now() - node.probed > 600000
+                                            {tNode.probed &&
+                                            Date.now() - tNode.probed > 600000
                                               ? translate("Probe stale")
-                                              : probeLabel(node.probe)}
+                                              : probeLabel(tNode.probe)}
                                           </Chip>
-                                          {node.hopping && (
-                                            <Chip mono>UDP {node.hopping}</Chip>
+                                          {tNode.hopping && (
+                                            <Chip mono>UDP {tNode.hopping}</Chip>
                                           )}
-                                          {(node.version ||
-                                            (node.status &&
-                                              node.status !== "draft")) &&
-                                            node.congestion && (
+                                          {(tNode.version ||
+                                            (tNode.status &&
+                                              tNode.status !== "draft")) &&
+                                            tNode.congestion && (
                                               <Chip>
-                                                {node.congestion === "bbr"
+                                                {tNode.congestion === "bbr"
                                                   ? "BBR"
                                                   : "Brutal"}
                                               </Chip>
                                             )}
-                                          {(node.version ||
-                                            (node.status &&
-                                              node.status !== "draft")) &&
-                                            node.tuning && (
+                                          {(tNode.version ||
+                                            (tNode.status &&
+                                              tNode.status !== "draft")) &&
+                                            tNode.tuning && (
                                               <Chip>
                                                 {translate("Adaptive tuning")}
                                               </Chip>
                                             )}
-                                          {(node.version ||
-                                            (node.status &&
-                                              node.status !== "draft")) &&
-                                            (node.tlsSecurity === "pinned" ? (
+                                          {(tNode.version ||
+                                            (tNode.status &&
+                                              tNode.status !== "draft")) &&
+                                            (tNode.tlsSecurity === "pinned" ? (
                                               <>
                                                 <Chip mono>
                                                   pinSHA256 ·{" "}
-                                                  {node.sni || DEFAULT_TLS_SNI}
+                                                  {tNode.sni || DEFAULT_TLS_SNI}
                                                 </Chip>
-                                                {node.ech && (
+                                                {tNode.ech && (
                                                   <Chip className="accent-chip">
                                                     ECH
                                                   </Chip>
@@ -1290,154 +1578,234 @@ function App() {
                                             ))}
                                         </div>
                                       </div>
-                                      <Button
-                                        className="quick-row-btn"
-                                        onClick={() =>
-                                          operation(
-                                            node,
-                                            node.version ? "upgrade" : "deploy",
-                                          )
-                                        }
-                                      >
-                                        <span>
-                                          {node.version
-                                            ? translate("Upgrade")
-                                            : translate("Deploy")}
-                                        </span>
-                                        <span className="mono muted">
-                                          {node.version || "v2"}
-                                        </span>
-                                      </Button>
-                                      <Button
-                                        className="quick-row-btn"
-                                        onClick={() => inspectDrift(node)}
-                                      >
-                                        <span>{translate("Config drift")}</span>
-                                        <Badge
-                                          tone={node.drift ? "warning" : "good"}
-                                        >
-                                          {node.drift
-                                            ? translate("Drift")
-                                            : translate("Clean")}
-                                        </Badge>
-                                      </Button>
-                                    </>
-                                  ) : (
-                                    <Button
-                                      variant="primary"
-                                      onClick={() => save("nodes")}
-                                    >
-                                      <Plus size={14} />
-                                      {translate("Attach Node")}
-                                    </Button>
+                                    </ScrollArea>
                                   )}
-                                  <Button
-                                    className="quick-row-btn"
-                                    onClick={() => reset(h)}
-                                  >
-                                    <span>{translate("Reset usage")}</span>
-                                    <span className="mono muted">
-                                      {when(h.usage.next)}
-                                    </span>
-                                  </Button>
-                                  <Button
-                                    className="quick-row-btn"
-                                    onClick={() => history(h)}
-                                  >
-                                    <span>{translate("Full telemetry")}</span>
-                                    <ArrowUpRight size={14} className="muted" />
-                                  </Button>
+                                  <div className="expanded-quick-actions">
+                                    {tNode ? (
+                                      <>
+                                        <Button
+                                          className="quick-row-btn"
+                                          onClick={() =>
+                                            operation(
+                                              tNode,
+                                              tNode.version
+                                                ? "upgrade"
+                                                : "deploy",
+                                            )
+                                          }
+                                        >
+                                          <span>
+                                            {tNode.version
+                                              ? translate("Upgrade")
+                                              : translate("Deploy")}
+                                          </span>
+                                          <span className="mono muted">
+                                            {tNode.version || "v2"}
+                                          </span>
+                                        </Button>
+                                        <Button
+                                          className="quick-row-btn"
+                                          onClick={() => inspectDrift(tNode)}
+                                        >
+                                          <span>{translate("Config drift")}</span>
+                                          <Badge
+                                            tone={
+                                              tNode.drift ? "warning" : "good"
+                                            }
+                                          >
+                                            {tNode.drift
+                                              ? translate("Drift")
+                                              : translate("Clean")}
+                                          </Badge>
+                                        </Button>
+                                      </>
+                                    ) : (
+                                      <Button
+                                        variant="primary"
+                                        onClick={() => save("nodes")}
+                                      >
+                                        <Plus size={14} />
+                                        {translate("Attach Node")}
+                                      </Button>
+                                    )}
+                                    <Button
+                                      className="quick-row-btn"
+                                      onClick={() => reset(target)}
+                                    >
+                                      <span>{translate("Reset usage")}</span>
+                                      <span className="mono muted">
+                                        {when(target.usage.next)}
+                                      </span>
+                                    </Button>
+                                    <Button
+                                      className="quick-row-btn"
+                                      onClick={() => history(target)}
+                                    >
+                                      <span>{translate("Full telemetry")}</span>
+                                      <ArrowUpRight
+                                        size={14}
+                                        className="muted"
+                                      />
+                                    </Button>
+                                  </div>
                                 </div>
                               </div>
                             </article>
                           );
-                        }
+                        };
 
                         return (
-                          <article
-                            key={h.id}
-                            className="spatial-card spatial-compact"
-                            onClick={() =>
-                              transitionSpatialCards(() =>
-                                setExpandedHost(h.id),
-                              )
-                            }
-                            role="button"
-                            tabIndex={0}
-                            onKeyDown={(e) => {
-                              if (
-                                e.target === e.currentTarget &&
-                                (e.key === "Enter" || e.key === " ")
-                              ) {
-                                e.preventDefault();
-                                transitionSpatialCards(() =>
-                                  setExpandedHost(h.id),
-                                );
+                          <Fragment key={h.id}>
+                            <article
+                              className={
+                                "spatial-card spatial-compact" +
+                                (isActive ? " is-active" : "") +
+                                (isControlPlane ? " control-plane-card" : "")
                               }
-                            }}
-                          >
-                            <div className="compact-head">
-                              <span
-                                className={
-                                  "status-dot " +
-                                  (!h.enabled
-                                    ? "neutral"
-                                    : h.reachable
-                                      ? "good"
-                                      : "warning")
+                              onClick={toggleExpand}
+                              role="button"
+                              tabIndex={0}
+                              aria-expanded={isActive}
+                              onKeyDown={(e) => {
+                                if (
+                                  e.target === e.currentTarget &&
+                                  (e.key === "Enter" || e.key === " ")
+                                ) {
+                                  e.preventDefault();
+                                  toggleExpand();
                                 }
-                              />
-                              <div className="entity-title">
-                                <strong className="compact-name">
-                                  {h.name}
-                                </strong>
-                                <small className="mono">{h.address}</small>
-                              </div>
-                              <Sparkline
-                                points={hostSparkPoints(h)}
-                                tone={
-                                  (h.cpu || 0) >= 85
-                                    ? "danger"
-                                    : h.reachable
-                                      ? "accent"
-                                      : "warning"
-                                }
-                              />
-                            </div>
-                            <div className="entity-meters">
-                              <MiniBar label="CPU" percent={h.cpu} />
-                              <MiniBar label="RAM" percent={h.memory} />
-                            </div>
-                            <QuotaBar row={h} />
-                            <div className="compact-foot">
-                              {node ? (
-                                <div className="chip-group">
-                                  <Badge tone={node.drift ? "warning" : nTone}>
-                                    {node.name}
-                                    {node.drift
-                                      ? ` · ${translate("Drift")}`
-                                      : ` · ${translate("{0} online", clients)}`}
-                                  </Badge>
-                                  {(node.version ||
-                                    (node.status &&
-                                      node.status !== "draft")) &&
-                                    node.tlsSecurity !== "pinned" && (
-                                      <Badge tone="warning">
-                                        {translate("Legacy TLS")}
-                                      </Badge>
-                                    )}
+                              }}
+                            >
+                              <div className="compact-head">
+                                <span
+                                  className={
+                                    "status-dot " +
+                                    (isControlPlane
+                                      ? controlPlaneFresh
+                                        ? "good"
+                                        : "warning"
+                                      : !h.enabled
+                                        ? "neutral"
+                                        : h.reachable
+                                          ? "good"
+                                          : "warning")
+                                  }
+                                />
+                                <div className="entity-title">
+                                  <strong className="compact-name">
+                                    {h.name}
+                                  </strong>
+                                  <small className="mono">
+                                    {isControlPlane
+                                      ? h.hostname || translate("Local host")
+                                      : h.address}
+                                  </small>
                                 </div>
+                                {isControlPlane ? (
+                                  <Badge tone="neutral">
+                                    {translate("Local host")}
+                                  </Badge>
+                                ) : (
+                                  <Sparkline
+                                    points={hostSparkPoints(h)}
+                                    tone={
+                                      (h.cpu || 0) >= 85
+                                        ? "danger"
+                                        : h.reachable
+                                          ? "accent"
+                                          : "warning"
+                                    }
+                                  />
+                                )}
+                              </div>
+                              <div className="entity-meters">
+                                <MiniBar label="CPU" percent={h.cpu} />
+                                <MiniBar label="RAM" percent={h.memory} />
+                              </div>
+                              {isControlPlane ? (
+                                <MiniBar
+                                  label={translate("Disk")}
+                                  percent={h.disk}
+                                />
                               ) : (
-                                <Chip>{translate("No node")}</Chip>
+                                <QuotaBar row={h} />
                               )}
-                              <span className="expand-cue">
-                                <ChevronDown size={14} />
-                              </span>
-                            </div>
-                          </article>
+                              <div className="compact-foot">
+                                {isControlPlane ? (
+                                  <div className="chip-group">
+                                    <Chip mono>
+                                      {translate(
+                                        "Up {0}",
+                                        formatUptime(h.uptime),
+                                      )}
+                                    </Chip>
+                                    <Badge
+                                      tone={
+                                        workerAlive("monitor") &&
+                                        workerAlive("operations")
+                                          ? "good"
+                                          : "warning"
+                                      }
+                                    >
+                                      {workerAlive("monitor") &&
+                                      workerAlive("operations")
+                                        ? translate("Workers OK")
+                                        : translate("Worker stale")}
+                                    </Badge>
+                                  </div>
+                                ) : node ? (
+                                  <div className="chip-group">
+                                    <Badge tone={node.drift ? "warning" : nTone}>
+                                      {node.name}
+                                      {node.drift
+                                        ? ` · ${translate("Drift")}`
+                                        : ` · ${translate("{0} online", clients)}`}
+                                    </Badge>
+                                    {(node.version ||
+                                      (node.status &&
+                                        node.status !== "draft")) &&
+                                      node.tlsSecurity !== "pinned" && (
+                                        <Badge tone="warning">
+                                          {translate("Legacy TLS")}
+                                        </Badge>
+                                      )}
+                                  </div>
+                                ) : (
+                                  <Chip>{translate("No node")}</Chip>
+                                )}
+                                <span className="expand-cue">
+                                  {isActive ? (
+                                    <ChevronUp size={14} />
+                                  ) : (
+                                    <ChevronDown size={14} />
+                                  )}
+                                </span>
+                              </div>
+                            </article>
+                            {idx === infraInsertAfter &&
+                              renderExpanded(infraItems[expandedInfraIdx])}
+                          </Fragment>
                         );
                       })}
                     </div>
+                  )}
+                  {!state.hosts.length && (
+                    <section className="panel infra-empty-panel">
+                      <Empty
+                        title={translate("No hosts connected")}
+                        action={
+                          <Button
+                            variant="primary"
+                            onClick={() => save("hosts")}
+                          >
+                            <Plus size={15} />
+                            {translate("Add VPS")}
+                          </Button>
+                        }
+                      >
+                        {translate("Add a VPS to start managing your network.")}
+                      </Empty>
+                    </section>
                   )}
                 </>
               )}
@@ -1485,59 +1853,18 @@ function App() {
                     </section>
                   ) : (
                     <div className="spatial-grid">
-                      {orderedUsers.map((u) => {
+                      {visibleUsers.map((u, idx) => {
                         const expired =
                           u.expires && Date.parse(u.expires) < Date.now();
                         const onlineCount = state.nodes.reduce(
                           (sum, n) => sum + (n.online?.[u.id] || 0),
                           0,
                         );
-                        const isExpanded = expandedUser === u.id;
-                        const userActions: [string, () => void][] = [
-                          [translate("Edit"), () => save("users", u)],
-                          [
-                            translate("Subscription links"),
-                            () => void links(u),
-                          ],
-                          [
-                            translate("Portal password link"),
-                            () => void passwordLink(u),
-                          ],
-                          [translate("Full telemetry"), () => history(u)],
-                          [translate("Reset usage"), () => reset(u)],
-                          ...(["subscription", "vpn", "both"] as const).map(
-                            (target) =>
-                              [
-                                translate(credentialRotation[target].label),
-                                () =>
-                                  setModal(() => (
-                                    <Confirm
-                                      title={translate(
-                                        credentialRotation[target].title,
-                                      )}
-                                      action={translate("Rotate")}
-                                      onClose={() => setModal(null)}
-                                      onConfirm={async () => {
-                                        await run(() =>
-                                          api(`users/${u.id}/rotate`, "POST", {
-                                            target,
-                                          }),
-                                        );
-                                        setModal(null);
-                                      }}
-                                    >
-                                      <p>
-                                        {translate(
-                                          credentialRotation[target]
-                                            .description,
-                                        )}
-                                      </p>
-                                    </Confirm>
-                                  )),
-                              ] as [string, () => void],
-                          ),
-                          [translate("Delete"), () => remove("users", u)],
-                        ];
+                        const isActive = expandedUser === u.id;
+                        const toggleExpand = () =>
+                          transitionSpatialCards(() =>
+                            setExpandedUser(isActive ? null : u.id),
+                          );
                         const statusTone =
                           !u.enabled || u.exhausted || expired
                             ? "warning"
@@ -1550,34 +1877,113 @@ function App() {
                               ? translate("Exhausted")
                               : translate("Active");
 
-                        if (isExpanded) {
+                        const renderExpandedUser = (target: Row) => {
+                          const tExpired =
+                            target.expires &&
+                            Date.parse(target.expires) < Date.now();
+                          const tOnline = state.nodes.reduce(
+                            (sum, n) => sum + (n.online?.[target.id] || 0),
+                            0,
+                          );
+                          const tTone =
+                            !target.enabled || target.exhausted || tExpired
+                              ? "warning"
+                              : "good";
+                          const tStatus = !target.enabled
+                            ? translate("Disabled")
+                            : tExpired
+                              ? translate("Expired")
+                              : target.exhausted
+                                ? translate("Exhausted")
+                                : translate("Active");
+                          const userActions: [string, () => void][] = [
+                            [translate("Edit"), () => save("users", target)],
+                            [
+                              translate("Subscription links"),
+                              () => void links(target),
+                            ],
+                            [
+                              translate("Portal password link"),
+                              () => void passwordLink(target),
+                            ],
+                            [
+                              translate("Full telemetry"),
+                              () => history(target),
+                            ],
+                            [translate("Reset usage"), () => reset(target)],
+                            ...(["subscription", "vpn", "both"] as const).map(
+                              (rotTarget) =>
+                                [
+                                  translate(
+                                    credentialRotation[rotTarget].label,
+                                  ),
+                                  () =>
+                                    setModal(() => (
+                                      <Confirm
+                                        title={translate(
+                                          credentialRotation[rotTarget].title,
+                                        )}
+                                        action={translate("Rotate")}
+                                        onClose={() => setModal(null)}
+                                        onConfirm={async () => {
+                                          await run(() =>
+                                            api(
+                                              `users/${target.id}/rotate`,
+                                              "POST",
+                                              {
+                                                target: rotTarget,
+                                              },
+                                            ),
+                                          );
+                                          setModal(null);
+                                        }}
+                                      >
+                                        <p>
+                                          {translate(
+                                            credentialRotation[rotTarget]
+                                              .description,
+                                          )}
+                                        </p>
+                                      </Confirm>
+                                    )),
+                                ] as [string, () => void],
+                            ),
+                            [
+                              translate("Delete"),
+                              () => remove("users", target),
+                            ],
+                          ];
+
                           return (
                             <article
-                              key={u.id}
+                              key={`expanded-${target.id}`}
                               className="spatial-card spatial-expanded"
                             >
                               <div className="expanded-head">
                                 <div className="expanded-head-left">
                                   <span className="avatar">
-                                    {u.name[0]?.toUpperCase()}
+                                    {target.name[0]?.toUpperCase()}
                                   </span>
-                                  <h2>{u.name}</h2>
-                                  {u.username && (
-                                    <Chip mono>@{u.username}</Chip>
+                                  <h2>{target.name}</h2>
+                                  {target.username && (
+                                    <Chip mono>@{target.username}</Chip>
                                   )}
-                                  {u.note && (
-                                    <span className="muted">{u.note}</span>
+                                  {target.note && (
+                                    <span className="muted">{target.note}</span>
                                   )}
-                                  <Badge tone={statusTone}>{statusLabel}</Badge>
+                                  <Badge tone={tTone}>{tStatus}</Badge>
                                   <Chip mono>
-                                    {translate("{0} online", onlineCount)}
+                                    {translate("{0} online", tOnline)}
                                   </Chip>
-                                  {u.expires && (
+                                  {target.expires && (
                                     <Chip mono>
-                                      {translate("Exp {0}", when(u.expires))}
+                                      {translate(
+                                        "Exp {0}",
+                                        when(target.expires),
+                                      )}
                                     </Chip>
                                   )}
-                                  {u.usageStale && (
+                                  {target.usageStale && (
                                     <Badge tone="warning">
                                       {translate("Stale")}
                                     </Badge>
@@ -1586,25 +1992,25 @@ function App() {
                                 <div className="expanded-head-right">
                                   <SegmentedControl
                                     value={inlineRange}
-                                    options={[
-                                      ["24", translate("24h")],
-                                      ["168", translate("7d")],
-                                      ["720", translate("30d")],
-                                    ]}
+                                    options={inlineRangeOptions}
                                     onChange={setInlineRange}
                                   />
                                   <Button
                                     variant="primary"
-                                    onClick={() => void links(u)}
+                                    onClick={() => void links(target)}
                                   >
                                     <Link2 size={14} />
                                     {translate("Links")}
                                   </Button>
-                                  <Button onClick={() => void passwordLink(u)}>
+                                  <Button
+                                    onClick={() => void passwordLink(target)}
+                                  >
                                     <KeyRound size={14} />
                                     {translate("Password link")}
                                   </Button>
-                                  <Button onClick={() => save("users", u)}>
+                                  <Button
+                                    onClick={() => save("users", target)}
+                                  >
                                     {translate("Edit")}
                                   </Button>
                                   <Actions items={userActions} />
@@ -1624,144 +2030,167 @@ function App() {
                               </div>
                               <div className="expanded-zones">
                                 <InlineTelemetry
-                                  entity={u}
+                                  entity={target}
                                   range={inlineRange}
                                 />
                                 <div className="expanded-actions-col">
                                   <span className="kpi-label">
                                     {translate(
                                       "AUTHORIZED NODES ({0})",
-                                      u.nodeIds.length,
+                                      target.nodeIds.length,
                                     )}
                                   </span>
-                                  <div className="chip-group">
-                                    {u.nodeIds.map((nid: string) => {
-                                      const n = state.nodes.find(
-                                        (x) => x.id === nid,
-                                      );
-                                      if (!n) return null;
-                                      const on = n.online?.[u.id] || 0;
-                                      return (
-                                        <Chip key={nid} mono={on > 0}>
-                                          {n.name}
-                                          {on > 0 ? ` · ${on}` : ""}
-                                        </Chip>
-                                      );
-                                    })}
-                                  </div>
-                                  {u.templateIds?.length > 0 && (
-                                    <div className="chip-group">
-                                      {u.templateIds.map((tid: string) => {
-                                        const t = state.templates.find(
-                                          (x) => x.id === tid,
-                                        );
-                                        if (!t) return null;
-                                        const isDefault =
-                                          u.defaultTemplates?.[t.format] ===
-                                          tid;
-                                        return (
-                                          <Chip
-                                            key={tid}
-                                            className={
-                                              isDefault ? "accent-chip" : ""
-                                            }
-                                          >
-                                            {t.name} · {formatLabel(t.format)}
-                                            {isDefault
-                                              ? ` · ${translate("Default")}`
-                                              : ""}
-                                          </Chip>
-                                        );
-                                      })}
+                                  <ScrollArea
+                                    axis="y"
+                                    className="expanded-chips-scroll"
+                                  >
+                                    <div className="expanded-chips-inner">
+                                      <div className="chip-group">
+                                        {target.nodeIds.map((nid: string) => {
+                                          const n = state.nodes.find(
+                                            (x) => x.id === nid,
+                                          );
+                                          if (!n) return null;
+                                          const on = n.online?.[target.id] || 0;
+                                          return (
+                                            <Chip key={nid} mono={on > 0}>
+                                              {n.name}
+                                              {on > 0 ? ` · ${on}` : ""}
+                                            </Chip>
+                                          );
+                                        })}
+                                      </div>
+                                      {target.templateIds?.length > 0 && (
+                                        <div className="chip-group">
+                                          {target.templateIds.map(
+                                            (tid: string) => {
+                                              const t = state.templates.find(
+                                                (x) => x.id === tid,
+                                              );
+                                              if (!t) return null;
+                                              const isDefault =
+                                                target.defaultTemplates?.[
+                                                  t.format
+                                                ] === tid;
+                                              return (
+                                                <Chip
+                                                  key={tid}
+                                                  className={
+                                                    isDefault
+                                                      ? "accent-chip"
+                                                      : ""
+                                                  }
+                                                >
+                                                  {t.name} ·{" "}
+                                                  {formatLabel(t.format)}
+                                                  {isDefault
+                                                    ? ` · ${translate("Default")}`
+                                                    : ""}
+                                                </Chip>
+                                              );
+                                            },
+                                          )}
+                                        </div>
+                                      )}
                                     </div>
-                                  )}
-                                  <Button
-                                    className="quick-row-btn"
-                                    onClick={() => reset(u)}
-                                  >
-                                    <span>{translate("Reset usage")}</span>
-                                    <span className="mono muted">
-                                      {when(u.usage.next)}
-                                    </span>
-                                  </Button>
-                                  <Button
-                                    className="quick-row-btn"
-                                    onClick={() => history(u)}
-                                  >
-                                    <span>{translate("Full telemetry")}</span>
-                                    <ArrowUpRight size={14} className="muted" />
-                                  </Button>
+                                  </ScrollArea>
+                                  <div className="expanded-quick-actions">
+                                    <Button
+                                      className="quick-row-btn"
+                                      onClick={() => reset(target)}
+                                    >
+                                      <span>{translate("Reset usage")}</span>
+                                      <span className="mono muted">
+                                        {when(target.usage.next)}
+                                      </span>
+                                    </Button>
+                                    <Button
+                                      className="quick-row-btn"
+                                      onClick={() => history(target)}
+                                    >
+                                      <span>{translate("Full telemetry")}</span>
+                                      <ArrowUpRight
+                                        size={14}
+                                        className="muted"
+                                      />
+                                    </Button>
+                                  </div>
                                 </div>
                               </div>
                             </article>
                           );
-                        }
+                        };
 
                         return (
-                          <article
-                            key={u.id}
-                            className="spatial-card spatial-compact"
-                            onClick={() =>
-                              transitionSpatialCards(() =>
-                                setExpandedUser(u.id),
-                              )
-                            }
-                            role="button"
-                            tabIndex={0}
-                            onKeyDown={(e) => {
-                              if (
-                                e.target === e.currentTarget &&
-                                (e.key === "Enter" || e.key === " ")
-                              ) {
-                                e.preventDefault();
-                                transitionSpatialCards(() =>
-                                  setExpandedUser(u.id),
-                                );
+                          <Fragment key={u.id}>
+                            <article
+                              className={
+                                "spatial-card spatial-compact" +
+                                (isActive ? " is-active" : "")
                               }
-                            }}
-                          >
-                            <div className="compact-head">
-                              <span className="avatar">
-                                {u.name[0]?.toUpperCase()}
-                              </span>
-                              <div className="entity-title">
-                                <strong className="compact-name">
-                                  {u.name}
-                                </strong>
-                                <small>
-                                  {u.username
-                                    ? `@${u.username}${u.note ? ` · ${u.note}` : ""}`
-                                    : u.note || "—"}
-                                </small>
+                              onClick={toggleExpand}
+                              role="button"
+                              tabIndex={0}
+                              aria-expanded={isActive}
+                              onKeyDown={(e) => {
+                                if (
+                                  e.target === e.currentTarget &&
+                                  (e.key === "Enter" || e.key === " ")
+                                ) {
+                                  e.preventDefault();
+                                  toggleExpand();
+                                }
+                              }}
+                            >
+                              <div className="compact-head">
+                                <span className="avatar">
+                                  {u.name[0]?.toUpperCase()}
+                                </span>
+                                <div className="entity-title">
+                                  <strong className="compact-name">
+                                    {u.name}
+                                  </strong>
+                                  <small>
+                                    {u.username
+                                      ? `@${u.username}${u.note ? ` · ${u.note}` : ""}`
+                                      : u.note || "—"}
+                                  </small>
+                                </div>
+                                <Badge tone={statusTone}>{statusLabel}</Badge>
+                                <Button
+                                  variant="icon"
+                                  aria-label={translate("Subscription links")}
+                                  title={translate("Subscription links")}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void links(u);
+                                  }}
+                                >
+                                  <Link2 size={14} />
+                                </Button>
                               </div>
-                              <Badge tone={statusTone}>{statusLabel}</Badge>
-                              <Button
-                                variant="icon"
-                                aria-label={translate("Subscription links")}
-                                title={translate("Subscription links")}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void links(u);
-                                }}
-                              >
-                                <Link2 size={14} />
-                              </Button>
-                            </div>
-                            <QuotaBar row={u} />
-                            <div className="compact-foot">
-                              <div className="chip-group">
-                                <Chip mono>
-                                  {translate("{0} nodes", u.nodeIds.length)}
-                                </Chip>
-                                <Chip mono>
-                                  {translate("{0} online", onlineCount)}
-                                </Chip>
+                              <QuotaBar row={u} />
+                              <div className="compact-foot">
+                                <div className="chip-group">
+                                  <Chip mono>
+                                    {translate("{0} nodes", u.nodeIds.length)}
+                                  </Chip>
+                                  <Chip mono>
+                                    {translate("{0} online", onlineCount)}
+                                  </Chip>
+                                </div>
+                                <span className="expand-cue">
+                                  {isActive ? (
+                                    <ChevronUp size={14} />
+                                  ) : (
+                                    <ChevronDown size={14} />
+                                  )}
+                                </span>
                               </div>
-                              <span className="expand-cue">
-                                <ChevronDown size={14} />
-                              </span>
-                            </div>
-                          </article>
+                            </article>
+                            {idx === userInsertAfter &&
+                              renderExpandedUser(visibleUsers[expandedUserIdx])}
+                          </Fragment>
                         );
                       })}
                     </div>

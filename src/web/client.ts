@@ -74,6 +74,26 @@ export function formatUptime(seconds?: number | null): string {
     : translate("{0}m", Math.max(1, mins));
 }
 
+export function bucketUnitSuffix(
+  bucketMs?: number,
+  resolution?: string,
+): string {
+  if (bucketMs && Number.isFinite(bucketMs)) {
+    if (bucketMs >= 86_400_000) return translate("/day");
+    if (bucketMs >= 3_600_000) {
+      const hours = Math.round(bucketMs / 3_600_000);
+      return hours === 1 ? translate("/hr") : translate("/{0}h", hours);
+    }
+    const mins = Math.max(1, Math.round(bucketMs / 60_000));
+    return mins === 1 ? translate("/min") : translate("/{0}m", mins);
+  }
+  return resolution === "day"
+    ? translate("/day")
+    : resolution === "hour"
+      ? translate("/hr")
+      : translate("/min");
+}
+
 export function directionMeta(dir?: string): { short: string; label: string } {
   if (dir === "out")
     return {

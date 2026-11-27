@@ -261,7 +261,21 @@ export function createApp(s: Store) {
         );
       else s.resolveAlert("platform", `worker-${name}`);
     }
+    const cpRow = s.db
+      .query<{ value: string }, []>(
+        "SELECT value FROM metadata WHERE key='control-plane'",
+      )
+      .get();
+    let controlPlane: Record<string, any> | null = null;
+    if (cpRow) {
+      try {
+        const parsed = JSON.parse(cpRow.value);
+        const { cpuTotal: _t, cpuIdle: _i, ...pub } = parsed;
+        controlPlane = pub;
+      } catch {}
+    }
     return c.json({
+      controlPlane,
       hosts: s.list("host").map(view),
       nodes: s.list("node"),
       users: s.list("user").map(view),

@@ -15,7 +15,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, formatUptime, when } from "./client";
+import { api, bucketUnitSuffix, formatUptime, when } from "./client";
 import {
   DateTimePicker,
   Empty,
@@ -107,6 +107,7 @@ type HistorySnapshot = {
   start: number;
   end: number;
   resolution?: string;
+  bucketMs?: number;
   samples: Row[];
   events: Row[];
 };
@@ -150,7 +151,7 @@ export function History({
     setLoading(true);
     setError("");
     api(
-      `history/${entity.id}?start=${start}&end=${end}`,
+      `history/${entity.id}?start=${start}&end=${end}&maxPoints=180`,
       "GET",
       undefined,
       controller.signal,
@@ -162,6 +163,8 @@ export function History({
             start,
             end,
             resolution: res.resolution,
+            bucketMs:
+              typeof res.bucketMs === "number" ? res.bucketMs : undefined,
             samples: res.samples || [],
             events: res.events || [],
           });
@@ -184,13 +187,11 @@ export function History({
   const current = snapshot?.entityId === entity.id ? snapshot : null,
     samples = current?.samples ?? [],
     events = current?.events ?? [],
-    observations = samples.filter((p) => p.reachable !== null),
-    unitSuffix =
-      current?.resolution === "day"
-        ? translate("/day")
-        : current?.resolution === "hour"
-          ? translate("/hr")
-          : translate("/min"),
+    isHostLike = entity.kind === "host" || entity.kind === "control-plane",
+    observations = samples.filter(
+      (p) => p.reachable !== null && p.reachable !== undefined,
+    ),
+    unitSuffix = bucketUnitSuffix(current?.bucketMs, current?.resolution),
     createdAt =
       typeof entity.created === "number"
         ? entity.created
@@ -208,14 +209,17 @@ export function History({
     coverage = expected
       ? Math.min(
           100,
-          (observations.reduce((sum, p) => sum + p.observations, 0) /
+          (observations.reduce((sum, p) => sum + (p.observations || 0), 0) /
             expected) *
             100,
         )
       : 0,
     availability = observations.length
-      ? (observations.reduce((sum, p) => sum + p.successes, 0) /
-          observations.reduce((sum, p) => sum + p.observations, 0)) *
+      ? (observations.reduce((sum, p) => sum + (p.successes || 0), 0) /
+          Math.max(
+            1,
+            observations.reduce((sum, p) => sum + (p.observations || 0), 0),
+          )) *
         100
       : null,
     incompleteCustom = range === "custom" && (!custom.start || !custom.end);
@@ -226,13 +230,14 @@ export function History({
       subtitle={
         entity.address
           ? `${entity.address}${entity.port ? ":" + entity.port : ""}`
-          : undefined
+          : entity.hostname || undefined
       }
       onClose={onClose}
       actions={
         <SegmentedControl
           value={range}
           options={[
+            ["1", translate("1h")],
             ["24", translate("24h")],
             ["168", translate("7d")],
             ["720", translate("30d")],
@@ -268,7 +273,7 @@ export function History({
             {localizeError(error)}
           </p>
         )}
-        {entity.kind === "host" && (
+        {isHostLike && (
           <div className="telemetry-kpis">
             <div className="studio-card telemetry-kpi-card">
               <RingMeter
@@ -335,7 +340,7 @@ export function History({
           <>
             <div
               className={
-                entity.kind === "host" && samples.some((p) => p.cpu !== null)
+                isHostLike && samples.some((p) => p.cpu !== null && p.cpu !== undefined)
                   ? "charts-grid"
                   : ""
               }
@@ -387,18 +392,26 @@ export function History({
                               fontSize: "12px",
                             }}
                             labelStyle={{ color: "var(--muted)" }}
+                            formatter={(value: any, name: any) => [
+                              typeof value === "number"
+                                ? `${formatNumber(value, 2)} MiB`
+                                : value,
+                              name,
+                            ]}
                           />
                           <Area
                             dataKey="outMiB"
                             name={translate("Outbound MiB{0}", unitSuffix)}
                             stroke="var(--accent)"
                             fill="var(--accent-soft)"
+                            isAnimationActive={false}
                           />
                           <Area
                             dataKey="inMiB"
                             name={translate("Inbound MiB{0}", unitSuffix)}
                             stroke="var(--good)"
                             fill="var(--good-soft)"
+                            isAnimationActive={false}
                           />
                         </AreaChart>
                       </ResponsiveContainer>
@@ -406,8 +419,8 @@ export function History({
                   )}
                 </div>
               </section>
-              {entity.kind === "host" &&
-                samples.some((p) => p.cpu !== null) && (
+              {isHostLike &&
+                samples.some((p) => p.cpu !== null && p.cpu !== undefined) && (
                   <section className="panel">
                     <div className="panel-heading compact">
                       <h2>{translate("Resource utilization (%)")}</h2>
@@ -447,30 +460,60 @@ export function History({
                                 fontSize: "12px",
                               }}
                               labelStyle={{ color: "var(--muted)" }}
+                              formatter={(value: any, name: any, item: any) => {
+                                const num =
+                                  typeof value === "number"
+                                    ? formatNumber(value, 1)
+                                    : value;
+                                const key = item?.dataKey as string | undefined;
+                                const peak =
+                                  key === "cpu"
+                                    ? item?.payload?.cpu_max
+                                    : key === "memory"
+                                      ? item?.payload?.memory_max
+                                      : key === "disk"
+                                        ? item?.payload?.disk_max
+                                        : null;
+                                if (
+                                  typeof peak === "number" &&
+                                  typeof value === "number" &&
+                                  peak > value + 0.05
+                                ) {
+                                  return [
+                                    `${num}% (${translate("peak {0}%", formatNumber(peak, 1))})`,
+                                    name,
+                                  ];
+                                }
+                                return [`${num}%`, name];
+                              }}
                             />
                             <Area
                               dataKey="cpu"
                               name={translate("CPU mean")}
                               stroke="var(--accent)"
                               fill="var(--accent-soft)"
+                              isAnimationActive={false}
                             />
                             <Area
                               dataKey="cpu_max"
                               name={translate("CPU max")}
                               stroke="var(--warning)"
                               fill="none"
+                              isAnimationActive={false}
                             />
                             <Area
                               dataKey="memory"
                               name={translate("Memory mean")}
                               stroke="var(--good)"
                               fill="none"
+                              isAnimationActive={false}
                             />
                             <Area
                               dataKey="disk"
                               name={translate("Disk mean")}
                               stroke="var(--muted)"
                               fill="none"
+                              isAnimationActive={false}
                             />
                           </AreaChart>
                         </ResponsiveContainer>

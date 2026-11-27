@@ -169,33 +169,99 @@ export function registerOperationsRoutes({
     return c.json({ ok: true });
   });
 
+  const BUCKET_LADDER = [
+    60_000,
+    300_000,
+    900_000,
+    3_600_000,
+    7_200_000,
+    21_600_000,
+    86_400_000,
+  ] as const;
+
+  function pickBucket(start: number, end: number, rawMaxPoints?: string) {
+    const now = Date.now(),
+      cutoffHour = now - 30 * 86400000 - 600000,
+      cutoffDay = now - 365 * 86400000 - 3600000;
+    const minBucket =
+      start < cutoffDay ? 86_400_000 : start < cutoffHour ? 3_600_000 : 60_000;
+    const parsedMax = rawMaxPoints ? Number(rawMaxPoints) : 180;
+    const maxPoints = Number.isFinite(parsedMax)
+      ? Math.max(24, Math.min(360, Math.floor(parsedMax)))
+      : 180;
+    const span = end - start;
+    const bucket =
+      BUCKET_LADDER.find((b) => b >= minBucket && span / b <= maxPoints) ??
+      86_400_000;
+    const resolution =
+      bucket >= 86_400_000 ? "day" : bucket >= 3_600_000 ? "hour" : "minute";
+    return { bucket, resolution };
+  }
+
   app.get("/api/history/:id", (c) => {
     const id = c.req.param("id");
-    if (!s.get(id)) throw Error("Record not found");
+    const isControlPlane = id === "control-plane";
+    const target = isControlPlane ? null : s.get(id);
+    if (!isControlPlane && !target) throw Error("Record not found");
     const start = Number(c.req.query("start") || Date.now() - 86400000),
       end = Number(c.req.query("end") || Date.now());
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
       throw Error("Invalid time range");
-    const now = Date.now(),
-      cutoffHour = now - 30 * 86400000 - 600000,
-      cutoffDay = now - 365 * 86400000 - 3600000;
-    const resolution =
-      start < cutoffDay ? "day" : start < cutoffHour ? "hour" : "minute";
-    const bucket =
-      resolution === "day" ? 86400000 : resolution === "hour" ? 3600000 : 60000;
-    const samples = s.db
-      .query(
-        `SELECT CAST(at/? AS INTEGER)*? AS at,SUM(inbound) AS inbound,SUM(outbound) AS outbound,SUM(cpu*metric_count)/NULLIF(SUM(metric_count),0) AS cpu,SUM(memory*metric_count)/NULLIF(SUM(metric_count),0) AS memory,SUM(disk*metric_count)/NULLIF(SUM(metric_count),0) AS disk,CAST(SUM(successes) AS REAL)/NULLIF(SUM(observations),0) AS reachable,MAX(cpu_max) AS cpu_max,MAX(memory_max) AS memory_max,MAX(disk_max) AS disk_max,SUM(observations) AS observations,SUM(successes) AS successes FROM samples WHERE entity=? AND at>=? AND at<=? GROUP BY CAST(at/? AS INTEGER) ORDER BY at`,
-      )
-      .all(bucket, bucket, id, start, end, bucket);
+    const { bucket, resolution } = pickBucket(
+      start,
+      end,
+      c.req.query("maxPoints"),
+    );
+    const includeEvents = c.req.query("includeEvents") !== "0";
+    const hasHostMetrics = isControlPlane || target?.kind === "host";
+    const samples = hasHostMetrics
+      ? s.db
+          .query(
+            `SELECT CAST(at/? AS INTEGER)*? AS at,SUM(inbound) AS inbound,SUM(outbound) AS outbound,ROUND(SUM(cpu*metric_count)/NULLIF(SUM(metric_count),0),1) AS cpu,ROUND(SUM(memory*metric_count)/NULLIF(SUM(metric_count),0),1) AS memory,ROUND(SUM(disk*metric_count)/NULLIF(SUM(metric_count),0),1) AS disk,ROUND(CAST(SUM(successes) AS REAL)/NULLIF(SUM(observations),0),4) AS reachable,ROUND(MAX(cpu_max),1) AS cpu_max,ROUND(MAX(memory_max),1) AS memory_max,ROUND(MAX(disk_max),1) AS disk_max,SUM(observations) AS observations,SUM(successes) AS successes FROM samples WHERE entity=? AND at>=? AND at<=? GROUP BY CAST(at/? AS INTEGER) ORDER BY at`,
+          )
+          .all(bucket, bucket, id, start, end, bucket)
+      : s.db
+          .query(
+            `SELECT CAST(at/? AS INTEGER)*? AS at,SUM(inbound) AS inbound,SUM(outbound) AS outbound FROM samples WHERE entity=? AND at>=? AND at<=? GROUP BY CAST(at/? AS INTEGER) ORDER BY at`,
+          )
+          .all(bucket, bucket, id, start, end, bucket);
     return c.json({
       samples,
       resolution,
-      events: s.db
-        .query(
-          "SELECT * FROM events WHERE entity=? AND at>=? AND at<=? ORDER BY at DESC LIMIT 500",
-        )
-        .all(id, start, end),
+      bucketMs: bucket,
+      events: includeEvents
+        ? s.db
+            .query(
+              "SELECT * FROM events WHERE entity=? AND at>=? AND at<=? ORDER BY at DESC LIMIT 500",
+            )
+            .all(id, start, end)
+        : [],
     });
+  });
+
+  app.get("/api/overview/traffic", (c) => {
+    const scope = c.req.query("scope") === "users" ? "users" : "hosts";
+    const start = Number(c.req.query("start") || Date.now() - 86400000),
+      end = Number(c.req.query("end") || Date.now());
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
+      throw Error("Invalid time range");
+    const { bucket, resolution } = pickBucket(
+      start,
+      end,
+      c.req.query("maxPoints") || "96",
+    );
+    const ids = s
+      .list(scope === "users" ? "user" : "host")
+      .map((e) => e.id);
+    if (!ids.length) {
+      return c.json({ samples: [], resolution, bucketMs: bucket });
+    }
+    const placeholders = ids.map(() => "?").join(",");
+    const samples = s.db
+      .query(
+        `SELECT CAST(at/? AS INTEGER)*? AS at,SUM(inbound) AS inbound,SUM(outbound) AS outbound FROM samples WHERE entity IN (${placeholders}) AND at>=? AND at<=? GROUP BY CAST(at/? AS INTEGER) ORDER BY at`,
+      )
+      .all(bucket, bucket, ...ids, start, end, bucket);
+    return c.json({ samples, resolution, bucketMs: bucket });
   });
 }

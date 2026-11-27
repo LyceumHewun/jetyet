@@ -56,6 +56,7 @@ export type Tab =
   | "Alerts";
 
 export type State = {
+  controlPlane: Row | null;
   hosts: Row[];
   nodes: Row[];
   users: Row[];
