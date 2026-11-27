@@ -108,6 +108,7 @@ export function ActivityView({
 
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState(false);
   const [exhausted, setExhausted] = useState(false);
   const [items, setItems] = useState<Row[]>([]);
   const [total, setTotal] = useState(0);
@@ -126,12 +127,13 @@ export function ActivityView({
     hiddenKicks: 0,
   });
 
-  const nextPageRef = useRef(2);
+  const nextOffsetRef = useRef(0);
   const loadingMoreRef = useRef(false);
   const itemsLenRef = useRef(0);
   itemsLenRef.current = items.length;
   const genRef = useRef(0);
   const moreControllerRef = useRef<AbortController | null>(null);
+  const [scrollResetNonce, setScrollResetNonce] = useState(0);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query.trim()), 220);
@@ -188,9 +190,9 @@ export function ActivityView({
   };
 
   const buildEndpoint = useCallback(
-    (pageNum: number, pageSize: number) => {
+    (offset: number, pageSize: number) => {
       const params = new URLSearchParams({
-        page: String(pageNum),
+        offset: String(offset),
         pageSize: String(pageSize),
       });
       if (debouncedQuery) params.set("q", debouncedQuery);
@@ -228,6 +230,7 @@ export function ActivityView({
       setItems([]);
     }
     setExhausted(false);
+    setLoadMoreError(false);
     const gen = ++genRef.current;
     moreControllerRef.current?.abort();
     moreControllerRef.current = null;
@@ -239,45 +242,80 @@ export function ActivityView({
 
     const load = (isInitial: boolean) => {
       activeController?.abort();
+      moreControllerRef.current?.abort();
+      moreControllerRef.current = null;
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
       const controller = new AbortController();
       activeController = controller;
       if (isInitial) setLoading(true);
 
       const loadedCount = filterChanged ? 0 : itemsLenRef.current;
-      const preserveTail = !isInitial && loadedCount > 200;
-      const targetSize = preserveTail
+      // Reconcile the entire loaded window in clean server-aligned chunks (max 5 chunks = 900 rows);
+      // beyond 900 rows reset cleanly to the top batch to avoid stale tails or offset drift.
+      const resetWindow = loadedCount > 900;
+      const targetWindow = resetWindow
         ? BATCH_SIZE
-        : Math.min(200, Math.max(BATCH_SIZE, loadedCount));
+        : Math.max(BATCH_SIZE, loadedCount);
+      const CHUNK = 180;
 
-      api(buildEndpoint(1, targetSize), "GET", undefined, controller.signal)
-        .then((res) => {
+      const fetchWindow = async () => {
+        const merged: Row[] = [];
+        const seen = new Set<string>();
+        let offset = 0;
+        let lastRes: any = null;
+        let remaining = targetWindow;
+
+        while (remaining > 0) {
+          const size = Math.min(CHUNK, remaining);
+          const res = await api(
+            buildEndpoint(offset, size),
+            "GET",
+            undefined,
+            controller.signal,
+          );
+          lastRes = res;
+          const batch: Row[] = res.items || [];
+          for (const row of batch) {
+            if (!seen.has(row.id)) {
+              seen.add(row.id);
+              merged.push(row);
+            }
+          }
+          offset =
+            typeof res.nextOffset === "number"
+              ? res.nextOffset
+              : offset + batch.length;
+          remaining -= size;
+          if (!res.hasMore || batch.length < size) break;
+        }
+        return { merged, offset, lastRes };
+      };
+
+      void fetchWindow()
+        .then(({ merged, offset, lastRes }) => {
           if (
             !cancelled &&
             genRef.current === gen &&
-            activeController === controller
+            activeController === controller &&
+            lastRes
           ) {
-            const incoming: Row[] = res.items || [];
-            const nextTotal = res.total ?? 0;
-            if (preserveTail) {
-              setItems((prev) => {
-                const byId = new Map(incoming.map((x) => [x.id, x]));
-                const rest = prev.filter((x) => !byId.has(x.id));
-                return [...incoming, ...rest];
-              });
-            } else {
-              setItems(incoming);
-              nextPageRef.current = Math.max(
-                2,
-                Math.ceil(incoming.length / BATCH_SIZE) + 1,
-              );
-              setExhausted(incoming.length >= nextTotal || incoming.length === 0);
-            }
+            const nextTotal = lastRes.total ?? 0;
+            setItems(merged);
             setTotal(nextTotal);
+            nextOffsetRef.current = offset;
+            setExhausted(
+              lastRes.hasMore === false ||
+                offset >= nextTotal ||
+                merged.length === 0,
+            );
+            setLoadMoreError(false);
+            if (resetWindow) setScrollResetNonce((n) => n + 1);
             if (subTab === "alerts") {
-              if (res.counts) setAlertCounts(res.counts);
-              if (Array.isArray(res.codes)) setAlertCodes(res.codes);
-            } else if (subTab === "tasks" && res.counts) {
-              setTaskCounts(res.counts);
+              if (lastRes.counts) setAlertCounts(lastRes.counts);
+              if (Array.isArray(lastRes.codes)) setAlertCodes(lastRes.codes);
+            } else if (subTab === "tasks" && lastRes.counts) {
+              setTaskCounts(lastRes.counts);
             }
             setLoading(false);
           }
@@ -292,6 +330,7 @@ export function ActivityView({
             if (isInitial) {
               setItems([]);
               setTotal(0);
+              nextOffsetRef.current = 0;
             }
             setLoading(false);
           }
@@ -313,13 +352,14 @@ export function ActivityView({
     if (loadingMoreRef.current || !hasMore) return;
     loadingMoreRef.current = true;
     setLoadingMore(true);
+    setLoadMoreError(false);
     const gen = genRef.current;
-    const pageToLoad = nextPageRef.current;
+    const offsetToLoad = nextOffsetRef.current;
     const controller = new AbortController();
     moreControllerRef.current = controller;
 
     api(
-      buildEndpoint(pageToLoad, BATCH_SIZE),
+      buildEndpoint(offsetToLoad, BATCH_SIZE),
       "GET",
       undefined,
       controller.signal,
@@ -328,7 +368,14 @@ export function ActivityView({
         if (genRef.current !== gen) return;
         const incoming: Row[] = res.items || [];
         const nextTotal = res.total ?? 0;
-        if (incoming.length < BATCH_SIZE) setExhausted(true);
+        const nextOff =
+          typeof res.nextOffset === "number"
+            ? res.nextOffset
+            : offsetToLoad + incoming.length;
+        nextOffsetRef.current = nextOff;
+        if (res.hasMore === false || incoming.length < BATCH_SIZE) {
+          setExhausted(true);
+        }
         setItems((prev) => {
           if (!incoming.length) return prev;
           const seen = new Set(prev.map((x) => x.id));
@@ -336,11 +383,14 @@ export function ActivityView({
           return unique.length ? [...prev, ...unique] : prev;
         });
         setTotal(nextTotal);
-        nextPageRef.current = pageToLoad + 1;
         if (subTab === "alerts" && res.counts) setAlertCounts(res.counts);
         else if (subTab === "tasks" && res.counts) setTaskCounts(res.counts);
       })
-      .catch(() => {})
+      .catch((err) => {
+        if (genRef.current === gen && err?.name !== "AbortError") {
+          setLoadMoreError(true);
+        }
+      })
       .finally(() => {
         if (genRef.current === gen) {
           loadingMoreRef.current = false;
@@ -937,10 +987,10 @@ export function ActivityView({
             getKey={getRowKey}
             estimateHeight={64}
             overscan={8}
-            hasMore={hasMore}
+            hasMore={hasMore && !loadMoreError}
             loadingMore={loadingMore}
             onLoadMore={loadMore}
-            resetKey={filterKey}
+            resetKey={`${filterKey}#${scrollResetNonce}`}
             className="activity-virtual-scroll"
             footer={
               loadingMore ? (
@@ -951,6 +1001,11 @@ export function ActivityView({
                     aria-hidden="true"
                   />
                   <span>{translate("Loading more…")}</span>
+                </div>
+              ) : loadMoreError ? (
+                <div className="activity-load-more activity-load-error" role="alert">
+                  <span>{translate("Failed to load more records.")}</span>
+                  <Button onClick={loadMore}>{translate("Retry")}</Button>
                 </div>
               ) : null
             }
@@ -966,7 +1021,6 @@ export function ActivityView({
                       (a.closed ? " is-closed" : "") +
                       (isOpen ? " is-expanded" : "")
                     }
-                    onClick={() => setExpandedRow(isOpen ? null : a.id)}
                   >
                     <span
                       className={
@@ -985,23 +1039,32 @@ export function ActivityView({
                               : translate("Open")}
                         </Badge>
                       </div>
-                      <p
-                        className={
-                          isOpen
-                            ? "activity-full-text muted"
-                            : "activity-truncate muted"
-                        }
+                      <button
+                        type="button"
+                        className="activity-disclosure-btn"
+                        aria-expanded={isOpen}
+                        onClick={() => setExpandedRow(isOpen ? null : a.id)}
                       >
-                        {msg}
-                      </p>
+                        <span
+                          className={
+                            isOpen
+                              ? "activity-full-text muted"
+                              : "activity-truncate muted"
+                          }
+                        >
+                          {msg}
+                        </span>
+                        {isOpen ? (
+                          <ChevronUp size={13} className="activity-disclosure-icon" aria-hidden="true" />
+                        ) : (
+                          <ChevronDown size={13} className="activity-disclosure-icon" aria-hidden="true" />
+                        )}
+                      </button>
                     </div>
                     <span className="activity-row-time mono muted">
                       {when(a.first)} → {when(a.last)}
                     </span>
-                    <div
-                      className="row-buttons"
-                      onClick={(e) => e.stopPropagation()}
-                    >
+                    <div className="row-buttons">
                       {!a.seen && (
                         <Button
                           onClick={() =>
@@ -1046,9 +1109,6 @@ export function ActivityView({
                 return (
                   <div
                     className={"activity-row" + (isOpen ? " is-expanded" : "")}
-                    onClick={() =>
-                      t.error ? setExpandedRow(isOpen ? null : t.id) : undefined
-                    }
                   >
                     <span
                       className={"op-icon " + t.state}
@@ -1075,10 +1135,7 @@ export function ActivityView({
                           <button
                             type="button"
                             className="chip activity-entity-link"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onInspectHost(t.host);
-                            }}
+                            onClick={() => onInspectHost(t.host)}
                           >
                             <span>{hostLabel}</span>
                             <ArrowUpRight size={11} aria-hidden="true" />
@@ -1105,24 +1162,33 @@ export function ActivityView({
                         </Badge>
                       </div>
                       {t.error && (
-                        <p
-                          className={
-                            isOpen
-                              ? "activity-full-text op-error"
-                              : "activity-truncate op-error"
-                          }
+                        <button
+                          type="button"
+                          className="activity-disclosure-btn is-error"
+                          aria-expanded={isOpen}
+                          onClick={() => setExpandedRow(isOpen ? null : t.id)}
                         >
-                          {translate("Operation failed. {0}", t.error)}
-                        </p>
+                          <span
+                            className={
+                              isOpen
+                                ? "activity-full-text op-error"
+                                : "activity-truncate op-error"
+                            }
+                          >
+                            {translate("Operation failed. {0}", t.error)}
+                          </span>
+                          {isOpen ? (
+                            <ChevronUp size={13} className="activity-disclosure-icon" aria-hidden="true" />
+                          ) : (
+                            <ChevronDown size={13} className="activity-disclosure-icon" aria-hidden="true" />
+                          )}
+                        </button>
                       )}
                     </div>
                     <span className="activity-row-time mono muted">
                       {when(t.updated)}
                     </span>
-                    <div
-                      className="row-buttons"
-                      onClick={(e) => e.stopPropagation()}
-                    >
+                    <div className="row-buttons">
                       <Button
                         variant="subtle"
                         onClick={() => openLogs(t, hostLabel)}
@@ -1168,14 +1234,12 @@ export function ActivityView({
               const ev = row;
               const isOpen = expandedRow === ev.id;
               const summary = summarizeEventData(ev.data);
+              const detailId = `event-detail-${ev.id}`;
               return (
                 <div
                   className={
                     "activity-row activity-event-row" +
                     (isOpen ? " is-expanded" : "")
-                  }
-                  onClick={() =>
-                    summary ? setExpandedRow(isOpen ? null : ev.id) : undefined
                   }
                 >
                   <span className="status-dot accent" />
@@ -1184,11 +1248,26 @@ export function ActivityView({
                       <strong>{eventLabel(ev.type)}</strong>
                       {renderEntityChip(ev.entity, ev)}
                     </div>
-                    {summary && !isOpen && (
-                      <p className="activity-truncate mono muted">{summary}</p>
+                    {summary && (
+                      <button
+                        type="button"
+                        className="activity-disclosure-btn"
+                        aria-expanded={isOpen}
+                        aria-controls={detailId}
+                        onClick={() => setExpandedRow(isOpen ? null : ev.id)}
+                      >
+                        <span className="activity-truncate mono muted">
+                          {summary}
+                        </span>
+                        {isOpen ? (
+                          <ChevronUp size={13} className="activity-disclosure-icon" aria-hidden="true" />
+                        ) : (
+                          <ChevronDown size={13} className="activity-disclosure-icon" aria-hidden="true" />
+                        )}
+                      </button>
                     )}
                     {summary && isOpen && (
-                      <pre className="activity-event-json mono">
+                      <pre id={detailId} className="activity-event-json mono">
                         {prettyJson(ev.data)}
                       </pre>
                     )}
@@ -1196,15 +1275,7 @@ export function ActivityView({
                   <span className="activity-row-time mono muted">
                     {when(ev.at)}
                   </span>
-                  <div className="activity-expand-indicator muted">
-                    {summary ? (
-                      isOpen ? (
-                        <ChevronUp size={14} />
-                      ) : (
-                        <ChevronDown size={14} />
-                      )
-                    ) : null}
-                  </div>
+                  <div />
                 </div>
               );
             }}
@@ -1224,11 +1295,13 @@ export function ActivityView({
           <span className="muted">
             {loadingMore
               ? translate("Loading more…")
-              : total > 0 && !hasMore
-                ? translate("All records loaded")
-                : hasMore
-                  ? translate("Scroll for more")
-                  : ""}
+              : loadMoreError
+                ? translate("Failed to load more records.")
+                : total > 0 && !hasMore
+                  ? translate("All records loaded")
+                  : hasMore
+                    ? translate("Scroll for more")
+                    : ""}
           </span>
         </div>
       </section>

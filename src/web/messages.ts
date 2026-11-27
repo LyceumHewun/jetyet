@@ -825,6 +825,8 @@ export const zhHans = {
   "Loading more…": "正在加载更多…",
   "All records loaded": "已加载全部记录",
   "Scroll for more": "向下滚动加载更多",
+  "Failed to load more records.": "加载更多记录失败。",
+  Retry: "重试",
 } as const;
 
 export type Message = keyof typeof zhHans;

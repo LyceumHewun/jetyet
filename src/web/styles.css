@@ -4464,6 +4464,9 @@ body > .os-scrollbar.os-theme-jetyet {
   padding: var(--space-3) var(--space-5);
   font-size: var(--text-sm);
 }
+.activity-load-error {
+  color: var(--danger);
+}
 .activity-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
@@ -4471,11 +4474,39 @@ body > .os-scrollbar.os-theme-jetyet {
   gap: var(--space-3);
   padding: var(--space-3) var(--space-5);
   border-bottom: 1px solid var(--border);
-  cursor: pointer;
   transition: background-color 0.12s;
 }
 .activity-row:hover {
   background: var(--paper);
+}
+.activity-disclosure-btn {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.activity-disclosure-btn:hover {
+  background: var(--subtle);
+}
+.activity-disclosure-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.activity-disclosure-btn > span {
+  min-width: 0;
+}
+.activity-disclosure-icon {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--muted);
 }
 .activity-row.is-closed {
   opacity: 0.72;

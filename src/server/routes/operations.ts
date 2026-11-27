@@ -225,14 +225,23 @@ export function registerOperationsRoutes({
     };
   }
 
-  function parsePage(rawPage?: string, rawSize?: string) {
+  function parsePage(
+    rawPage?: string,
+    rawSize?: string,
+    rawOffset?: string,
+  ) {
     const p = Number(rawPage || 1);
     const sz = Number(rawSize || 30);
     const page = Number.isFinite(p) ? Math.max(1, Math.floor(p)) : 1;
     const pageSize = Number.isFinite(sz)
       ? Math.max(10, Math.min(200, Math.floor(sz)))
       : 30;
-    return { page, pageSize, offset: (page - 1) * pageSize };
+    const rawOff = rawOffset !== undefined ? Number(rawOffset) : NaN;
+    const offset =
+      Number.isFinite(rawOff) && rawOff >= 0
+        ? Math.floor(rawOff)
+        : (page - 1) * pageSize;
+    return { page, pageSize, offset };
   }
 
   app.get("/api/activity/alerts", (c) => {
@@ -242,6 +251,7 @@ export function registerOperationsRoutes({
     const { page, pageSize, offset } = parsePage(
       c.req.query("page"),
       c.req.query("pageSize"),
+      c.req.query("offset"),
     );
 
     const where: string[] = [];
@@ -293,6 +303,9 @@ export function registerOperationsRoutes({
       total,
       page,
       pageSize,
+      offset,
+      nextOffset: offset + rows.length,
+      hasMore: offset + rows.length < total,
       counts: {
         open: countRow?.open ?? 0,
         unread: countRow?.unread ?? 0,
@@ -310,6 +323,7 @@ export function registerOperationsRoutes({
     const { page, pageSize, offset } = parsePage(
       c.req.query("page"),
       c.req.query("pageSize"),
+      c.req.query("offset"),
     );
 
     const baseWhere: string[] = [];
@@ -376,6 +390,9 @@ export function registerOperationsRoutes({
       total,
       page,
       pageSize,
+      offset,
+      nextOffset: offset + rows.length,
+      hasMore: offset + rows.length < total,
       counts: {
         all: nonKickCounts?.total_count ?? 0,
         active: nonKickCounts?.active ?? 0,
@@ -392,6 +409,7 @@ export function registerOperationsRoutes({
     const { page, pageSize, offset } = parsePage(
       c.req.query("page"),
       c.req.query("pageSize"),
+      c.req.query("offset"),
     );
 
     const where: string[] = [];
@@ -432,6 +450,9 @@ export function registerOperationsRoutes({
       total,
       page,
       pageSize,
+      offset,
+      nextOffset: offset + rows.length,
+      hasMore: offset + rows.length < total,
     });
   });
 
