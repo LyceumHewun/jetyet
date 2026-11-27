@@ -425,25 +425,49 @@ export function registerOperationsRoutes({
         "ev.type NOT LIKE 'traffic.%' AND ev.type NOT IN ('credentials.rotated','portal.password.changed','portal.password-link.issued','ssh.trusted')",
       );
     }
+    let total: number;
+    let rows: Record<string, any>[];
     if (q) {
       const like = `%${q}%`;
       where.push(
-        "(LOWER(ev.type) LIKE ? OR LOWER(ev.data) LIKE ? OR LOWER(COALESCE(json_extract(ent.data,'$.name'),'')) LIKE ? OR LOWER(COALESCE(json_extract(ent.data,'$.username'),'')) LIKE ? OR LOWER(COALESCE(json_extract(ent.data,'$.address'),'')) LIKE ?)",
+        `(LOWER(ev.type) LIKE ? OR LOWER(ev.data) LIKE ? OR ev.entity IN (
+          SELECT id FROM entities
+          WHERE LOWER(COALESCE(json_extract(data,'$.name'),'')) LIKE ?
+            OR LOWER(COALESCE(json_extract(data,'$.username'),'')) LIKE ?
+            OR LOWER(COALESCE(json_extract(data,'$.address'),'')) LIKE ?
+        ))`,
       );
       params.push(like, like, like, like, like);
-    }
-    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-    const total =
-      s.db
-        .query<{ c: number }, any[]>(
-          `SELECT COUNT(*) AS c FROM events ev LEFT JOIN entities ent ON ent.id = ev.entity ${whereSql}`,
+      const results = s.db
+        .query<Record<string, any>, (string | number)[]>(
+          `WITH matches AS MATERIALIZED (
+          SELECT ev.rowid AS eventRow, ev.at FROM events ev WHERE ${where.join(" AND ")}
+        ), page AS (
+          SELECT eventRow, at FROM matches ORDER BY at DESC, eventRow LIMIT ? OFFSET ?
         )
-        .get(...params)?.c ?? 0;
-    const rows = s.db
-      .query<any, any[]>(
-        `SELECT ev.* FROM events ev LEFT JOIN entities ent ON ent.id = ev.entity ${whereSql} ORDER BY ev.at DESC LIMIT ? OFFSET ?`,
-      )
-      .all(...params, pageSize, offset);
+        SELECT ev.*, counts.total AS matchTotal
+        FROM (SELECT COUNT(*) AS total FROM matches) counts
+        LEFT JOIN page ON true
+        LEFT JOIN events ev ON ev.rowid=page.eventRow
+        ORDER BY page.at DESC, page.eventRow`,
+        )
+        .all(...params, pageSize, offset);
+      total = results[0]?.matchTotal ?? 0;
+      rows = results
+        .filter((row) => row.id !== null)
+        .map(({ matchTotal, ...event }) => event);
+    } else {
+      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+      total =
+        s.db.query<{ c: number }, []>(
+          `SELECT COUNT(*) AS c FROM events ev ${whereSql}`,
+        ).get()?.c ?? 0;
+      rows = s.db
+        .query<Record<string, any>, [number, number]>(
+          `SELECT ev.* FROM events ev ${whereSql} ORDER BY ev.at DESC, ev.rowid LIMIT ? OFFSET ?`,
+        )
+        .all(pageSize, offset);
+    }
 
     return c.json({
       items: rows.map((ev) => ({ ...ev, ...entityMeta(ev.entity) })),

@@ -93,10 +93,25 @@ function previousBoundary(p: Reset, now: number, first: number) {
   return +prev.set({ day: Math.min(p.day, prev.daysInMonth!), hour: p.hour });
 }
 export function refreshPeriods(s: Store) {
+  const pending = (now: number) =>
+    s.db
+      .query<{ id: string }, [number]>(
+        `SELECT u.id FROM usage u JOIN entities e ON e.id=u.id
+        WHERE u.next<=? AND e.deleted=0 AND e.kind IN ('host','user')
+        UNION ALL
+        SELECT e.id FROM entities e
+        WHERE e.deleted=0 AND e.kind IN ('host','user')
+          AND NOT EXISTS (SELECT 1 FROM usage u WHERE u.id=e.id)`,
+      )
+      .all(now);
+  // Current periods can be served while another process holds the write lock.
+  if (!pending(Date.now()).length) return;
   s.db
     .transaction(() => {
-      for (const e of [...s.list("host"), ...s.list("user")])
+      for (const { id } of pending(Date.now())) {
+        const e = s.get(id)!;
         if (usage(s, e).next <= Date.now()) resetUsage(s, e, false);
+      }
     })
     .immediate();
 }

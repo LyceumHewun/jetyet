@@ -7,6 +7,7 @@ import {
   spyOn,
   test,
 } from "bun:test";
+import { Database } from "bun:sqlite";
 import { generateKeyPairSync } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -370,6 +371,56 @@ describe("authorization and templates", () => {
     expect(await (await request()).json()).toEqual({ ok: true, id: user.id });
     s.db.query("UPDATE usage SET inbound=1000 WHERE id=?").run(host.id);
     expect(await (await request()).json()).toEqual({ ok: false });
+    s.db.query("UPDATE usage SET next=? WHERE id=?").run(now, host.id);
+    expect(await (await request()).json()).toEqual({ ok: true, id: user.id });
+    expect(usage(s, host).inbound).toBe(0);
+  });
+  test("VPN auth waits asynchronously to record first use when SQLite is busy", async () => {
+    const { node, user } = fixture();
+    const app = createApp(s);
+    const writer = new Database(s.config.database);
+    const request = () =>
+      app.request(`/auth/hysteria/${node.id}/${s.secrets(node.id).authSecret}`, {
+        method: "POST",
+        body: JSON.stringify({ auth: s.secrets(user.id).vpnToken }),
+      });
+    try {
+      writer.exec("BEGIN IMMEDIATE");
+      const first = request();
+      await Bun.sleep(30);
+      expect(s.db.query("SELECT * FROM first_auth").all()).toHaveLength(0);
+      writer.exec("ROLLBACK");
+      expect(await (await first).json()).toEqual({ ok: true, id: user.id });
+      expect(s.db.query("SELECT * FROM first_auth").all()).toHaveLength(1);
+
+      writer.exec("BEGIN IMMEDIATE");
+      expect(await (await request()).json()).toEqual({ ok: true, id: user.id });
+    } finally {
+      writer.close();
+    }
+  });
+  test("event search keeps an exact total for empty pages and matches entity names", async () => {
+    const { host } = fixture();
+    const app = createApp(s);
+    const login = await app.request("/api/login", {
+      method: "POST",
+      headers: { origin: s.config.origin },
+      body: JSON.stringify({ username: "admin", password: "correct-password" }),
+    });
+    expect(login.status).toBe(200);
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    s.event(host.id, "operation.succeeded", {});
+    s.event(null, "operation.succeeded", { message: "HOST" });
+    s.event(host.id, "traffic.gap", {});
+    const request = async (offset: number) =>
+      (await app.request(`/api/activity/events?q=host&category=config&offset=${offset}`, {
+        headers: { cookie },
+      })).json();
+    const first = await request(0);
+    expect(first.total).toBe(2);
+    expect(first.items.map((event: { entity: string | null }) => event.entity)).toEqual([host.id, null]);
+    const empty = await request(5);
+    expect(empty).toMatchObject({ items: [], total: 2, offset: 5, nextOffset: 5, hasMore: false });
   });
   test("user token alone cannot identify a node and draft nodes cannot authorize", async () => {
     const { node, user } = fixture(),
