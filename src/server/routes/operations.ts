@@ -275,10 +275,10 @@ export function registerOperationsRoutes({
 
     const countRow = s.db
       .query<
-        { open: number; unread: number; closed: number; all: number },
+        { open: number; unread: number; closed: number; total_count: number },
         []
       >(
-        "SELECT SUM(CASE WHEN closed IS NULL THEN 1 ELSE 0 END) AS open, SUM(CASE WHEN closed IS NULL AND seen=0 THEN 1 ELSE 0 END) AS unread, SUM(CASE WHEN closed IS NOT NULL THEN 1 ELSE 0 END) AS closed, COUNT(*) AS all FROM alerts",
+        "SELECT SUM(CASE WHEN closed IS NULL THEN 1 ELSE 0 END) AS open, SUM(CASE WHEN closed IS NULL AND seen=0 THEN 1 ELSE 0 END) AS unread, SUM(CASE WHEN closed IS NOT NULL THEN 1 ELSE 0 END) AS closed, COUNT(*) AS total_count FROM alerts",
       )
       .get();
     const codes = s.db
@@ -297,7 +297,7 @@ export function registerOperationsRoutes({
         open: countRow?.open ?? 0,
         unread: countRow?.unread ?? 0,
         closed: countRow?.closed ?? 0,
-        all: countRow?.all ?? 0,
+        all: countRow?.total_count ?? 0,
       },
       codes,
     });
@@ -346,7 +346,7 @@ export function registerOperationsRoutes({
     const nonKickCounts = s.db
       .query<
         {
-          all: number;
+          total_count: number;
           active: number;
           failed: number;
           succeeded: number;
@@ -355,7 +355,7 @@ export function registerOperationsRoutes({
         []
       >(
         `SELECT
-          SUM(CASE WHEN ${hideKick ? "kind != 'kick'" : "1=1"} THEN 1 ELSE 0 END) AS all,
+          SUM(CASE WHEN ${hideKick ? "kind != 'kick'" : "1=1"} THEN 1 ELSE 0 END) AS total_count,
           SUM(CASE WHEN (${hideKick ? "kind != 'kick'" : "1=1"}) AND state IN ('queued','running') THEN 1 ELSE 0 END) AS active,
           SUM(CASE WHEN (${hideKick ? "kind != 'kick'" : "1=1"}) AND state = 'failed' THEN 1 ELSE 0 END) AS failed,
           SUM(CASE WHEN (${hideKick ? "kind != 'kick'" : "1=1"}) AND state = 'succeeded' THEN 1 ELSE 0 END) AS succeeded,
@@ -377,7 +377,7 @@ export function registerOperationsRoutes({
       page,
       pageSize,
       counts: {
-        all: nonKickCounts?.all ?? 0,
+        all: nonKickCounts?.total_count ?? 0,
         active: nonKickCounts?.active ?? 0,
         failed: nonKickCounts?.failed ?? 0,
         succeeded: nonKickCounts?.succeeded ?? 0,
