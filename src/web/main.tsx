@@ -16,7 +16,6 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
-  Cpu,
   FileCode2,
   KeyRound,
   LayoutDashboard,
@@ -35,15 +34,16 @@ import {
 } from "lucide-react";
 import {
   Fragment,
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { api, formatUptime, when } from "./client";
+import { api, when } from "./client";
 import {
   Actions,
   ActivityView,
@@ -117,28 +117,182 @@ function replaceRoute(to: AppRoute) {
   }
 }
 
-let spatialTransition: ViewTransition | undefined;
+function useAnimatedExpansion(activeId: string | null) {
+  const [renderedId, setRenderedId] = useState<string | null>(activeId);
+  const activeIdRef = useRef<string | null>(activeId);
+  activeIdRef.current = activeId;
 
-function transitionSpatialCards(update: () => void) {
-  if (
-    !document.startViewTransition ||
-    !CSS.supports("view-transition-name", "match-element") ||
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  ) {
-    update();
-    return;
-  }
+  useEffect(() => {
+    if (activeId) setRenderedId(activeId);
+  }, [activeId]);
 
-  const root = document.documentElement;
-  root.classList.add("spatial-transition");
-  const transition = document.startViewTransition(() => flushSync(update));
-  spatialTransition = transition;
-  const finish = () => {
-    if (spatialTransition !== transition) return;
-    spatialTransition = undefined;
-    root.classList.remove("spatial-transition");
+  const onExited = useCallback(() => {
+    if (!activeIdRef.current) setRenderedId(null);
+  }, []);
+
+  return {
+    renderedId: activeId ?? renderedId,
+    isOpen: Boolean(activeId),
+    onExited,
   };
-  void transition.finished.then(finish, finish);
+}
+
+function ExpandableRow({
+  isOpen,
+  onExited,
+  children,
+}: {
+  isOpen: boolean;
+  onExited: () => void;
+  children: ReactNode;
+}) {
+  const slotRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  const wasOpenRef = useRef<boolean | null>(null);
+  const timerRef = useRef<number | null>(null);
+  const onExitedRef = useRef(onExited);
+  onExitedRef.current = onExited;
+
+  useLayoutEffect(() => {
+    const slot = slotRef.current;
+    const inner = innerRef.current;
+    if (!slot || !inner) return;
+
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+
+    const reduced =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const prevOpen = wasOpenRef.current;
+    wasOpenRef.current = isOpen;
+
+    const gap =
+      parseFloat(
+        slot.parentElement ? getComputedStyle(slot.parentElement).rowGap : "",
+      ) || 16;
+
+    if (reduced) {
+      slot.style.transition = "none";
+      if (isOpen) {
+        slot.style.height = "auto";
+        slot.style.opacity = "1";
+        slot.style.marginBottom = "0px";
+        slot.style.overflow = "visible";
+      } else {
+        slot.style.height = "0px";
+        slot.style.opacity = "0";
+        slot.style.marginBottom = `${-gap}px`;
+        slot.style.overflow = "hidden";
+        onExitedRef.current();
+      }
+      return;
+    }
+
+    if (isOpen) {
+      if (prevOpen === true) return;
+      const startHeight =
+        prevOpen === null ? 0 : slot.getBoundingClientRect().height;
+      const startOpacity =
+        prevOpen === null ? 0 : parseFloat(getComputedStyle(slot).opacity) || 0;
+      const startMarginBottom =
+        prevOpen === null
+          ? -gap
+          : parseFloat(getComputedStyle(slot).marginBottom) || 0;
+      const targetHeight = inner.scrollHeight;
+
+      slot.style.transition = "none";
+      slot.style.overflow = "hidden";
+      slot.style.height = `${startHeight}px`;
+      slot.style.opacity = `${startOpacity}`;
+      slot.style.marginBottom = `${startMarginBottom}px`;
+      void slot.offsetHeight;
+
+      slot.style.transition =
+        "height 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease, margin-bottom 240ms cubic-bezier(0.22, 1, 0.36, 1)";
+      slot.style.height = `${targetHeight}px`;
+      slot.style.opacity = "1";
+      slot.style.marginBottom = "0px";
+
+      const finishOpen = () => {
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        slot.removeEventListener("transitionend", onEnd);
+        if (wasOpenRef.current) {
+          slot.style.transition = "none";
+          slot.style.height = "auto";
+          slot.style.overflow = "visible";
+        }
+      };
+      const onEnd = (e: TransitionEvent) => {
+        if (e.target === slot && e.propertyName === "height") finishOpen();
+      };
+      slot.addEventListener("transitionend", onEnd);
+      timerRef.current = window.setTimeout(finishOpen, 280);
+      return () => {
+        slot.removeEventListener("transitionend", onEnd);
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+      };
+    } else {
+      const startHeight = slot.getBoundingClientRect().height;
+      const startOpacity = parseFloat(getComputedStyle(slot).opacity) || 1;
+      const startMarginBottom =
+        parseFloat(getComputedStyle(slot).marginBottom) || 0;
+
+      slot.style.transition = "none";
+      slot.style.overflow = "hidden";
+      slot.style.height = `${startHeight}px`;
+      slot.style.opacity = `${startOpacity}`;
+      slot.style.marginBottom = `${startMarginBottom}px`;
+      void slot.offsetHeight;
+
+      slot.style.transition =
+        "height 200ms cubic-bezier(0.4, 0, 0.2, 1), opacity 150ms ease, margin-bottom 200ms cubic-bezier(0.4, 0, 0.2, 1)";
+      slot.style.height = "0px";
+      slot.style.opacity = "0";
+      slot.style.marginBottom = `${-gap}px`;
+
+      const finishClose = () => {
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        slot.removeEventListener("transitionend", onEnd);
+        if (!wasOpenRef.current) onExitedRef.current();
+      };
+      const onEnd = (e: TransitionEvent) => {
+        if (e.target === slot && e.propertyName === "height") finishClose();
+      };
+      slot.addEventListener("transitionend", onEnd);
+      timerRef.current = window.setTimeout(finishClose, 240);
+      return () => {
+        slot.removeEventListener("transitionend", onEnd);
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+      };
+    }
+  }, [isOpen]);
+
+  return (
+    <div
+      ref={slotRef}
+      className="spatial-expand-slot"
+      style={{ pointerEvents: isOpen ? "auto" : "none" }}
+    >
+      <div ref={innerRef} className="spatial-expand-inner">
+        {children}
+      </div>
+    </div>
+  );
 }
 
 const initial: State = {
@@ -412,11 +566,11 @@ function App() {
       const next: State = await api("state");
       setState(next);
       setConsoleView((view) => {
-        const expandedHost =
-          view.expandedHost === "control-plane" ||
-          next.hosts.some((host) => host.id === view.expandedHost)
-            ? view.expandedHost
-            : null;
+        const expandedHost = next.hosts.some(
+          (host) => host.id === view.expandedHost,
+        )
+          ? view.expandedHost
+          : null;
         const expandedUser = next.users.some(
           (user) => user.id === view.expandedUser,
         )
@@ -487,6 +641,63 @@ function App() {
     const id = setTimeout(() => setToast(""), 4000);
     return () => clearTimeout(id);
   }, [toast]);
+
+  const visible = (list: Row[]) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((r) =>
+      [
+        r.name,
+        r.username,
+        r.address,
+        r.note,
+        r.kind,
+        r.message,
+        r.code,
+        r.format,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(q),
+    );
+  };
+
+  const visibleHosts = visible(state.hosts);
+  const activeHostIdx = visibleHosts.findIndex((i) => i.id === expandedHost);
+  const {
+    renderedId: renderedHostId,
+    isOpen: isHostOpen,
+    onExited: onHostExited,
+  } = useAnimatedExpansion(activeHostIdx >= 0 ? expandedHost : null);
+  const renderedHostIdx = visibleHosts.findIndex(
+    (i) => i.id === renderedHostId,
+  );
+  const hostInsertAfter =
+    renderedHostIdx >= 0
+      ? Math.min(
+          visibleHosts.length - 1,
+          Math.floor(renderedHostIdx / gridCols) * gridCols + gridCols - 1,
+        )
+      : -1;
+
+  const visibleUsers = visible(state.users);
+  const activeUserIdx = visibleUsers.findIndex((u) => u.id === expandedUser);
+  const {
+    renderedId: renderedUserId,
+    isOpen: isUserOpen,
+    onExited: onUserExited,
+  } = useAnimatedExpansion(activeUserIdx >= 0 ? expandedUser : null);
+  const renderedUserIdx = visibleUsers.findIndex(
+    (u) => u.id === renderedUserId,
+  );
+  const userInsertAfter =
+    renderedUserIdx >= 0
+      ? Math.min(
+          visibleUsers.length - 1,
+          Math.floor(renderedUserIdx / gridCols) * gridCols + gridCols - 1,
+        )
+      : -1;
 
   const run = async (fn: () => Promise<any>, message = "Saved") => {
     try {
@@ -808,27 +1019,6 @@ function App() {
     );
   }
 
-  const visible = (list: Row[]) => {
-    const q = search.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter((r) =>
-      [
-        r.name,
-        r.username,
-        r.address,
-        r.note,
-        r.kind,
-        r.message,
-        r.code,
-        r.format,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(q),
-    );
-  };
-
   const activeAlerts = state.alerts.filter((a) => !a.closed),
     nodeHealthy = state.nodes.filter(
       (n) =>
@@ -904,53 +1094,6 @@ function App() {
         disk: null,
         interfaces: [],
       };
-  const controlPlaneFresh =
-    !!controlPlaneEntity.lastSeen &&
-    Date.now() - controlPlaneEntity.lastSeen <= 180000;
-  const workerAlive = (name: string) => {
-    const hb = state.workers.find((w) => w.name === name);
-    return !!hb && Date.now() - hb.at <= 30000;
-  };
-
-  const searchLower = search.trim().toLowerCase();
-  const showControlPlane =
-    !searchLower ||
-    [
-      controlPlaneEntity.name,
-      controlPlaneEntity.hostname,
-      "control plane",
-      "control-plane",
-      "local",
-      "本机",
-      "面板",
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase()
-      .includes(searchLower);
-
-  const visibleHosts = visible(state.hosts);
-  const infraItems = showControlPlane
-    ? [controlPlaneEntity, ...visibleHosts]
-    : visibleHosts;
-  const expandedInfraIdx = infraItems.findIndex((i) => i.id === expandedHost);
-  const infraInsertAfter =
-    expandedInfraIdx >= 0
-      ? Math.min(
-          infraItems.length - 1,
-          Math.floor(expandedInfraIdx / gridCols) * gridCols + gridCols - 1,
-        )
-      : -1;
-
-  const visibleUsers = visible(state.users);
-  const expandedUserIdx = visibleUsers.findIndex((u) => u.id === expandedUser);
-  const userInsertAfter =
-    expandedUserIdx >= 0
-      ? Math.min(
-          visibleUsers.length - 1,
-          Math.floor(expandedUserIdx / gridCols) * gridCols + gridCols - 1,
-        )
-      : -1;
 
   const inlineRangeOptions: [string, string][] = [
     ["1", translate("1h")],
@@ -978,6 +1121,8 @@ function App() {
       expandedUser: userId,
     }));
   };
+
+  const openControlPlaneTelemetry = () => history(controlPlaneEntity);
 
   return (
     <div className="shell">
@@ -1101,7 +1246,7 @@ function App() {
                   }}
                   onInspectHost={jumpToHost}
                   onInspectUser={jumpToUser}
-                  onInspectControlPlane={() => jumpToHost("control-plane")}
+                  onInspectControlPlane={openControlPlaneTelemetry}
                 />
               )}
 
@@ -1151,156 +1296,39 @@ function App() {
                       </Button>
                     </div>
                   </div>
-                  {infraItems.length > 0 && (
+                  {!state.hosts.length ? (
+                    <section className="panel">
+                      <Empty
+                        title={translate("No hosts connected")}
+                        action={
+                          <Button
+                            variant="primary"
+                            onClick={() => save("hosts")}
+                          >
+                            <Plus size={15} />
+                            {translate("Add VPS")}
+                          </Button>
+                        }
+                      >
+                        {translate("Add a VPS to start managing your network.")}
+                      </Empty>
+                    </section>
+                  ) : (
                     <div className="spatial-grid">
-                      {infraItems.map((h, idx) => {
-                        const isControlPlane = h.kind === "control-plane";
+                      {visibleHosts.map((h, idx) => {
                         const isActive = expandedHost === h.id;
                         const toggleExpand = () =>
-                          transitionSpatialCards(() =>
-                            setExpandedHost(isActive ? null : h.id),
-                          );
-                        const node = isControlPlane
-                          ? undefined
-                          : state.nodes.find((n) => n.hostId === h.id);
+                          setExpandedHost(isActive ? null : h.id);
+                        const node = state.nodes.find((n) => n.hostId === h.id);
                         const clients = node
                           ? (Object.values(node.online || {}).reduce(
                               (a: any, b: any) => a + b,
                               0,
                             ) as number)
                           : 0;
-                        const nTone =
-                          !isControlPlane && node ? nodeTone(node, h) : "neutral";
+                        const nTone = node ? nodeTone(node, h) : "neutral";
 
                         const renderExpanded = (target: Row) => {
-                          if (target.kind === "control-plane") {
-                            return (
-                              <article
-                                key="expanded-control-plane"
-                                className="spatial-card spatial-expanded control-plane-expanded"
-                              >
-                                <div className="expanded-head">
-                                  <div className="expanded-head-left">
-                                    <span
-                                      className={
-                                        "status-dot " +
-                                        (controlPlaneFresh ? "good" : "warning")
-                                      }
-                                    />
-                                    <h2>{translate("Control Plane")}</h2>
-                                    <Badge tone="neutral">
-                                      {translate("Local host")}
-                                    </Badge>
-                                    {target.hostname && (
-                                      <span className="mono muted">
-                                        {target.hostname}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="expanded-head-right">
-                                    <SegmentedControl
-                                      value={inlineRange}
-                                      options={inlineRangeOptions}
-                                      onChange={setInlineRange}
-                                    />
-                                    <Button
-                                      variant="icon"
-                                      onClick={() =>
-                                        transitionSpatialCards(() =>
-                                          setExpandedHost(null),
-                                        )
-                                      }
-                                      aria-label={translate("Collapse")}
-                                      title={translate("Collapse")}
-                                    >
-                                      <ChevronUp size={15} />
-                                    </Button>
-                                  </div>
-                                </div>
-                                <div className="expanded-zones">
-                                  <InlineTelemetry
-                                    entity={target}
-                                    range={inlineRange}
-                                  />
-                                  <div className="expanded-actions-col">
-                                    <div className="expanded-actions-head">
-                                      <span className="kpi-label">
-                                        {translate("CONTROL PLANE")}
-                                      </span>
-                                      <Cpu size={14} className="muted" aria-hidden="true" />
-                                    </div>
-                                    <ScrollArea
-                                      axis="y"
-                                      className="expanded-chips-scroll"
-                                    >
-                                      <div className="expanded-chips-inner">
-                                        <div className="node-mini-meta">
-                                          <strong>
-                                            {target.hostname ||
-                                              translate("Local host")}
-                                          </strong>
-                                          <small className="muted">
-                                            {translate(
-                                              "Self-host telemetry · excluded from VPS counts & quota",
-                                            )}
-                                          </small>
-                                        </div>
-                                        <div className="chip-group">
-                                          {(["monitor", "operations"] as const).map(
-                                            (name) => {
-                                              const ok = workerAlive(name);
-                                              return (
-                                                <Badge
-                                                  key={name}
-                                                  tone={ok ? "good" : "warning"}
-                                                >
-                                                  {name} ·{" "}
-                                                  {ok
-                                                    ? translate("Healthy")
-                                                    : translate("Stale")}
-                                                </Badge>
-                                              );
-                                            },
-                                          )}
-                                        </div>
-                                        {Array.isArray(target.interfaces) &&
-                                        target.interfaces.length > 0 ? (
-                                          <div className="chip-group">
-                                            {target.interfaces.map(
-                                              (iface: string) => (
-                                                <Chip key={iface} mono>
-                                                  {iface}
-                                                </Chip>
-                                              ),
-                                            )}
-                                          </div>
-                                        ) : target.networkAvailable === false ? (
-                                          <Badge tone="warning">
-                                            {translate(
-                                              "Traffic counters unavailable",
-                                            )}
-                                          </Badge>
-                                        ) : null}
-                                      </div>
-                                    </ScrollArea>
-                                    <div className="expanded-quick-actions">
-                                      <Button
-                                        className="quick-row-btn"
-                                        onClick={() => history(target)}
-                                      >
-                                        <span>{translate("Full telemetry")}</span>
-                                        <ArrowUpRight
-                                          size={14}
-                                          className="muted"
-                                        />
-                                      </Button>
-                                    </div>
-                                  </div>
-                                </div>
-                              </article>
-                            );
-                          }
-
                           const tNode = state.nodes.find(
                             (n) => n.hostId === target.id,
                           );
@@ -1310,9 +1338,14 @@ function App() {
                                 0,
                               ) as number)
                             : 0;
-                          const tTone = tNode ? nodeTone(tNode, target) : "neutral";
+                          const tTone = tNode
+                            ? nodeTone(tNode, target)
+                            : "neutral";
                           const hostActions: [string, () => void][] = [
-                            [translate("Edit VPS"), () => save("hosts", target)],
+                            [
+                              translate("Edit VPS"),
+                              () => save("hosts", target),
+                            ],
                             [
                               translate("Full telemetry"),
                               () => history(target),
@@ -1408,247 +1441,278 @@ function App() {
                             : [];
 
                           return (
-                            <article
-                              key={`expanded-${target.id}`}
-                              className="spatial-card spatial-expanded"
+                            <ExpandableRow
+                              key={`expanded-slot-host-${Math.floor(renderedHostIdx / gridCols)}`}
+                              isOpen={isHostOpen}
+                              onExited={onHostExited}
                             >
-                              <div className="expanded-head">
-                                <div className="expanded-head-left">
-                                  <span
-                                    className={
-                                      "status-dot " +
-                                      (!target.enabled
-                                        ? "neutral"
-                                        : target.reachable
-                                          ? "good"
-                                          : "warning")
-                                    }
-                                  />
-                                  <h2>{target.name}</h2>
-                                  <span className="mono muted">
-                                    {target.address}:{target.port}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className={
-                                      "trust-pill " +
-                                      (target.fingerprint
-                                        ? "trusted"
-                                        : "verify")
-                                    }
-                                    disabled={verifyingHostId !== null}
-                                    aria-busy={verifyingHostId === target.id}
-                                    onClick={() => void trust(target)}
-                                  >
-                                    {verifyingHostId === target.id ? (
-                                      <>
-                                        <LoaderCircle
-                                          size={13}
-                                          className="spinning"
-                                          aria-hidden="true"
+                              <article className="spatial-card spatial-expanded">
+                                <div
+                                  key={target.id}
+                                  className="spatial-expanded-content"
+                                >
+                                    <div className="expanded-head">
+                                      <div className="expanded-head-left">
+                                        <span
+                                          className={
+                                            "status-dot " +
+                                            (!target.enabled
+                                              ? "neutral"
+                                              : target.reachable
+                                                ? "good"
+                                                : "warning")
+                                          }
                                         />
-                                        {translate("Verifying SSH…")}
-                                      </>
-                                    ) : target.fingerprint ? (
-                                      <>
-                                        <ShieldCheck size={13} />
-                                        {translate("SSH Trusted")}
-                                      </>
-                                    ) : (
-                                      <>
-                                        <ShieldAlert size={13} />
-                                        {translate("Verify SSH")}
-                                      </>
-                                    )}
-                                  </button>
-                                  {target.deleting && (
-                                    <Badge tone="warning">
-                                      {translate("Pending deletion")}
-                                    </Badge>
-                                  )}
-                                  {target.usageStale && (
-                                    <Badge tone="warning">
-                                      {translate("Stale data")}
-                                    </Badge>
-                                  )}
-                                  {tNode && (
-                                    <Badge tone={tTone}>
-                                      {tNode.name} {tNode.version || ""} ·{" "}
-                                      {translate("{0} online", tClients)}
-                                    </Badge>
-                                  )}
-                                </div>
-                                <div className="expanded-head-right">
-                                  <SegmentedControl
-                                    value={inlineRange}
-                                    options={inlineRangeOptions}
-                                    onChange={setInlineRange}
-                                  />
-                                  <Button onClick={() => save("hosts", target)}>
-                                    {translate("Edit")}
-                                  </Button>
-                                  <Actions items={hostActions} />
-                                  <Button
-                                    variant="icon"
-                                    onClick={() =>
-                                      transitionSpatialCards(() =>
-                                        setExpandedHost(null),
-                                      )
-                                    }
-                                    aria-label={translate("Collapse")}
-                                    title={translate("Collapse")}
-                                  >
-                                    <ChevronUp size={15} />
-                                  </Button>
-                                </div>
-                              </div>
-                              <div className="expanded-zones">
-                                <InlineTelemetry
-                                  entity={target}
-                                  range={inlineRange}
-                                />
-                                <div className="expanded-actions-col">
-                                  <div className="expanded-actions-head">
-                                    <span className="kpi-label">
-                                      {tNode
-                                        ? translate("HYSTERIA 2 NODE")
-                                        : translate("QUICK ACTIONS")}
-                                    </span>
-                                    {tNode && <Actions items={nodeActions} />}
-                                  </div>
-                                  {tNode && (
-                                    <ScrollArea
-                                      axis="y"
-                                      className="expanded-chips-scroll"
-                                    >
-                                      <div className="node-mini-meta">
-                                        <strong>{tNode.name}</strong>
-                                        <small className="mono">
-                                          {tNode.address}:{tNode.port}
-                                        </small>
-                                        <div className="chip-group node-specs">
-                                          <Chip>
-                                            {tNode.probed &&
-                                            Date.now() - tNode.probed > 600000
-                                              ? translate("Probe stale")
-                                              : probeLabel(tNode.probe)}
-                                          </Chip>
-                                          {tNode.hopping && (
-                                            <Chip mono>UDP {tNode.hopping}</Chip>
+                                        <h2>{target.name}</h2>
+                                        <span className="mono muted">
+                                          {target.address}:{target.port}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          className={
+                                            "trust-pill " +
+                                            (target.fingerprint
+                                              ? "trusted"
+                                              : "verify")
+                                          }
+                                          disabled={verifyingHostId !== null}
+                                          aria-busy={
+                                            verifyingHostId === target.id
+                                          }
+                                          onClick={() => void trust(target)}
+                                        >
+                                          {verifyingHostId === target.id ? (
+                                            <>
+                                              <LoaderCircle
+                                                size={13}
+                                                className="spinning"
+                                                aria-hidden="true"
+                                              />
+                                              {translate("Verifying SSH…")}
+                                            </>
+                                          ) : target.fingerprint ? (
+                                            <>
+                                              <ShieldCheck size={13} />
+                                              {translate("SSH Trusted")}
+                                            </>
+                                          ) : (
+                                            <>
+                                              <ShieldAlert size={13} />
+                                              {translate("Verify SSH")}
+                                            </>
                                           )}
-                                          {(tNode.version ||
-                                            (tNode.status &&
-                                              tNode.status !== "draft")) &&
-                                            tNode.congestion && (
-                                              <Chip>
-                                                {tNode.congestion === "bbr"
-                                                  ? "BBR"
-                                                  : "Brutal"}
-                                              </Chip>
-                                            )}
-                                          {(tNode.version ||
-                                            (tNode.status &&
-                                              tNode.status !== "draft")) &&
-                                            tNode.tuning && (
-                                              <Chip>
-                                                {translate("Adaptive tuning")}
-                                              </Chip>
-                                            )}
-                                          {(tNode.version ||
-                                            (tNode.status &&
-                                              tNode.status !== "draft")) &&
-                                            (tNode.tlsSecurity === "pinned" ? (
-                                              <>
-                                                <Chip mono>
-                                                  pinSHA256 ·{" "}
-                                                  {tNode.sni || DEFAULT_TLS_SNI}
+                                        </button>
+                                        {target.deleting && (
+                                          <Badge tone="warning">
+                                            {translate("Pending deletion")}
+                                          </Badge>
+                                        )}
+                                        {target.usageStale && (
+                                          <Badge tone="warning">
+                                            {translate("Stale data")}
+                                          </Badge>
+                                        )}
+                                        {tNode && (
+                                          <Badge tone={tTone}>
+                                            {tNode.name} {tNode.version || ""} ·{" "}
+                                            {translate("{0} online", tClients)}
+                                          </Badge>
+                                        )}
+                                      </div>
+                                      <div className="expanded-head-right">
+                                        <SegmentedControl
+                                          value={inlineRange}
+                                          options={inlineRangeOptions}
+                                          onChange={setInlineRange}
+                                        />
+                                        <Button
+                                          onClick={() => save("hosts", target)}
+                                        >
+                                          {translate("Edit")}
+                                        </Button>
+                                        <Actions items={hostActions} />
+                                        <Button
+                                          variant="icon"
+                                          onClick={() => setExpandedHost(null)}
+                                          aria-label={translate("Collapse")}
+                                          title={translate("Collapse")}
+                                        >
+                                          <ChevronUp size={15} />
+                                        </Button>
+                                      </div>
+                                    </div>
+                                    <div className="expanded-zones">
+                                      <InlineTelemetry
+                                        entity={target}
+                                        range={inlineRange}
+                                      />
+                                      <div className="expanded-actions-col">
+                                        <div className="expanded-actions-head">
+                                          <span className="kpi-label">
+                                            {tNode
+                                              ? translate("HYSTERIA 2 NODE")
+                                              : translate("QUICK ACTIONS")}
+                                          </span>
+                                          {tNode && (
+                                            <Actions items={nodeActions} />
+                                          )}
+                                        </div>
+                                        {tNode && (
+                                          <ScrollArea
+                                            axis="y"
+                                            className="expanded-chips-scroll"
+                                          >
+                                            <div className="node-mini-meta">
+                                              <strong>{tNode.name}</strong>
+                                              <small className="mono">
+                                                {tNode.address}:{tNode.port}
+                                              </small>
+                                              <div className="chip-group node-specs">
+                                                <Chip>
+                                                  {tNode.probed &&
+                                                  Date.now() - tNode.probed >
+                                                    600000
+                                                    ? translate("Probe stale")
+                                                    : probeLabel(tNode.probe)}
                                                 </Chip>
-                                                {tNode.ech && (
-                                                  <Chip className="accent-chip">
-                                                    ECH
+                                                {tNode.hopping && (
+                                                  <Chip mono>
+                                                    UDP {tNode.hopping}
                                                   </Chip>
                                                 )}
-                                              </>
-                                            ) : (
-                                              <Badge tone="warning">
-                                                {translate("Legacy TLS")}
-                                              </Badge>
-                                            ))}
+                                                {(tNode.version ||
+                                                  (tNode.status &&
+                                                    tNode.status !==
+                                                      "draft")) &&
+                                                  tNode.congestion && (
+                                                    <Chip>
+                                                      {tNode.congestion ===
+                                                      "bbr"
+                                                        ? "BBR"
+                                                        : "Brutal"}
+                                                    </Chip>
+                                                  )}
+                                                {(tNode.version ||
+                                                  (tNode.status &&
+                                                    tNode.status !==
+                                                      "draft")) &&
+                                                  tNode.tuning && (
+                                                    <Chip>
+                                                      {translate(
+                                                        "Adaptive tuning",
+                                                      )}
+                                                    </Chip>
+                                                  )}
+                                                {(tNode.version ||
+                                                  (tNode.status &&
+                                                    tNode.status !==
+                                                      "draft")) &&
+                                                  (tNode.tlsSecurity ===
+                                                  "pinned" ? (
+                                                    <>
+                                                      <Chip mono>
+                                                        pinSHA256 ·{" "}
+                                                        {tNode.sni ||
+                                                          DEFAULT_TLS_SNI}
+                                                      </Chip>
+                                                      {tNode.ech && (
+                                                        <Chip className="accent-chip">
+                                                          ECH
+                                                        </Chip>
+                                                      )}
+                                                    </>
+                                                  ) : (
+                                                    <Badge tone="warning">
+                                                      {translate("Legacy TLS")}
+                                                    </Badge>
+                                                  ))}
+                                              </div>
+                                            </div>
+                                          </ScrollArea>
+                                        )}
+                                        <div className="expanded-quick-actions">
+                                          {tNode ? (
+                                            <>
+                                              <Button
+                                                className="quick-row-btn"
+                                                onClick={() =>
+                                                  operation(
+                                                    tNode,
+                                                    tNode.version
+                                                      ? "upgrade"
+                                                      : "deploy",
+                                                  )
+                                                }
+                                              >
+                                                <span>
+                                                  {tNode.version
+                                                    ? translate("Upgrade")
+                                                    : translate("Deploy")}
+                                                </span>
+                                                <span className="mono muted">
+                                                  {tNode.version || "v2"}
+                                                </span>
+                                              </Button>
+                                              <Button
+                                                className="quick-row-btn"
+                                                onClick={() =>
+                                                  inspectDrift(tNode)
+                                                }
+                                              >
+                                                <span>
+                                                  {translate("Config drift")}
+                                                </span>
+                                                <Badge
+                                                  tone={
+                                                    tNode.drift
+                                                      ? "warning"
+                                                      : "good"
+                                                  }
+                                                >
+                                                  {tNode.drift
+                                                    ? translate("Drift")
+                                                    : translate("Clean")}
+                                                </Badge>
+                                              </Button>
+                                            </>
+                                          ) : (
+                                            <Button
+                                              variant="primary"
+                                              onClick={() => save("nodes")}
+                                            >
+                                              <Plus size={14} />
+                                              {translate("Attach Node")}
+                                            </Button>
+                                          )}
+                                          <Button
+                                            className="quick-row-btn"
+                                            onClick={() => reset(target)}
+                                          >
+                                            <span>
+                                              {translate("Reset usage")}
+                                            </span>
+                                            <span className="mono muted">
+                                              {when(target.usage.next)}
+                                            </span>
+                                          </Button>
+                                          <Button
+                                            className="quick-row-btn"
+                                            onClick={() => history(target)}
+                                          >
+                                            <span>
+                                              {translate("Full telemetry")}
+                                            </span>
+                                            <ArrowUpRight
+                                              size={14}
+                                              className="muted"
+                                            />
+                                          </Button>
                                         </div>
                                       </div>
-                                    </ScrollArea>
-                                  )}
-                                  <div className="expanded-quick-actions">
-                                    {tNode ? (
-                                      <>
-                                        <Button
-                                          className="quick-row-btn"
-                                          onClick={() =>
-                                            operation(
-                                              tNode,
-                                              tNode.version
-                                                ? "upgrade"
-                                                : "deploy",
-                                            )
-                                          }
-                                        >
-                                          <span>
-                                            {tNode.version
-                                              ? translate("Upgrade")
-                                              : translate("Deploy")}
-                                          </span>
-                                          <span className="mono muted">
-                                            {tNode.version || "v2"}
-                                          </span>
-                                        </Button>
-                                        <Button
-                                          className="quick-row-btn"
-                                          onClick={() => inspectDrift(tNode)}
-                                        >
-                                          <span>{translate("Config drift")}</span>
-                                          <Badge
-                                            tone={
-                                              tNode.drift ? "warning" : "good"
-                                            }
-                                          >
-                                            {tNode.drift
-                                              ? translate("Drift")
-                                              : translate("Clean")}
-                                          </Badge>
-                                        </Button>
-                                      </>
-                                    ) : (
-                                      <Button
-                                        variant="primary"
-                                        onClick={() => save("nodes")}
-                                      >
-                                        <Plus size={14} />
-                                        {translate("Attach Node")}
-                                      </Button>
-                                    )}
-                                    <Button
-                                      className="quick-row-btn"
-                                      onClick={() => reset(target)}
-                                    >
-                                      <span>{translate("Reset usage")}</span>
-                                      <span className="mono muted">
-                                        {when(target.usage.next)}
-                                      </span>
-                                    </Button>
-                                    <Button
-                                      className="quick-row-btn"
-                                      onClick={() => history(target)}
-                                    >
-                                      <span>{translate("Full telemetry")}</span>
-                                      <ArrowUpRight
-                                        size={14}
-                                        className="muted"
-                                      />
-                                    </Button>
+                                    </div>
                                   </div>
-                                </div>
-                              </div>
-                            </article>
+                                </article>
+                            </ExpandableRow>
                           );
                         };
 
@@ -1657,8 +1721,7 @@ function App() {
                             <article
                               className={
                                 "spatial-card spatial-compact" +
-                                (isActive ? " is-active" : "") +
-                                (isControlPlane ? " control-plane-card" : "")
+                                (isActive ? " is-active" : "")
                               }
                               onClick={toggleExpand}
                               role="button"
@@ -1678,80 +1741,37 @@ function App() {
                                 <span
                                   className={
                                     "status-dot " +
-                                    (isControlPlane
-                                      ? controlPlaneFresh
+                                    (!h.enabled
+                                      ? "neutral"
+                                      : h.reachable
                                         ? "good"
-                                        : "warning"
-                                      : !h.enabled
-                                        ? "neutral"
-                                        : h.reachable
-                                          ? "good"
-                                          : "warning")
+                                        : "warning")
                                   }
                                 />
                                 <div className="entity-title">
                                   <strong className="compact-name">
                                     {h.name}
                                   </strong>
-                                  <small className="mono">
-                                    {isControlPlane
-                                      ? h.hostname || translate("Local host")
-                                      : h.address}
-                                  </small>
+                                  <small className="mono">{h.address}</small>
                                 </div>
-                                {isControlPlane ? (
-                                  <Badge tone="neutral">
-                                    {translate("Local host")}
-                                  </Badge>
-                                ) : (
-                                  <Sparkline
-                                    points={hostSparkPoints(h)}
-                                    tone={
-                                      (h.cpu || 0) >= 85
-                                        ? "danger"
-                                        : h.reachable
-                                          ? "accent"
-                                          : "warning"
-                                    }
-                                  />
-                                )}
+                                <Sparkline
+                                  points={hostSparkPoints(h)}
+                                  tone={
+                                    (h.cpu || 0) >= 85
+                                      ? "danger"
+                                      : h.reachable
+                                        ? "accent"
+                                        : "warning"
+                                  }
+                                />
                               </div>
                               <div className="entity-meters">
                                 <MiniBar label="CPU" percent={h.cpu} />
                                 <MiniBar label="RAM" percent={h.memory} />
                               </div>
-                              {isControlPlane ? (
-                                <MiniBar
-                                  label={translate("Disk")}
-                                  percent={h.disk}
-                                />
-                              ) : (
-                                <QuotaBar row={h} />
-                              )}
+                              <QuotaBar row={h} />
                               <div className="compact-foot">
-                                {isControlPlane ? (
-                                  <div className="chip-group">
-                                    <Chip mono>
-                                      {translate(
-                                        "Up {0}",
-                                        formatUptime(h.uptime),
-                                      )}
-                                    </Chip>
-                                    <Badge
-                                      tone={
-                                        workerAlive("monitor") &&
-                                        workerAlive("operations")
-                                          ? "good"
-                                          : "warning"
-                                      }
-                                    >
-                                      {workerAlive("monitor") &&
-                                      workerAlive("operations")
-                                        ? translate("Workers OK")
-                                        : translate("Worker stale")}
-                                    </Badge>
-                                  </div>
-                                ) : node ? (
+                                {node ? (
                                   <div className="chip-group">
                                     <Badge tone={node.drift ? "warning" : nTone}>
                                       {node.name}
@@ -1780,30 +1800,13 @@ function App() {
                                 </span>
                               </div>
                             </article>
-                            {idx === infraInsertAfter &&
-                              renderExpanded(infraItems[expandedInfraIdx])}
+                            {idx === hostInsertAfter &&
+                              renderedHostIdx >= 0 &&
+                              renderExpanded(visibleHosts[renderedHostIdx])}
                           </Fragment>
                         );
                       })}
                     </div>
-                  )}
-                  {!state.hosts.length && (
-                    <section className="panel infra-empty-panel">
-                      <Empty
-                        title={translate("No hosts connected")}
-                        action={
-                          <Button
-                            variant="primary"
-                            onClick={() => save("hosts")}
-                          >
-                            <Plus size={15} />
-                            {translate("Add VPS")}
-                          </Button>
-                        }
-                      >
-                        {translate("Add a VPS to start managing your network.")}
-                      </Empty>
-                    </section>
                   )}
                 </>
               )}
@@ -1860,9 +1863,7 @@ function App() {
                         );
                         const isActive = expandedUser === u.id;
                         const toggleExpand = () =>
-                          transitionSpatialCards(() =>
-                            setExpandedUser(isActive ? null : u.id),
-                          );
+                          setExpandedUser(isActive ? null : u.id);
                         const statusTone =
                           !u.enabled || u.exhausted || expired
                             ? "warning"
@@ -1953,11 +1954,17 @@ function App() {
                           ];
 
                           return (
-                            <article
-                              key={`expanded-${target.id}`}
-                              className="spatial-card spatial-expanded"
+                            <ExpandableRow
+                              key={`expanded-slot-user-${Math.floor(renderedUserIdx / gridCols)}`}
+                              isOpen={isUserOpen}
+                              onExited={onUserExited}
                             >
-                              <div className="expanded-head">
+                              <article className="spatial-card spatial-expanded">
+                                <div
+                                  key={target.id}
+                                  className="spatial-expanded-content"
+                                >
+                                  <div className="expanded-head">
                                 <div className="expanded-head-left">
                                   <span className="avatar">
                                     {target.name[0]?.toUpperCase()}
@@ -2014,11 +2021,7 @@ function App() {
                                   <Actions items={userActions} />
                                   <Button
                                     variant="icon"
-                                    onClick={() =>
-                                      transitionSpatialCards(() =>
-                                        setExpandedUser(null),
-                                      )
-                                    }
+                                    onClick={() => setExpandedUser(null)}
                                     aria-label={translate("Collapse")}
                                     title={translate("Collapse")}
                                   >
@@ -2115,9 +2118,11 @@ function App() {
                                   </div>
                                 </div>
                               </div>
-                            </article>
-                          );
-                        };
+                            </div>
+                          </article>
+                        </ExpandableRow>
+                    );
+                  };
 
                         return (
                           <Fragment key={u.id}>
@@ -2187,7 +2192,8 @@ function App() {
                               </div>
                             </article>
                             {idx === userInsertAfter &&
-                              renderExpandedUser(visibleUsers[expandedUserIdx])}
+                              renderedUserIdx >= 0 &&
+                              renderExpandedUser(visibleUsers[renderedUserIdx])}
                           </Fragment>
                         );
                       })}
@@ -2314,7 +2320,7 @@ function App() {
                   }
                   onInspectHost={jumpToHost}
                   onInspectUser={jumpToUser}
-                  onInspectControlPlane={() => jumpToHost("control-plane")}
+                  onInspectControlPlane={openControlPlaneTelemetry}
                   onOpenModal={(render) => setModal(render)}
                 />
               )}

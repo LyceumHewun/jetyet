@@ -554,12 +554,6 @@ svg.spinning {
 .spatial-compact.is-active .expand-cue {
   color: var(--accent);
 }
-.control-plane-card {
-  background: color-mix(in srgb, var(--subtle) 45%, var(--surface));
-}
-.infra-empty-panel {
-  margin-top: var(--space-4);
-}
 .compact-head {
   display: flex;
   align-items: center;
@@ -609,30 +603,22 @@ svg.spinning {
 .sparkline.muted polyline {
   stroke: var(--muted);
 }
-.spatial-expanded {
+.spatial-expand-slot {
   grid-column: 1 / -1;
+  min-width: 0;
+  will-change: height, opacity;
+}
+.spatial-expand-inner {
+  min-width: 0;
+}
+.spatial-expanded {
   border-color: var(--accent);
   padding: var(--space-5) var(--space-6);
+}
+.spatial-expanded-content {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
-}
-:root.spatial-transition {
-  view-transition-name: none;
-}
-.spatial-transition .spatial-grid > .spatial-card {
-  view-transition-name: match-element;
-}
-:root.spatial-transition::view-transition {
-  pointer-events: none;
-}
-:root.spatial-transition::view-transition-group(*) {
-  animation-duration: 220ms;
-  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-:root.spatial-transition::view-transition-image-pair(*) {
-  overflow: clip;
-  border-radius: var(--radius-lg);
 }
 .expanded-head {
   display: flex;
@@ -807,7 +793,7 @@ svg.spinning {
 }
 .chart-placeholder {
   flex: 1;
-  min-height: 180px;
+  min-height: 206px;
   display: grid;
   place-items: center;
   font-size: var(--text-sm);
@@ -2890,11 +2876,6 @@ legend {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  :root.spatial-transition::view-transition-group(*),
-  :root.spatial-transition::view-transition-old(*),
-  :root.spatial-transition::view-transition-new(*) {
-    animation: none;
-  }
   * {
     animation: none !important;
     transition: none !important;
